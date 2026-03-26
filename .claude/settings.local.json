@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(pip show:*)",
+      "Bash(python -c \"import docx; print\\(''python-docx available''\\)\")",
+      "Bash(python gen_docx.py)"
+    ]
+  }
+}

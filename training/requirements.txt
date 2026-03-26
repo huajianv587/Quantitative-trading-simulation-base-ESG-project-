@@ -1,0 +1,5 @@
+peft>=0.9.0
+bitsandbytes>=0.43.0
+rouge-score>=0.1.2
+matplotlib>=3.7.0
+numpy>=1.24.0

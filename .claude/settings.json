@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sagemaker; print\\(dir\\(sagemaker\\)\\)\")",
+      "Bash(python -m pip show sagemaker)",
+      "Bash(python -m pip install \"sagemaker>=2.100.0\" --force-reinstall)",
+      "Bash(python -c \"import sagemaker; print\\(sagemaker.__file__\\)\")",
+      "Read(//c/Users/Jhj/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0/LocalCache/local-packages/Python313/site-packages/sagemaker/**)",
+      "Bash(python -c \"import os; import sagemaker; print\\([d for d in os.listdir\\(os.path.dirname\\(sagemaker.__file__\\)\\) if ''hug'' in d.lower\\(\\)]\\)\")",
+      "Bash(python -m pip uninstall sagemaker -y)",
+      "Bash(python -m pip install sagemaker)",
+      "Bash(python -c \"import sagemaker; import os; print\\([d for d in os.listdir\\(os.path.dirname\\(sagemaker.__file__\\)\\)]\\)\")",
+      "Bash(python -m pip show rouge-score)"
+    ]
+  }
+}
