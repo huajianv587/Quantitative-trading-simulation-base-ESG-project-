@@ -1,4 +1,5 @@
 import argparse
+import inspect
 from pathlib import Path
 
 import torch
@@ -91,7 +92,7 @@ def build_dataset(tokenizer, train_data_path: str, val_data_path: str, max_lengt
 
 
 def build_trainer(model, tokenizer, ds_train, ds_val, out_dir: str):
-    args = TrainingArguments(
+    args_kwargs = dict(
         output_dir=out_dir,
         learning_rate=2e-4,
         per_device_train_batch_size=4,
@@ -103,11 +104,20 @@ def build_trainer(model, tokenizer, ds_train, ds_val, out_dir: str):
         logging_steps=10,
         save_steps=200,
         eval_steps=200,
-        evaluation_strategy="steps",
         save_total_limit=2,
         load_best_model_at_end=True,
         report_to="none",
     )
+
+    # Different transformers versions use either `eval_strategy`
+    # or the older `evaluation_strategy`.
+    training_args_params = inspect.signature(TrainingArguments.__init__).parameters
+    if "eval_strategy" in training_args_params:
+        args_kwargs["eval_strategy"] = "steps"
+    else:
+        args_kwargs["evaluation_strategy"] = "steps"
+
+    args = TrainingArguments(**args_kwargs)
 
     trainer = Trainer(
         model=model,
