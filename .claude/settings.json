@@ -14,7 +14,9 @@
       "Bash(for f:*)",
       "Bash(do echo:*)",
       "Read(//e/项目夹/ESG Agentic RAG Copilot/**)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(python -m py_compile gateway/scheduler/scanner.py gateway/scheduler/event_extractor.py gateway/scheduler/matcher.py gateway/scheduler/risk_scorer.py gateway/scheduler/notifier.py gateway/scheduler/orchestrator.py)",
+      "Bash(python demo_scheduler.py)"
     ]
   }
 }

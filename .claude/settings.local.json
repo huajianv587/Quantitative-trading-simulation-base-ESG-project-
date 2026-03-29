@@ -4,7 +4,10 @@
       "Bash(pip install:*)",
       "Bash(pip show:*)",
       "Bash(python -c \"import docx; print\\(''python-docx available''\\)\")",
-      "Bash(python gen_docx.py)"
+      "Bash(python gen_docx.py)",
+      "Bash(xargs wc:*)",
+      "Bash(ls -1 gateway/scheduler/*.py)",
+      "Bash(find . -name \"*.py\" -type f -exec wc -l {} +)"
     ]
   }
 }

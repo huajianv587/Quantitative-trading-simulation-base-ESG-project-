@@ -1,0 +1,209 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模型评估报告 - output</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
+        .section { margin-bottom: 30px; padding: 20px; border: 1px solid #dee2e6; border-radius: 5px; }
+        .section-title { color: #495057; border-bottom: 2px solid #6c757d; padding-bottom: 10px; margin-bottom: 15px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+        .stat-card { background-color: #e9ecef; padding: 15px; border-radius: 5px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #007bff; }
+        .stat-label { font-size: 14px; color: #6c757d; }
+        .image-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .image-container { text-align: center; }
+        .image-container img { max-width: 100%; height: auto; border: 1px solid #dee2e6; border-radius: 5px; }
+        .sample-table { width: 100%; border-collapse: collapse; }
+        .sample-table th, .sample-table td { border: 1px solid #dee2e6; padding: 10px; text-align: left; }
+        .sample-table th { background-color: #f8f9fa; }
+        .good-score { color: #28a745; font-weight: bold; }
+        .bad-score { color: #dc3545; font-weight: bold; }
+        .timestamp { color: #6c757d; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>模型评估报告</h1>
+            <p class="timestamp">生成时间: 2026-03-28 16:14:10</p>
+            <h2>output</h2>
+            <p>总样本数: 3723</p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">统计摘要</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value">0.360</div>
+                    <div class="stat-label">平均ROUGE-L</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">0.316</div>
+                    <div class="stat-label">中位数ROUGE-L</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">0.200</div>
+                    <div class="stat-label">标准差</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">0.000</div>
+                    <div class="stat-label">最低分</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">1.000</div>
+                    <div class="stat-label">最高分</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">0.214 - 0.467</div>
+                    <div class="stat-label">四分位范围</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">可视化图表</h3>
+            <div class="image-grid">
+                <div class="image-container">
+                    <img src="rouge_distribution.png" alt="ROUGE-L分数分布">
+                    <p>ROUGE-L分数分布直方图</p>
+                </div>
+                <div class="image-container">
+                    <img src="rouge_trend.png" alt="ROUGE-L分数趋势">
+                    <p>ROUGE-L分数变化趋势</p>
+                </div>
+                <div class="image-container">
+                    <img src="rouge_summary.png" alt="ROUGE-L统计摘要">
+                    <p>ROUGE-L统计摘要箱线图</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">最佳表现样本 (ROUGE-L 最高)</h3>
+            <table class="sample-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>问题</th>
+                        <th>参考答案</th>
+                        <th>模型预测</th>
+                        <th>ROUGE-L</th>
+                    </tr>
+                </thead>
+                <tbody>
+
+                    <tr>
+                        <td>3660</td>
+                        <td>What type of capital is discussed in the text chunk?...</td>
+                        <td>The text discusses environmental and manufactured capital....</td>
+                        <td>The text discusses Environmental and Manufactured Capital....</td>
+                        <td class="good-score">1.0000</td>
+                    </tr>
+
+                    <tr>
+                        <td>3628</td>
+                        <td>What is the title of the DBS report mentioned in the text?...</td>
+                        <td>The report is titled 'DBS Sustainability Report 2024 • Partnering for Asia’s Transition'....</td>
+                        <td>The report is titled 'DBS Sustainability Report 2024 • Partnering for Asia’s Transition'....</td>
+                        <td class="good-score">1.0000</td>
+                    </tr>
+
+                    <tr>
+                        <td>3458</td>
+                        <td>Which report is listed as part of the environmental initiatives?...</td>
+                        <td>The 2025 Environmental Progress Report is included in the environmental initiatives....</td>
+                        <td>The 2025 Environmental Progress Report is included in the environmental initiatives....</td>
+                        <td class="good-score">1.0000</td>
+                    </tr>
+
+                    <tr>
+                        <td>3412</td>
+                        <td>Who is the Chief Executive Officer of DBS Group Holdings according to the sustainability report?...</td>
+                        <td>Piyush Gupta holds the position of Chief Executive Officer at DBS Group Holdings....</td>
+                        <td>Piyush Gupta holds the position of Chief Executive Officer at DBS Group Holdings....</td>
+                        <td class="good-score">1.0000</td>
+                    </tr>
+
+                    <tr>
+                        <td>3279</td>
+                        <td>Which abbreviation is associated with Anti-Money Laundering?...</td>
+                        <td>AML is the abbreviation for Anti-Money Laundering....</td>
+                        <td>AML is the abbreviation for Anti-Money Laundering....</td>
+                        <td class="good-score">1.0000</td>
+                    </tr>
+
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">最差表现样本 (ROUGE-L 最低)</h3>
+            <table class="sample-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>问题</th>
+                        <th>参考答案</th>
+                        <th>模型预测</th>
+                        <th>ROUGE-L</th>
+                    </tr>
+                </thead>
+                <tbody>
+
+                    <tr>
+                        <td>262</td>
+                        <td>What are the dual aspects of the technologies described in the text?...</td>
+                        <td>They offer significant potential benefits for customers but also present ethical risks....</td>
+                        <td>The technologies are both innovative and practical, addressing environmental challenges while being ...</td>
+                        <td class="bad-score">0.0000</td>
+                    </tr>
+
+                    <tr>
+                        <td>338</td>
+                        <td>What type of product is described in the text chunk?...</td>
+                        <td>The text refers to the Aluminum Apple Watch Series 9 with Sport Loop....</td>
+                        <td>It is a green loan specifically designed for affordable housing projects....</td>
+                        <td class="bad-score">0.0000</td>
+                    </tr>
+
+                    <tr>
+                        <td>1011</td>
+                        <td>What was the outcome for the supply chains after the programme?...</td>
+                        <td>They achieved an improved ESG scoring....</td>
+                        <td>The supply chains were able to identify and implement solutions to address their challenges....</td>
+                        <td class="bad-score">0.0000</td>
+                    </tr>
+
+                    <tr>
+                        <td>1353</td>
+                        <td>How does the text describe the state of sustainable finance practices?...</td>
+                        <td>They are currently lacking global consistency, similar to metrics and taxonomies....</td>
+                        <td>It states that sustainable finance is still in its infancy, indicating it is a developing field....</td>
+                        <td class="bad-score">0.0000</td>
+                    </tr>
+
+                    <tr>
+                        <td>1634</td>
+                        <td>When did China's reopening take place according to the text?...</td>
+                        <td>It occurred at the turn of the year....</td>
+                        <td>China reopened in December 2022....</td>
+                        <td class="bad-score">0.0000</td>
+                    </tr>
+
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h3 class="section-title">评估详情</h3>
+            <p>完整评估结果已保存为JSON文件，包含所有3723个样本的详细数据。</p>
+            <p>可视化图表已保存为PNG格式，可直接用于报告和演示。</p>
+        </div>
+    </div>
+</body>
+</html>
