@@ -259,6 +259,7 @@ class ReportScheduler:
     def _save_report(self, report: ESGReport) -> str:
         """将报告保存到数据库"""
         report_id = str(uuid.uuid4())
+        report_payload = report.model_dump(mode="json") if hasattr(report, "model_dump") else report.dict()
 
         try:
             supabase_client.table("esg_reports").insert({
@@ -267,7 +268,7 @@ class ReportScheduler:
                 "title": report.title,
                 "period_start": report.period_start.isoformat(),
                 "period_end": report.period_end.isoformat(),
-                "data": report.dict(),
+                "data": report_payload,
                 "generated_at": datetime.now().isoformat(),
             }).execute()
 
@@ -276,7 +277,7 @@ class ReportScheduler:
 
         except Exception as e:
             logger.error(f"[ReportScheduler] Error saving report: {e}")
-            return report_id
+            raise
 
     def _load_push_rules(self):
         """从数据库加载推送规则"""
@@ -325,6 +326,7 @@ class ReportScheduler:
 
         except Exception as e:
             logger.error(f"[ReportScheduler] Error updating push rule: {e}")
+            raise
 
     def delete_push_rule(self, rule_id: str):
         """删除推送规则"""
@@ -338,11 +340,12 @@ class ReportScheduler:
 
         except Exception as e:
             logger.error(f"[ReportScheduler] Error deleting push rule: {e}")
+            raise
 
     def user_subscribe_reports(self, subscription: ReportSubscription):
         """用户订阅报告"""
         try:
-            supabase_client.table("user_report_subscriptions").insert({
+            response = supabase_client.table("user_report_subscriptions").insert({
                 "user_id": subscription.user_id,
                 "report_types": subscription.report_types,
                 "companies": subscription.companies,
@@ -353,9 +356,13 @@ class ReportScheduler:
             }).execute()
 
             logger.info(f"[ReportScheduler] User {subscription.user_id} subscribed to reports")
+            if response.data:
+                return response.data[0].get("id")
+            return None
 
         except Exception as e:
             logger.error(f"[ReportScheduler] Error subscribing user: {e}")
+            raise
 
     # ── 辅助方法 ──────────────────────────────────────────────────────────
 
@@ -380,8 +387,8 @@ class ReportScheduler:
     def _get_all_users(self) -> List[str]:
         """获取所有用户"""
         try:
-            users = supabase_client.table("users").select("id").execute().data
-            return [u["id"] for u in users]
+            users = supabase_client.table("users").select("user_id").execute().data
+            return [u["user_id"] for u in users if u.get("user_id")]
         except Exception:
             return []
 
@@ -410,8 +417,8 @@ class ReportScheduler:
         """获取行业分析师"""
         # 需要一个用户角色/权限表来识别分析师
         try:
-            analysts = supabase_client.table("users").select("id").eq("role", "analyst").execute().data
-            return [a["id"] for a in analysts]
+            analysts = supabase_client.table("users").select("user_id").eq("role", "analyst").execute().data
+            return [a["user_id"] for a in analysts if a.get("user_id")]
         except Exception:
             return []
 

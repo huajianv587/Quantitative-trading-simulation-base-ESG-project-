@@ -1,0 +1,37 @@
+[
+  {
+    "name": "singtel_esg_analysis",
+    "question": "Analyze Singtel's ESG performance across environmental, social, and governance dimensions, and highlight the main risks and opportunities.",
+    "require_scores": true,
+    "min_answer_chars": 220,
+    "min_confidence": 0.45
+  },
+  {
+    "name": "dbs_climate_targets",
+    "question": "What climate targets, emissions trends, and transition priorities are disclosed by DBS in its sustainability reporting?",
+    "require_scores": false,
+    "min_answer_chars": 160,
+    "min_confidence": 0.4
+  },
+  {
+    "name": "grab_social_themes",
+    "question": "Summarize the main workforce, safety, and community impact themes described in Grab's ESG reporting.",
+    "require_scores": false,
+    "min_answer_chars": 160,
+    "min_confidence": 0.4
+  },
+  {
+    "name": "uob_esg_risk_opportunity",
+    "question": "Analyze UOB's ESG strengths, governance priorities, and the biggest risks mentioned in the available reports.",
+    "require_scores": true,
+    "min_answer_chars": 220,
+    "min_confidence": 0.45
+  },
+  {
+    "name": "singtel_dbs_comparison",
+    "question": "Compare Singtel and DBS on climate strategy and governance priorities based on the available reports.",
+    "require_scores": false,
+    "min_answer_chars": 180,
+    "min_confidence": 0.4
+  }
+]

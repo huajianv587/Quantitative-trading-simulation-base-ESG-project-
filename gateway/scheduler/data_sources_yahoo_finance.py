@@ -6,10 +6,12 @@
 
 import os
 import requests
+from datetime import datetime
 from typing import Optional, Dict, Any
 from gateway.utils.logger import get_logger
 from gateway.utils.cache import get_cache, set_cache
 from gateway.utils.retry import retry_with_backoff
+from gateway.scheduler.data_sources import CompanyData
 
 logger = get_logger(__name__)
 
@@ -166,7 +168,12 @@ def fetch_company_data(self, company_name: str, ticker: Optional[str] = None, ..
 """
 
 # 新代码 - 添加Yahoo Finance数据拉取:
-def fetch_company_data_enhanced(self, company_name: str, ticker: Optional[str] = None, ...):
+def fetch_company_data_enhanced(
+    self,
+    company_name: str,
+    ticker: Optional[str] = None,
+    industry: Optional[str] = None,
+):
     """
     增强版：集成Yahoo Finance数据
     """

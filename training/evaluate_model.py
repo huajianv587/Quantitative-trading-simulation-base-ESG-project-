@@ -3,8 +3,16 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 from typing import List, Dict, Any
+
+# ── 配置 Matplotlib 中文字体 ─────────────────────────────────
+try:
+    matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial']
+    matplotlib.rcParams['axes.unicode_minus'] = False
+except Exception:
+    pass
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -12,22 +20,39 @@ from peft import PeftModel
 from rouge_score import rouge_scorer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _prefer_existing(*paths: Path) -> str:
+    for path in paths:
+        if path.exists():
+            return str(path)
+    return str(paths[0])
+
+
 DEFAULT_BASE  = "Qwen/Qwen2.5-7B-Instruct"
-DEFAULT_CKPT  = str(PROJECT_ROOT / "model-serving" / "checkpoints")
-DEFAULT_VAL   = str(PROJECT_ROOT / "data" / "processed" / "val.jsonl")
+DEFAULT_CKPT  = _prefer_existing(
+    PROJECT_ROOT / "model-serving" / "checkpoint",
+    PROJECT_ROOT / "model-serving" / "checkpoints",
+)
+DEFAULT_VAL   = str(PROJECT_ROOT / "data" / "rag_training_data" / "val.jsonl")
 DEFAULT_OUT   = str(PROJECT_ROOT / "data" / "rag_eval" / "eval_report.json")
 SAMPLE_PRINT  = 10   # 随机打印多少条供人工判断
 
 
 def load_model(base_model: str, checkpoint: str):
+    checkpoint_path = Path(checkpoint)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"LoRA checkpoint not found: {checkpoint_path}")
+
     print(f"[Eval] Loading base model: {base_model}")
     tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
 
+    has_cuda = torch.cuda.is_available()
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.float16,
-        device_map="auto",
+        torch_dtype=torch.float16 if has_cuda else torch.float32,
+        device_map="auto" if has_cuda else None,
         trust_remote_code=True,
     )
     print(f"[Eval] Loading LoRA adapter: {checkpoint}")
@@ -56,6 +81,9 @@ def generate(model, tokenizer, messages: list, max_new_tokens: int = 256) -> str
 
 
 def load_val(val_path: str) -> list:
+    if not Path(val_path).exists():
+        raise FileNotFoundError(f"Validation file not found: {val_path}")
+
     samples = []
     with open(val_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -69,6 +97,9 @@ def create_visualizations(results: List[Dict[str, Any]], output_dir: Path, check
     """
     创建评估结果的可视化图表
     """
+    if not results:
+        raise ValueError("Cannot create visualizations without evaluation results")
+
     # 提取ROUGE-L分数
     rouge_scores = [r["rougeL"] for r in results]
     
@@ -120,7 +151,7 @@ def create_visualizations(results: List[Dict[str, Any]], output_dir: Path, check
     box_data = [rouge_scores]
     box_labels = ['ROUGE-L']
     
-    bp = plt.boxplot(box_data, labels=box_labels, patch_artist=True, showmeans=True)
+    bp = plt.boxplot(box_data, tick_labels=box_labels, patch_artist=True, showmeans=True)
     bp['boxes'][0].set_facecolor('lightblue')
     bp['medians'][0].set_color('red')
     bp['means'][0].set_color('green')
@@ -371,6 +402,8 @@ def main():
 
     if cfg.max_samples > 0:
         samples = samples[:cfg.max_samples]
+    if not samples:
+        raise ValueError("No validation samples available for evaluation")
     print(f"[Eval] Evaluating {len(samples)} samples ...")
 
     scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=False)
@@ -456,7 +489,7 @@ def main():
             print(f"[WARN] 可视化生成失败: {e}")
             print("      继续执行，仅保存JSON报告。")
     else:
-        print(f"[Eval] 可视化已禁用，使用 --visualize 启用")
+        print("[Eval] 可视化已禁用，移除 --no-visualize 可重新启用")
 
 
 if __name__ == "__main__":

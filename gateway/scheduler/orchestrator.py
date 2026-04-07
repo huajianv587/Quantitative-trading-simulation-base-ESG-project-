@@ -13,6 +13,7 @@ from gateway.scheduler.matcher import get_matcher
 from gateway.scheduler.risk_scorer import get_risk_scorer
 from gateway.scheduler.notifier import get_notifier
 from gateway.db.supabase_client import get_client
+from gateway.rag.event_indexer import index_events_async
 
 logger = get_logger(__name__)
 
@@ -77,6 +78,12 @@ class SchedulerOrchestrator:
 
             extracted_ids = extract_result.get("saved_ids", [])
             logger.info(f"[Orchestrator] Extracted {len(extracted_ids)} events")
+
+            # ── Stage 2.5: RAG Indexing (async) ────────────────────────────
+            # 异步写入 Qdrant，不阻塞后续 RiskScorer/Matcher/Notifier 流程
+            # Supabase 已在 Stage 2 写入，这里并行写向量库
+            if extracted_ids:
+                index_events_async(extracted_ids)
 
             # ── Stage 3: RiskScorer ─────────────────────────────────────────
             logger.info("[Orchestrator] Stage 3/5: Scoring risk levels...")

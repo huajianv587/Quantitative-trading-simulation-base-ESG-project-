@@ -7,7 +7,27 @@
       "Bash(python gen_docx.py)",
       "Bash(xargs wc:*)",
       "Bash(ls -1 gateway/scheduler/*.py)",
-      "Bash(find . -name \"*.py\" -type f -exec wc -l {} +)"
+      "Bash(find . -name \"*.py\" -type f -exec wc -l {} +)",
+      "Bash(find \"E:\\\\项目夹\\\\ESG Agentic RAG Copilot\" -type f -name \"*.py\" -exec wc -l {} +)",
+      "Bash(find 'E:\\\\项目夹\\\\ESG Agentic RAG Copilot' -maxdepth 2 -type f \\\\\\(-name *.md -o -name *.txt -o -name *.toml -o -name *.yaml -o -name *.yml \\\\\\))",
+      "Read(//c/Users/Jhj/.claude/**)",
+      "Bash(ls -la ~/.claude/*.json)",
+      "Bash(grep -r qlora . --include=*.py --include=*.md)",
+      "Bash(xargs grep:*)",
+      "Bash(ls -d data/*/)",
+      "Bash(python regenerate_visualizations.py)",
+      "Bash(.venvScriptspython.exe regenerate_visualizations.py)",
+      "Bash(.venv/Scripts/python regenerate_visualizations.py)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(rm regenerate_visualizations.py)",
+      "Bash(ls -lh data/rag_eval/visualizations/*.png)",
+      "Bash(.venv/Scripts/python fix_summary.py)",
+      "Bash(rm fix_summary.py)",
+      "Bash(grep -E \"app|FastAPI|Flask\" gateway/*.py)",
+      "Bash(chmod +x deploy/aws/ecr-push.sh)"
+    ],
+    "additionalDirectories": [
+      "e:\\项目夹\\ESG Agentic RAG Copilot\\evaluation\\results"
     ]
   }
 }

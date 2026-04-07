@@ -2,26 +2,36 @@ import argparse
 import inspect
 from pathlib import Path
 
-import torch
-from datasets import load_dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    DataCollatorForSeq2Seq,
-    Trainer,
-    TrainingArguments,
-)
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _prefer_existing(*paths: Path) -> str:
+    for path in paths:
+        if path.exists():
+            return str(path)
+    return str(paths[0])
+
+
 DEFAULT_MODEL = "Qwen/Qwen2.5-7B-Instruct"
-DEFAULT_TRAIN = str(PROJECT_ROOT / "data" / "processed" / "train.jsonl")
-DEFAULT_VAL   = str(PROJECT_ROOT / "data" / "processed" / "val.jsonl")
-DEFAULT_OUT   = str(PROJECT_ROOT / "model-serving" / "checkpoints")
+DEFAULT_TRAIN = _prefer_existing(
+    PROJECT_ROOT / "data" / "rag_training_data" / "train.jsonl",
+    PROJECT_ROOT / "data" / "processed" / "train.jsonl",
+)
+DEFAULT_VAL = _prefer_existing(
+    PROJECT_ROOT / "data" / "rag_training_data" / "val.jsonl",
+    PROJECT_ROOT / "data" / "processed" / "val.jsonl",
+)
+DEFAULT_OUT = _prefer_existing(
+    PROJECT_ROOT / "model-serving" / "checkpoint",
+    PROJECT_ROOT / "model-serving" / "checkpoints",
+)
 
 
 def load_model(model_name: str):
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from peft import prepare_model_for_kbit_training
+
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.float16,
@@ -43,6 +53,8 @@ def load_model(model_name: str):
 
 
 def build_lora(model):
+    from peft import LoraConfig, get_peft_model
+
     config = LoraConfig(
         r=16,
         lora_alpha=32,
@@ -58,6 +70,8 @@ def build_lora(model):
 
 
 def build_dataset(tokenizer, train_data_path: str, val_data_path: str, max_length: int = 512):
+    from datasets import load_dataset
+
     train_ds = load_dataset("json", data_files=train_data_path, split="train")
     val_ds   = load_dataset("json", data_files=val_data_path,   split="train")
 
@@ -91,13 +105,15 @@ def build_dataset(tokenizer, train_data_path: str, val_data_path: str, max_lengt
     return train_ds, val_ds
 
 
-def build_trainer(model, tokenizer, ds_train, ds_val, out_dir: str):
+def build_trainer(model, tokenizer, ds_train, ds_val, out_dir: str, num_train_epochs: int = 2):
+    from transformers import DataCollatorForSeq2Seq, Trainer, TrainingArguments
+
     args_kwargs = dict(
         output_dir=out_dir,
         learning_rate=2e-4,
         per_device_train_batch_size=4,
         gradient_accumulation_steps=8,
-        num_train_epochs=2,
+        num_train_epochs=num_train_epochs,
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
         fp16=True,
@@ -119,14 +135,21 @@ def build_trainer(model, tokenizer, ds_train, ds_val, out_dir: str):
 
     args = TrainingArguments(**args_kwargs)
 
-    trainer = Trainer(
+    trainer_kwargs = dict(
         model=model,
         args=args,
         train_dataset=ds_train,
         eval_dataset=ds_val,
-        processing_class=tokenizer,
         data_collator=DataCollatorForSeq2Seq(tokenizer, padding=True),
     )
+
+    trainer_params = inspect.signature(Trainer.__init__).parameters
+    if "processing_class" in trainer_params:
+        trainer_kwargs["processing_class"] = tokenizer
+    else:
+        trainer_kwargs["tokenizer"] = tokenizer
+
+    trainer = Trainer(**trainer_kwargs)
     return trainer
 
 
@@ -136,6 +159,7 @@ def main():
     parser.add_argument("--train_data_path", default=DEFAULT_TRAIN)
     parser.add_argument("--val_data_path",   default=DEFAULT_VAL)
     parser.add_argument("--output_dir",      default=DEFAULT_OUT)
+    parser.add_argument("--num_train_epochs", type=int, default=2)
     parser.add_argument("--max_steps",       type=int, default=-1,
                         help="设置 >0 用于快速验证，例如 --max_steps 100")
     cfg = parser.parse_args()
@@ -148,7 +172,14 @@ def main():
     ds_train, ds_val = build_dataset(tokenizer, cfg.train_data_path, cfg.val_data_path)
     print(f"[Train] train={len(ds_train)}, val={len(ds_val)}")
 
-    trainer = build_trainer(model, tokenizer, ds_train, ds_val, cfg.output_dir)
+    trainer = build_trainer(
+        model,
+        tokenizer,
+        ds_train,
+        ds_val,
+        cfg.output_dir,
+        num_train_epochs=cfg.num_train_epochs,
+    )
 
     if cfg.max_steps > 0:
         trainer.args.max_steps = cfg.max_steps

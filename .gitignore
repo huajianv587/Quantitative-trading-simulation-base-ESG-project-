@@ -11,14 +11,15 @@ __pycache__/
 dist/
 build/
 
-# 大文件：DocStore（163MB）和向量数据库
+# 大文件：DocStore 和向量数据库
 storage/
 data/processed/
 data/raw/
+data/raw_big_doc_data/
 data/vectorstore/
 
-# 模型权重
-model-serving/checkpoints/
+# 模型权重和训练 checkpoint
+model-serving/checkpoint/checkpoint-*/
 
 # 虚拟环境
 .venv/
@@ -28,6 +29,9 @@ env/
 # IDE
 .vscode/settings.json
 .idea/
+
+# Claude Code 本地配置
+.claude/
 
 # 日志和临时文件
 *.log

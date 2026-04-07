@@ -5,8 +5,8 @@ prepare_data.py
 清洗过滤后输出 Qwen2.5 ChatML 格式 JSONL，并划分 train / val。
 
 输出文件（默认路径）：
-    data/processed/train.jsonl
-    data/processed/val.jsonl
+    data/rag_training_data/train.jsonl
+    data/rag_training_data/val.jsonl
 
 每行格式（ChatML / messages 格式）：
     {
@@ -42,8 +42,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 sys.path.insert(0, str(PROJECT_ROOT / "gateway" / "rag"))
 
 PERSIST_DIR   = str(PROJECT_ROOT / "storage" / "docstore")
-DEFAULT_TRAIN = str(PROJECT_ROOT / "data" / "processed" / "train.jsonl")
-DEFAULT_VAL   = str(PROJECT_ROOT / "data" / "processed" / "val.jsonl")
+DEFAULT_TRAIN = str(PROJECT_ROOT / "data" / "rag_training_data" / "train.jsonl")
+DEFAULT_VAL   = str(PROJECT_ROOT / "data" / "rag_training_data" / "val.jsonl")
 
 SYSTEM_CONTENT = (
     "You are an expert ESG (Environmental, Social, Governance) analyst. "

@@ -1,0 +1,9 @@
+{
+  "name": "esg-agentic-rag-copilot-deploy",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Static frontend build helpers for Vercel and Cloudflare Pages",
+  "scripts": {
+    "build:static": "node scripts/build_static_frontend.mjs"
+  }
+}

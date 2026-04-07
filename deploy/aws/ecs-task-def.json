@@ -1,0 +1,143 @@
+{
+  "family": "esg-agentic-rag-copilot",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "YOUR_AWS_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/esg-agentic-rag-copilot:latest",
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "PYTHONUNBUFFERED",
+          "value": "1"
+        },
+        {
+          "name": "PORT",
+          "value": "8000"
+        },
+        {
+          "name": "QDRANT_URL",
+          "value": "http://localhost:6333"
+        },
+        {
+          "name": "CORS_ORIGINS",
+          "value": "https://your-frontend-domain.com"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_AWS_ACCOUNT_ID:secret:esg-rag-openai-key:OPENAI_API_KEY::"
+        },
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_AWS_ACCOUNT_ID:secret:esg-rag-anthropic-key:ANTHROPIC_API_KEY::"
+        },
+        {
+          "name": "DEEPSEEK_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_AWS_ACCOUNT_ID:secret:esg-rag-deepseek-key:DEEPSEEK_API_KEY::"
+        },
+        {
+          "name": "SUPABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_AWS_ACCOUNT_ID:secret:esg-rag-supabase-url:SUPABASE_URL::"
+        },
+        {
+          "name": "SUPABASE_KEY",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_AWS_ACCOUNT_ID:secret:esg-rag-supabase-key:SUPABASE_KEY::"
+        },
+        {
+          "name": "AWS_ACCESS_KEY_ID",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_AWS_ACCOUNT_ID:secret:esg-rag-aws-keys:AWS_ACCESS_KEY_ID::"
+        },
+        {
+          "name": "AWS_SECRET_ACCESS_KEY",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_AWS_ACCOUNT_ID:secret:esg-rag-aws-keys:AWS_SECRET_ACCESS_KEY::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/esg-agentic-rag-copilot",
+          "awslogs-region": "YOUR_REGION",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:8000/health || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 60
+      }
+    },
+    {
+      "name": "nginx",
+      "image": "nginx:latest",
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "hostPort": 80,
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 443,
+          "hostPort": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "nginx-config",
+          "containerPath": "/etc/nginx/nginx.conf",
+          "readOnly": true
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/esg-agentic-rag-copilot",
+          "awslogs-region": "YOUR_REGION",
+          "awslogs-stream-prefix": "nginx"
+        }
+      },
+      "dependsOn": [
+        {
+          "containerName": "app",
+          "condition": "HEALTHY"
+        }
+      ]
+    }
+  ],
+  "volumes": [
+    {
+      "name": "nginx-config",
+      "host": {
+        "sourcePath": "/etc/nginx/nginx.conf"
+      }
+    }
+  ],
+  "executionRoleArn": "arn:aws:iam::YOUR_AWS_ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::YOUR_AWS_ACCOUNT_ID:role/ecsTaskRole",
+  "tags": [
+    {
+      "key": "Project",
+      "value": "ESG-Agentic-RAG-Copilot"
+    },
+    {
+      "key": "Environment",
+      "value": "production"
+    }
+  ]
+}

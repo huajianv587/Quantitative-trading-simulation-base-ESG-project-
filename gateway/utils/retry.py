@@ -64,6 +64,10 @@ def retry(
     return decorator
 
 
+# 别名：与 retry 完全相同，兼容 data_sources.py 的导入
+retry_with_backoff = retry
+
+
 def with_retry(func, *args, max_retries=DEFAULT_RETRIES, delay=DEFAULT_DELAY,
                backoff=DEFAULT_BACKOFF, **kwargs):
     """

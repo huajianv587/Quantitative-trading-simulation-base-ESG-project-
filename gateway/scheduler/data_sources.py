@@ -3,10 +3,9 @@
 # 统一的数据模型和拉取接口
 
 import os
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import requests
 from gateway.utils.logger import get_logger
 from gateway.utils.cache import get_cache, set_cache
@@ -26,22 +25,22 @@ class CompanyData(BaseModel):
     employees: Optional[int] = None
 
     # ESG相关数据
-    environmental: Dict[str, Any] = {}
-    social: Dict[str, Any] = {}
-    governance: Dict[str, Any] = {}
+    environmental: Dict[str, Any] = Field(default_factory=dict)
+    social: Dict[str, Any] = Field(default_factory=dict)
+    governance: Dict[str, Any] = Field(default_factory=dict)
 
     # 财务数据
-    financial: Dict[str, Any] = {}
+    financial: Dict[str, Any] = Field(default_factory=dict)
 
     # 外部评分
-    external_ratings: Dict[str, Any] = {}
+    external_ratings: Dict[str, Any] = Field(default_factory=dict)
 
     # 新闻事件
-    recent_news: List[Dict[str, Any]] = []
+    recent_news: List[Dict[str, Any]] = Field(default_factory=list)
 
     # 数据来源和时间戳
-    data_sources: List[str] = []
-    last_updated: datetime = None
+    data_sources: List[str] = Field(default_factory=list)
+    last_updated: Optional[datetime] = None
     historical_data: Optional[Dict[str, Any]] = None
 
 
@@ -448,25 +447,52 @@ class DataSourceManager:
         return None
 
     def sync_company_snapshot(self, company_name: str, ticker: Optional[str] = None,
-                            industry: Optional[str] = None) -> bool:
+                            industry: Optional[str] = None, force_refresh: bool = False) -> bool:
         """
         同步公司数据快照到数据库缓存
         用于定期更新和数据持久化
         """
         try:
+            if force_refresh:
+                logger.info(f"[DataSourceManager] Force refresh requested for {company_name}")
             company_data = self.fetch_company_data(company_name, ticker, industry)
+            snapshot_date = datetime.now().date().isoformat()
+            snapshot_payload = {
+                "company_name": company_name,
+                "ticker": ticker,
+                "industry": company_data.industry,
+                "esg_score_report": {
+                    "environmental": company_data.environmental,
+                    "social": company_data.social,
+                    "governance": company_data.governance,
+                    "data_sources": company_data.data_sources,
+                    "historical_data": company_data.historical_data,
+                },
+                "financial_metrics": company_data.financial,
+                "external_ratings": company_data.external_ratings,
+                "snapshot_date": snapshot_date,
+                "last_updated": datetime.now().isoformat(),
+            }
 
             # 这里应该将数据保存到数据库
             # 使用 Supabase client
             from gateway.db.supabase_client import supabase_client
 
-            supabase_client.table("company_data_snapshot").insert({
-                "company_name": company_name,
-                "ticker": ticker,
-                "esg_data": company_data.dict(),
-                "snapshot_date": datetime.now().date().isoformat(),
-                "last_updated": datetime.now().isoformat(),
-            }).execute()
+            try:
+                supabase_client.table("company_data_snapshot").insert(snapshot_payload).execute()
+            except Exception as exc:
+                error_text = str(exc).lower()
+                if "duplicate" not in error_text and "unique" not in error_text:
+                    raise
+
+                # 同一天重复同步时覆盖现有快照，避免调度器因为唯一键失败。
+                supabase_client.table("company_data_snapshot").update(snapshot_payload).eq(
+                    "company_name",
+                    company_name,
+                ).eq(
+                    "snapshot_date",
+                    snapshot_date,
+                ).execute()
 
             logger.info(f"[DataSourceManager] Synced snapshot for {company_name}")
             return True

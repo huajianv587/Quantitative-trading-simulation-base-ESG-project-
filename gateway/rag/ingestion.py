@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
@@ -10,7 +11,7 @@ from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.storage.docstore import SimpleDocumentStore
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "esg_docs"  #一个叫 esgdocs 的向量数据表 / 向量集合
 
 

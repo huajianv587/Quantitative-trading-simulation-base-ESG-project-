@@ -1,15 +1,72 @@
+from typing import Optional
+
 from llama_index.core import StorageContext, VectorStoreIndex
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import AutoMergingRetriever, QueryFusionRetriever
 from llama_index.core.retrievers.fusion_retriever import FUSION_MODES
-from llama_index.core.query_engine import RetrieverQueryEngine
+from llama_index.core.schema import NodeWithScore, QueryBundle
 from llama_index.retrievers.bm25 import BM25Retriever
-from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
+
+from gateway.rag.text_quality import clean_document_text, make_text_fingerprint, score_text_quality, truncate_text
 
 '''
 BM25召回（关键词） ┐
                    ├→ Reciprocal Rank Fusion → 父节点扩展 → Rerank → 返回
 Dense召回（语义）  ┘
 '''
+
+
+class QualityFilterPostprocessor(BaseNodePostprocessor):
+    """Drop noisy or duplicated chunks before answer synthesis."""
+
+    min_quality_score: float = 0.28
+    max_nodes: int = 5
+    max_chars_per_node: int = 1800
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "QualityFilterPostprocessor"
+
+    def _postprocess_nodes(
+        self,
+        nodes: list[NodeWithScore],
+        query_bundle: Optional[QueryBundle] = None,
+    ) -> list[NodeWithScore]:
+        filtered: list[NodeWithScore] = []
+        fallback: list[NodeWithScore] = []
+        seen_fingerprints: set[str] = set()
+
+        for node_with_score in nodes:
+            raw_text = node_with_score.get_content()
+            cleaned_text = truncate_text(
+                clean_document_text(raw_text, min_line_score=0.20),
+                self.max_chars_per_node,
+            )
+            if not cleaned_text:
+                continue
+
+            fingerprint = make_text_fingerprint(cleaned_text)
+            if fingerprint and fingerprint in seen_fingerprints:
+                continue
+            if fingerprint:
+                seen_fingerprints.add(fingerprint)
+
+            try:
+                node_with_score.node.set_content(cleaned_text)
+            except Exception:
+                pass
+
+            if score_text_quality(cleaned_text) >= self.min_quality_score:
+                filtered.append(node_with_score)
+                if len(filtered) >= self.max_nodes:
+                    break
+            elif len(fallback) < self.max_nodes:
+                fallback.append(node_with_score)
+
+        if filtered:
+            return filtered[: self.max_nodes]
+        return fallback[: self.max_nodes]
 
 
 def build_query_engine(
@@ -35,7 +92,9 @@ def build_query_engine(
         similarity_top_k=similarity_top_k,
         num_queries=1,           # 不生成额外查询变体，只做融合
         mode=FUSION_MODES.RECIPROCAL_RANK,
-        use_async=True,
+        # FastAPI 请求链路里复用 async fusion 容易触发 "Event loop is closed"。
+        # 上线场景优先稳态可用性，这里改为同步融合检索。
+        use_async=False,
         verbose=True,
     )
 
@@ -47,16 +106,12 @@ def build_query_engine(
         verbose=True,
     )
   
-    # 5. Rerank（对父节点完整文本打分）
-    reranker = FlagEmbeddingReranker(
-        model="BAAI/bge-reranker-base",
-        top_n=rerank_top_n,
-    )
-
-    # 6. Query engine
+    # 5. Query engine（不设相似度过滤，128-token 小 chunk 的相似度分数普遍偏低）
     query_engine = RetrieverQueryEngine(
         retriever=auto_merging_retriever,
-        node_postprocessors=[reranker],
+        node_postprocessors=[
+            QualityFilterPostprocessor(max_nodes=rerank_top_n),
+        ],
     )
 
     return query_engine

@@ -3,13 +3,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qdrant_client import QdrantClient, AsyncQdrantClient
 from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
-from ingestion import _get_qdrant_client, COLLECTION_NAME
+from gateway.rag.ingestion import _get_qdrant_client, COLLECTION_NAME
 
 # docstore 持久化目录（与项目根目录同级）
 PERSIST_DIR = str(Path(__file__).resolve().parents[2] / "storage" / "docstore")
