@@ -12,7 +12,12 @@
 #   Edge   — 节点之间的连接，分固定边和条件边两种
 
 from typing import TypedDict
-from langgraph.graph import StateGraph, END    # StateGraph: 带状态的有向图; END: 终止节点
+
+try:
+    from langgraph.graph import StateGraph, END    # StateGraph: 带状态的有向图; END: 终止节点
+except Exception:  # pragma: no cover - optional runtime dependency
+    StateGraph = None
+    END = "__end__"
 
 from gateway.agents.router_agent    import run_router
 from gateway.agents.retriever_agent import run_retriever
@@ -21,6 +26,24 @@ from gateway.agents.verifier_agent  import run_verifier
 from gateway.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class _FallbackCompiledGraph:
+    """LangGraph-free sequential executor for local runtime fallback."""
+
+    def invoke(self, state: dict) -> dict:
+        current_state = run_router(dict(state))
+        current_state = run_retriever(current_state)
+
+        if current_state.get("task_type") == "esg_analysis":
+            current_state = run_analyst(current_state)
+
+        while True:
+            current_state = run_verifier(current_state)
+            if not current_state.get("needs_retry", False):
+                return current_state
+            logger.info("[Graph] Fallback executor retrying analyst step")
+            current_state = run_analyst(current_state)
 
 
 # ── State Schema ──────────────────────────────────────────────────────────
@@ -77,6 +100,10 @@ def _route_after_verifier(state: ESGState) -> str:
 # ── 构建图 ────────────────────────────────────────────────────────────────
 
 def build_graph() -> StateGraph:
+    if StateGraph is None:
+        logger.warning("[Graph] langgraph unavailable, using sequential fallback executor.")
+        return _FallbackCompiledGraph()
+
     graph = StateGraph(ESGState)    # 创建带 ESGState 类型约束的图
 
     # 注册节点：节点名（字符串） → 处理函数

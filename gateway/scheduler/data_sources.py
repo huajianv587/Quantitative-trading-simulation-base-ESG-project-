@@ -3,7 +3,7 @@
 # 统一的数据模型和拉取接口
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 import requests
@@ -54,17 +54,30 @@ class DataSourceManager:
 
     def __init__(self):
         """初始化数据源管理器"""
-        self.alpha_vantage_api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+        self.alpha_vantage_api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "") or os.getenv("ALPHA_VANTAGE_KEY", "")
         self.hyfinnan_api_key = os.getenv("HYFINNAN_API_KEY", "")
         self.sec_edgar_email = os.getenv("SEC_EDGAR_EMAIL", "")
-        self.newsapi_key = os.getenv("NEWSAPI_KEY", "")
+        self.newsapi_key = os.getenv("NEWSAPI_KEY", "") or os.getenv("NEWS_API_KEY", "")
         self.finnhub_api_key = os.getenv("FINNHUB_API_KEY", "")
+        self.rapidapi_key = os.getenv("RAPIDAPI_KEY", "")
+        self.rapidapi_host = os.getenv("RAPIDAPI_HOST", "yh-finance.p.rapidapi.com")
 
         self.alpha_vantage_url = "https://www.alphavantage.co/query"
         self.newsapi_url = "https://newsapi.org/v2/everything"
         self.finnhub_url = "https://finnhub.io/api/v1"
+        self.rapidapi_base_url = f"https://{self.rapidapi_host}"
 
         self.cache_ttl_hours = 24
+
+    def source_status(self) -> Dict[str, Any]:
+        return {
+            "alpha_vantage": bool(self.alpha_vantage_api_key),
+            "finnhub": bool(self.finnhub_api_key),
+            "newsapi": bool(self.newsapi_key),
+            "rapidapi": bool(self.rapidapi_key),
+            "hyfinnan": bool(self.hyfinnan_api_key),
+            "sec_edgar": bool(self.sec_edgar_email),
+        }
 
     def fetch_company_data(self, company_name: str, ticker: Optional[str] = None,
                           industry: Optional[str] = None) -> CompanyData:
@@ -81,28 +94,33 @@ class DataSourceManager:
         """
         logger.info(f"[DataSourceManager] Fetching data for {company_name}")
 
+        resolved_ticker = ticker or self._resolve_symbol(company_name)
+
         company_data = CompanyData(
             company_name=company_name,
-            ticker=ticker,
+            ticker=resolved_ticker or ticker,
             industry=industry,
             last_updated=datetime.now()
         )
 
         try:
             # 并行拉取各数据源（实际应使用asyncio并发）
-            company_data.financial = self.fetch_from_alpha_vantage(ticker or company_name)
-            company_data.environmental = self.fetch_esg_environmental(company_name)
-            company_data.social = self.fetch_esg_social(company_name)
-            company_data.governance = self.fetch_esg_governance(company_name)
-            company_data.external_ratings = self.fetch_external_esg_ratings(company_name)
-            company_data.recent_news = self.fetch_recent_news(company_name, limit=10)
+            if resolved_ticker:
+                company_data.financial = self.fetch_from_alpha_vantage(resolved_ticker)
+
+            profile = self._merge_profile_sources(company_name, resolved_ticker)
+            company_data.market_cap = self._coerce_float(profile.get("market_cap"))
+            company_data.employees = self._coerce_int(profile.get("employees"))
+            company_data.industry = company_data.industry or profile.get("industry")
+
+            company_data.environmental = self.fetch_esg_environmental(company_name, ticker=resolved_ticker)
+            company_data.social = self.fetch_esg_social(company_name, ticker=resolved_ticker)
+            company_data.governance = self.fetch_esg_governance(company_name, ticker=resolved_ticker)
+            company_data.external_ratings = self.fetch_external_esg_ratings(company_name, ticker=resolved_ticker)
+            company_data.recent_news = self.fetch_recent_news(company_name, ticker=resolved_ticker, limit=10)
 
             company_data.data_sources = [
-                "alpha_vantage",
-                "hyfinnan",
-                "sec_edgar",
-                "newsapi",
-                "finnhub"
+                source_name for source_name, configured in self.source_status().items() if configured
             ]
 
             logger.info(f"[DataSourceManager] Successfully fetched data for {company_name}")
@@ -127,6 +145,9 @@ class DataSourceManager:
         cached = get_cache(cache_key)
         if cached:
             return cached
+
+        if not self.alpha_vantage_api_key:
+            return {}
 
         try:
             data = {}
@@ -182,7 +203,7 @@ class DataSourceManager:
             logger.warning(f"[DataSourceManager] Alpha Vantage error for {ticker}: {e}")
             return {}
 
-    def fetch_esg_environmental(self, company_name: str) -> Dict[str, Any]:
+    def fetch_esg_environmental(self, company_name: str, ticker: Optional[str] = None) -> Dict[str, Any]:
         """
         拉取环境相关ESG数据
         来源：Hyfinnan API、SEC EDGAR、Refinitiv等
@@ -203,11 +224,19 @@ class DataSourceManager:
                 "environmental_compliance": None,
             }
 
-            # 调用 Hyfinnan API（如果可用）
+            symbol = ticker or self._resolve_symbol(company_name)
+            esg_data = self._fetch_finnhub_esg(symbol) if symbol else None
+            if esg_data:
+                data.update({
+                    "environment_score": esg_data.get("environment_score"),
+                    "environment_percentile": esg_data.get("environment_percentile"),
+                    "carbon_emissions": esg_data.get("carbon_emissions"),
+                })
+
             if self.hyfinnan_api_key:
-                esg_data = self._call_hyfinnan_esg_api(company_name, "environmental")
-                if esg_data:
-                    data.update(esg_data)
+                legacy_data = self._call_hyfinnan_esg_api(company_name, "environmental")
+                if legacy_data:
+                    data.update(legacy_data)
 
             set_cache(cache_key, data, ttl_hours=self.cache_ttl_hours)
             return data
@@ -216,7 +245,7 @@ class DataSourceManager:
             logger.warning(f"[DataSourceManager] Environmental ESG error: {e}")
             return {}
 
-    def fetch_esg_social(self, company_name: str) -> Dict[str, Any]:
+    def fetch_esg_social(self, company_name: str, ticker: Optional[str] = None) -> Dict[str, Any]:
         """
         拉取社会相关ESG数据
         包含：员工满意度、多样性、供应链伦理等
@@ -241,11 +270,18 @@ class DataSourceManager:
                 "data_breach_incidents": None,
             }
 
-            # 从 Hyfinnan 拉取社会评分
+            symbol = ticker or self._resolve_symbol(company_name)
+            esg_data = self._fetch_finnhub_esg(symbol) if symbol else None
+            if esg_data:
+                data.update({
+                    "social_score": esg_data.get("social_score"),
+                    "social_percentile": esg_data.get("social_percentile"),
+                })
+
             if self.hyfinnan_api_key:
-                esg_data = self._call_hyfinnan_esg_api(company_name, "social")
-                if esg_data:
-                    data.update(esg_data)
+                legacy_data = self._call_hyfinnan_esg_api(company_name, "social")
+                if legacy_data:
+                    data.update(legacy_data)
 
             set_cache(cache_key, data, ttl_hours=self.cache_ttl_hours)
             return data
@@ -254,7 +290,7 @@ class DataSourceManager:
             logger.warning(f"[DataSourceManager] Social ESG error: {e}")
             return {}
 
-    def fetch_esg_governance(self, company_name: str) -> Dict[str, Any]:
+    def fetch_esg_governance(self, company_name: str, ticker: Optional[str] = None) -> Dict[str, Any]:
         """
         拉取治理相关ESG数据
         包含：董事会结构、薪酬透明度、反腐等
@@ -285,11 +321,18 @@ class DataSourceManager:
                 if gov_data:
                     data.update(gov_data)
 
-            # 从 Hyfinnan 拉取治理评分
+            symbol = ticker or self._resolve_symbol(company_name)
+            esg_data = self._fetch_finnhub_esg(symbol) if symbol else None
+            if esg_data:
+                data.update({
+                    "governance_score": esg_data.get("governance_score"),
+                    "governance_percentile": esg_data.get("governance_percentile"),
+                })
+
             if self.hyfinnan_api_key:
-                esg_data = self._call_hyfinnan_esg_api(company_name, "governance")
-                if esg_data:
-                    data.update(esg_data)
+                legacy_data = self._call_hyfinnan_esg_api(company_name, "governance")
+                if legacy_data:
+                    data.update(legacy_data)
 
             set_cache(cache_key, data, ttl_hours=self.cache_ttl_hours)
             return data
@@ -298,7 +341,7 @@ class DataSourceManager:
             logger.warning(f"[DataSourceManager] Governance ESG error: {e}")
             return {}
 
-    def fetch_external_esg_ratings(self, company_name: str) -> Dict[str, Any]:
+    def fetch_external_esg_ratings(self, company_name: str, ticker: Optional[str] = None) -> Dict[str, Any]:
         """
         拉取第三方ESG评级
         包括：MSCI、Sustainalytics、Refinitiv等
@@ -319,7 +362,16 @@ class DataSourceManager:
                 "ftse4good_included": None,
             }
 
-            # 这部分通常需要付费API，这里预留接口
+            symbol = ticker or self._resolve_symbol(company_name)
+            esg_data = self._fetch_finnhub_esg(symbol) if symbol else None
+            if esg_data:
+                data.update({
+                    "finnhub_total_esg_score": esg_data.get("total_score"),
+                    "finnhub_environment_score": esg_data.get("environment_score"),
+                    "finnhub_social_score": esg_data.get("social_score"),
+                    "finnhub_governance_score": esg_data.get("governance_score"),
+                })
+
             if self.hyfinnan_api_key:
                 ratings = self._call_hyfinnan_ratings_api(company_name)
                 if ratings:
@@ -333,7 +385,7 @@ class DataSourceManager:
             return {}
 
     @retry_with_backoff(max_retries=3)
-    def fetch_recent_news(self, company_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def fetch_recent_news(self, company_name: str, ticker: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
         """
         从 NewsAPI 和 Finnhub 拉取最近的新闻
         """
@@ -367,8 +419,37 @@ class DataSourceManager:
                             "content": article.get("content"),
                         })
 
+            # 使用 Finnhub 作为新闻回退 / 补充
+            symbol = ticker or self._resolve_symbol(company_name)
+            if self.finnhub_api_key and symbol:
+                from_date = (datetime.utcnow().date() - timedelta(days=30)).isoformat()
+                to_date = datetime.utcnow().date().isoformat()
+                resp = requests.get(
+                    f"{self.finnhub_url}/company-news",
+                    params={
+                        "symbol": symbol,
+                        "from": from_date,
+                        "to": to_date,
+                        "token": self.finnhub_api_key,
+                    },
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    seen_urls = {item.get("url") for item in news_list if item.get("url")}
+                    for article in resp.json()[:limit]:
+                        if article.get("url") in seen_urls:
+                            continue
+                        news_list.append({
+                            "title": article.get("headline"),
+                            "description": article.get("summary"),
+                            "url": article.get("url"),
+                            "source": article.get("source") or "Finnhub",
+                            "published_at": article.get("datetime"),
+                            "content": article.get("summary"),
+                        })
+
             set_cache(cache_key, news_list, ttl_hours=6)  # 新闻缓存6小时
-            return news_list
+            return news_list[:limit]
 
         except Exception as e:
             logger.warning(f"[DataSourceManager] News fetch error: {e}")
@@ -414,6 +495,154 @@ class DataSourceManager:
             logger.warning(f"[DataSourceManager] Hyfinnan Ratings error: {e}")
 
         return None
+
+    def _merge_profile_sources(self, company_name: str, ticker: Optional[str]) -> Dict[str, Any]:
+        profile: Dict[str, Any] = {}
+        if ticker:
+            profile.update(self._fetch_finnhub_company_profile(ticker) or {})
+            profile.update(self._call_rapidapi_profile_api(ticker) or {})
+        if not profile:
+            profile.update(self._call_rapidapi_profile_api(company_name) or {})
+        return profile
+
+    def _resolve_symbol(self, company_name: str) -> Optional[str]:
+        stripped = (company_name or "").strip()
+        if not stripped:
+            return None
+        if stripped.isupper() and len(stripped) <= 6:
+            return stripped
+        if not self.finnhub_api_key:
+            return None
+
+        cache_key = f"symbol_lookup_{stripped.lower()}"
+        cached = get_cache(cache_key)
+        if cached:
+            return str(cached)
+
+        try:
+            resp = requests.get(
+                f"{self.finnhub_url}/search",
+                params={"q": stripped, "token": self.finnhub_api_key},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("result", [])
+                symbol = next((item.get("symbol") for item in results if item.get("symbol")), None)
+                if symbol:
+                    set_cache(cache_key, symbol, ttl_hours=self.cache_ttl_hours)
+                    return symbol
+        except Exception as e:
+            logger.warning(f"[DataSourceManager] Symbol resolve error for {company_name}: {e}")
+
+        return None
+
+    def _fetch_finnhub_company_profile(self, ticker: str) -> Optional[Dict[str, Any]]:
+        if not self.finnhub_api_key or not ticker:
+            return None
+        try:
+            resp = requests.get(
+                f"{self.finnhub_url}/stock/profile2",
+                params={"symbol": ticker, "token": self.finnhub_api_key},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return None
+            payload = resp.json() or {}
+            if not payload:
+                return None
+            return {
+                "industry": payload.get("finnhubIndustry"),
+                "market_cap": payload.get("marketCapitalization"),
+                "website": payload.get("weburl"),
+                "country": payload.get("country"),
+                "name": payload.get("name"),
+            }
+        except Exception as e:
+            logger.warning(f"[DataSourceManager] Finnhub profile error for {ticker}: {e}")
+            return None
+
+    def _fetch_finnhub_esg(self, ticker: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not self.finnhub_api_key or not ticker:
+            return None
+        cache_key = f"finnhub_esg_{ticker}"
+        cached = get_cache(cache_key)
+        if cached:
+            return cached
+
+        try:
+            resp = requests.get(
+                f"{self.finnhub_url}/stock/esg",
+                params={"symbol": ticker, "token": self.finnhub_api_key},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return None
+            raw = resp.json() or {}
+            if not raw:
+                return None
+            data = {
+                "environment_score": raw.get("environmentScore") or raw.get("environment_score"),
+                "social_score": raw.get("socialScore") or raw.get("social_score"),
+                "governance_score": raw.get("governanceScore") or raw.get("governance_score"),
+                "environment_percentile": raw.get("environmentPercentile"),
+                "social_percentile": raw.get("socialPercentile"),
+                "governance_percentile": raw.get("governancePercentile"),
+                "total_score": raw.get("totalEsg") or raw.get("total_score"),
+                "carbon_emissions": raw.get("carbonIntensity") or raw.get("carbon_intensity"),
+            }
+            set_cache(cache_key, data, ttl_hours=self.cache_ttl_hours)
+            return data
+        except Exception as e:
+            logger.warning(f"[DataSourceManager] Finnhub ESG error for {ticker}: {e}")
+            return None
+
+    def _call_rapidapi_profile_api(self, symbol_or_query: str) -> Optional[Dict[str, Any]]:
+        if not self.rapidapi_key or not symbol_or_query:
+            return None
+
+        try:
+            resp = requests.get(
+                f"{self.rapidapi_base_url}/stock/v2/get-profile",
+                headers={
+                    "X-RapidAPI-Key": self.rapidapi_key,
+                    "X-RapidAPI-Host": self.rapidapi_host,
+                },
+                params={"symbol": symbol_or_query},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return None
+            payload = resp.json() or {}
+            if not payload:
+                return None
+            return {
+                "industry": payload.get("industry"),
+                "sector": payload.get("sector"),
+                "website": payload.get("website"),
+                "employees": payload.get("fullTimeEmployees"),
+                "long_business_summary": payload.get("longBusinessSummary"),
+            }
+        except Exception as e:
+            logger.warning(f"[DataSourceManager] RapidAPI Yahoo profile error for {symbol_or_query}: {e}")
+            return None
+
+    @staticmethod
+    def _coerce_float(value: Any) -> Optional[float]:
+        try:
+            if value in (None, ""):
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _coerce_int(value: Any) -> Optional[int]:
+        try:
+            if value in (None, ""):
+                return None
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
 
     def _fetch_from_sec_edgar(self, company_name: str) -> Optional[Dict[str, Any]]:
         """

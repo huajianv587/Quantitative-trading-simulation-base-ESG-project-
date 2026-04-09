@@ -3,50 +3,41 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ESG Agentic RAG Copilot - 企业 ESG 分析平台</title>
+  <title>ESG Quant IO Console</title>
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <!-- Google Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-
-  <!-- Tailwind CSS Play CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    // Tailwind 深色主题配置
     tailwind.config = {
       darkMode: 'class',
       theme: {
         extend: {
           colors: {
-            'esg-e': '#10B981',      // 环境 - 翡翠绿
+            'esg-e': '#10B981',
             'esg-e-dim': '#064E3B',
-            'esg-s': '#3B82F6',      // 社会 - 电光蓝
+            'esg-s': '#3B82F6',
             'esg-s-dim': '#1E3A5F',
-            'esg-g': '#F59E0B',      // 治理 - 琥珀橙
+            'esg-g': '#F59E0B',
             'esg-g-dim': '#451A03',
             'panel': '#101826',
             'panel-2': '#162132',
           },
           fontFamily: {
-            'sans': ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
-            'mono': ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
-          }
-        }
-      }
+            sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
+          },
+        },
+      },
     };
   </script>
-
-  <!-- Chart.js v4 -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-
   <script>
-    window.__APP_ASSET_VERSION__ = '20260404-frontend-v7';
+    window.__APP_ASSET_VERSION__ = '20260409-frontend-v8';
   </script>
-
-  <!-- 自定义 CSS -->
-  <link rel="stylesheet" href="/app/css/app.css?v=20260404-frontend-v7">
+  <link rel="stylesheet" href="/app/css/app.css?v=20260409-frontend-v8">
 
   <style>
     :root {
@@ -67,54 +58,42 @@
   </style>
 </head>
 <body class="bg-[var(--bg-base)] text-[var(--text-primary)] font-sans app-body">
-
   <div id="cursor-aura" class="cursor-aura" aria-hidden="true"></div>
   <div id="route-transition" class="route-transition" aria-hidden="true">
     <div class="route-transition__grid"></div>
     <div class="route-transition__beam"></div>
     <div class="route-transition__label">
       <span class="route-transition__kicker">Loading</span>
-      <span id="route-transition-title" class="route-transition__title">ESG Copilot</span>
+      <span id="route-transition-title" class="route-transition__title">ESG Quant IO</span>
     </div>
   </div>
 
-  <!-- 应用 Shell -->
   <div id="app-shell" class="app-shell">
-
-    <!-- 侧边栏导航 -->
     <aside id="sidebar" class="app-sidebar">
-      <!-- Logo 区域 -->
       <div id="nav-logo" class="app-sidebar__brand">
         <div class="flex items-center gap-4">
           <div class="w-11 h-11 bg-gradient-to-br from-esg-e to-esg-s rounded-2xl flex items-center justify-center font-bold text-lg text-[#0B0F1A] shadow-lg">
             E
           </div>
           <div class="flex flex-col">
-            <span class="font-bold text-xl tracking-wide">ESG Copilot</span>
-            <span class="text-base text-[var(--text-muted)] mt-0.5">企业 ESG 分析平台</span>
+            <span class="font-bold text-xl tracking-wide">ESG Quant IO</span>
+            <span class="text-base text-[var(--text-muted)] mt-0.5">ESG Quant Command Console</span>
           </div>
         </div>
       </div>
 
-      <!-- 导航菜单 -->
       <nav id="nav-links" class="app-sidebar__nav"></nav>
 
-      <!-- 底部状态指示 -->
       <div id="nav-footer" class="app-sidebar__footer">
         <div id="health-indicator" class="flex items-center gap-2">
           <span class="inline-block w-2.5 h-2.5 bg-gray-500 rounded-full"></span>
-          <span>检查连接中...</span>
+          <span>Checking backend...</span>
         </div>
-        <div class="mt-3 text-sm text-[var(--text-muted)]">
-          Build 20260404-v7
-        </div>
+        <div class="mt-3 text-sm text-[var(--text-muted)]">Build 20260409-v8</div>
       </div>
     </aside>
 
-    <!-- 主内容区 -->
     <div class="app-main">
-
-      <!-- 顶部栏 -->
       <header id="top-bar" class="app-topbar">
         <div>
           <div class="text-sm uppercase tracking-[0.28em] text-[var(--text-muted)]">Workspace</div>
@@ -123,22 +102,14 @@
         <div id="header-actions" class="flex items-center gap-4"></div>
       </header>
 
-      <!-- 页面主内容 -->
       <main id="app-root" class="app-content"></main>
     </div>
-
   </div>
 
-  <!-- Toast 通知容器 -->
   <div id="toast-container" class="fixed bottom-6 right-6 z-50 space-y-2"></div>
-
-  <!-- 弹窗容器 -->
   <div id="modal-container"></div>
 
-  <script src="/app/app-config.js?v=20260404-frontend-v7"></script>
-
-  <!-- 应用入口 (ES Module) -->
-  <script type="module" src="/app/js/app.js?v=20260404-frontend-v7"></script>
-
+  <script src="/app/app-config.js?v=20260409-frontend-v8"></script>
+  <script type="module" src="/app/js/app.js?v=20260409-frontend-v8"></script>
 </body>
 </html>

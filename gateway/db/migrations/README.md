@@ -8,6 +8,7 @@
 
 | 文件 | 内容 |
 |------|------|
+| `000_supabase_bootstrap_all.sql` | 单文件整段初始化版，适合全新 Supabase 项目一次性执行 |
 | `001_init_sessions.sql` | `sessions` 会话表、`chat_history` 聊天记录表 |
 | `002_add_esg_report_tables.sql` | ESG 报告、企业快照、推送历史、推送规则、订阅、反馈表及相关视图/触发器 |
 | `003_add_scheduler_tables.sql` | 用户、持仓、偏好、ESG事件、提取事件、风险评分、匹配、扫描任务、通知日志、应用内通知表 |

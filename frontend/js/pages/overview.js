@@ -23,19 +23,43 @@ const DEFAULT_HOT_QUESTIONS = [
 
 const COMMAND_SURFACES = [
   {
+    route: '/research',
+    eyebrow: 'Research',
+    title: 'Research Lab',
+    description: '把 ESG、质量、估值与另类数据汇总成一轮完整量化研究。',
+    accent: 'cyan',
+    stat: '信号生产',
+  },
+  {
+    route: '/portfolio',
+    eyebrow: 'Portfolio',
+    title: 'Portfolio Lab',
+    description: '生成组合建议、仓位配置和 Paper Trading 执行清单。',
+    accent: 'emerald',
+    stat: '组合优化',
+  },
+  {
+    route: '/backtests',
+    eyebrow: 'Validation',
+    title: 'Backtest Center',
+    description: '执行样本内外回测，查看收益、回撤与风险告警。',
+    accent: 'amber',
+    stat: '策略验证',
+  },
+  {
     route: '/chat',
     eyebrow: 'Conversation',
-    title: 'ESG 对话',
-    description: '用自然语言快速进入企业 ESG 分析、问答和洞察提炼。',
-    accent: 'cyan',
-    stat: '实时问答',
+    title: 'ESG Copilot',
+    description: '在 Agent 对话界面里做企业 ESG 深挖和问答追踪。',
+    accent: 'violet',
+    stat: 'Agent 研究',
   },
   {
     route: '/score',
     eyebrow: 'Scoring',
-    title: 'ESG 评分',
+    title: 'Score Lab',
     description: '生成结构化评分、维度拆解和可视化，适合深度研判。',
-    accent: 'emerald',
+    accent: 'rose',
     stat: '结构评分',
   },
   {
@@ -43,15 +67,15 @@ const COMMAND_SURFACES = [
     eyebrow: 'Reporting',
     title: '报告中心',
     description: '集中查看日报、周报和月报，把观察升级成正式输出。',
-    accent: 'violet',
+    accent: 'blue',
     stat: '周期报告',
   },
   {
     route: '/data',
     eyebrow: 'Pipeline',
-    title: '数据同步',
+    title: 'Data Hub',
     description: '管理数据源刷新、调度节奏和底层采集链路健康度。',
-    accent: 'amber',
+    accent: 'blue',
     stat: '数据底座',
   },
   {
@@ -129,6 +153,20 @@ function buildHTML() {
             <span class="overview-source-dot"></span>
             <span id="overview-source-chip">Connecting live feed</span>
           </div>
+        </div>
+      </section>
+
+      <section class="overview-architecture card" data-hover-glow="true">
+        <div class="overview-section-head">
+          <div>
+            <div class="overview-section-head__kicker">Architecture Fabric</div>
+            <h2>把蓝图里的 8 层能力真正映射成可运行产品面</h2>
+          </div>
+          <p>直接查看数据接入、治理、分析、模型、Agent、风控、回测和交付层的就绪状态，以及当前存储、组合、回测和训练路径。</p>
+        </div>
+        <div class="overview-architecture__grid">
+          <div id="overview-layer-grid" class="overview-layer-grid"></div>
+          <div id="overview-runtime-grid" class="overview-runtime-grid"></div>
         </div>
       </section>
 
@@ -237,7 +275,15 @@ function buildHTML() {
 
 async function loadOverview(container, silent = false) {
   try {
-    const data = await api.dashboard.overview();
+    const [dashboardResult, quantResult] = await Promise.allSettled([
+      api.dashboard.overview(),
+      api.quant.overview(),
+    ]);
+
+    const data = mergeOverviewPayload(
+      dashboardResult.status === 'fulfilled' ? dashboardResult.value : null,
+      quantResult.status === 'fulfilled' ? quantResult.value : null,
+    );
     hydrateOverview(container, data || getFallbackOverview());
   } catch (error) {
     console.warn('旗舰页数据加载失败，使用回退数据', error);
@@ -255,6 +301,7 @@ function hydrateOverview(container, data) {
 
   renderMetrics(container.querySelector('#overview-metrics'), data.metrics || []);
   renderSpotlight(container.querySelector('#overview-spotlight'), data.spotlight);
+  renderArchitecture(container, data.quantPlatform || data.quant_platform);
   renderQueryInterface(container, data.query_interface || {});
   renderSignals(container.querySelector('#overview-signal-rail'), data.signals || []);
   renderHealth(container.querySelector('#overview-health-grid'), data.health || {});
@@ -264,6 +311,16 @@ function hydrateOverview(container, data) {
 
   const sourceChip = container.querySelector('#overview-source-chip');
   sourceChip.textContent = buildSourceText(data);
+}
+
+function mergeOverviewPayload(dashboardData, quantData) {
+  const base = dashboardData || getFallbackOverview();
+  const quantPlatform = quantData || getFallbackQuantOverview();
+
+  return {
+    ...base,
+    quantPlatform,
+  };
 }
 
 function bindQueryConsole(container) {
@@ -456,6 +513,74 @@ function renderHealth(target, health) {
       </div>
     `;
   }).join('');
+}
+
+function renderArchitecture(container, quantPlatform) {
+  const fallback = getFallbackQuantOverview();
+  const data = quantPlatform || fallback;
+  const layers = data.architecture_layers?.length ? data.architecture_layers : fallback.architecture_layers;
+  const storage = data.storage || fallback.storage;
+  const portfolio = data.portfolio_preview || fallback.portfolio_preview;
+  const backtestMetrics = data.latest_backtest?.metrics || fallback.latest_backtest.metrics;
+  const training = data.training_plan || fallback.training_plan;
+
+  const layerGrid = container.querySelector('#overview-layer-grid');
+  const runtimeGrid = container.querySelector('#overview-runtime-grid');
+
+  layerGrid.innerHTML = layers.map((layer) => `
+    <article class="overview-layer-card ${layer.ready ? 'is-ready' : 'is-pending'}" data-hover-glow="true">
+      <div class="overview-layer-card__top">
+        <span class="overview-layer-card__key">${escapeHtml(String(layer.key || '').toUpperCase())}</span>
+        <span class="overview-layer-card__priority">${escapeHtml(layer.priority || 'P1')}</span>
+      </div>
+      <h3>${escapeHtml(layer.label || '系统层')}</h3>
+      <p>${escapeHtml(layer.detail || '')}</p>
+      <div class="overview-layer-card__status">
+        <span class="overview-layer-card__dot"></span>
+        <span>${layer.ready ? 'Ready' : 'Pending'}</span>
+      </div>
+    </article>
+  `).join('');
+
+  runtimeGrid.innerHTML = `
+    <article class="overview-runtime-card" data-hover-glow="true">
+      <div class="overview-runtime-card__eyebrow">Storage Fabric</div>
+      <div class="overview-runtime-card__value">${escapeHtml(storageLabel(storage.mode))}</div>
+      <div class="overview-runtime-card__meta">
+        <span>${storage.supabase_ready ? 'Supabase DB online' : 'Supabase DB standby'}</span>
+        <span>${escapeHtml(artifactBackendLabel(storage))}</span>
+      </div>
+    </article>
+
+    <article class="overview-runtime-card" data-hover-glow="true">
+      <div class="overview-runtime-card__eyebrow">Portfolio Loop</div>
+      <div class="overview-runtime-card__value">${portfolio.positions?.length || 0} positions</div>
+      <div class="overview-runtime-card__meta">
+        <span>Benchmark ${escapeHtml(portfolio.benchmark || 'SPY')}</span>
+        <span>Alpha ${formatPercent(portfolio.expected_alpha, 2)}</span>
+        <span>Gross ${formatPercent(portfolio.gross_exposure, 1)}</span>
+      </div>
+    </article>
+
+    <article class="overview-runtime-card" data-hover-glow="true">
+      <div class="overview-runtime-card__eyebrow">Validation Kernel</div>
+      <div class="overview-runtime-card__value">Sharpe ${escapeHtml(String(backtestMetrics.sharpe ?? 0))}</div>
+      <div class="overview-runtime-card__meta">
+        <span>MDD ${formatPercent(backtestMetrics.max_drawdown, 2)}</span>
+        <span>CVaR ${formatPercent(backtestMetrics.cvar_95, 2)}</span>
+        <span>IR ${escapeHtml(String(backtestMetrics.information_ratio ?? 0))}</span>
+      </div>
+    </article>
+
+    <article class="overview-runtime-card" data-hover-glow="true">
+      <div class="overview-runtime-card__eyebrow">Training Roadmap</div>
+      <div class="overview-runtime-card__value">${training.remote_ready ? 'Remote Ready' : 'Local First'}</div>
+      <div class="overview-runtime-card__detail">${escapeHtml(training.adapter_strategy || '')}</div>
+      <div class="overview-runtime-card__meta">
+        <span>${escapeHtml(training.target_environment || 'Cloud RTX 5090 Finetune Node')}</span>
+      </div>
+    </article>
+  `;
 }
 
 function renderScoreboard(container, snapshot) {
@@ -850,6 +975,76 @@ function toneLabel(tone) {
   }[tone] || 'Live';
 }
 
+function storageLabel(mode) {
+  return {
+    hybrid_cloud: 'Hybrid Cloud',
+    local_fallback: 'Local Ready',
+  }[mode] || 'Runtime Ready';
+}
+
+function artifactBackendLabel(storage) {
+  if (storage?.r2_ready) {
+    return 'R2 active';
+  }
+  if (storage?.supabase_storage_ready) {
+    return 'Supabase Storage active';
+  }
+  return 'Local artifact fallback';
+}
+
+function formatPercent(value, digits = 1) {
+  const numeric = Number(value || 0);
+  return `${(numeric * 100).toFixed(digits)}%`;
+}
+
+function getFallbackQuantOverview() {
+  return {
+    platform_name: 'ESG Quant Intelligence System',
+    tagline: '从数据接入到因子研究、回测执行与产品交付的一体化 ESG Quant 平台',
+    architecture_layers: [
+      { key: 'l0', label: '数据接入层', priority: 'P1', ready: true, detail: '市场、宏观、ESG 与另类数据入口' },
+      { key: 'l1', label: '数据治理层', priority: 'P1', ready: true, detail: '时间对齐、异常过滤、血缘记录' },
+      { key: 'l2', label: '分析引擎层', priority: 'P1', ready: true, detail: '技术、因子、ESG 与另类数据分析' },
+      { key: 'l3', label: '模型训练层', priority: 'P2', ready: true, detail: 'XGBoost、LSTM、LoRA 与训练规划' },
+      { key: 'l4', label: 'Agent 编排层', priority: 'P1', ready: true, detail: 'Research、Strategy、Risk、Report Agent' },
+      { key: 'l5', label: '风控合规层', priority: 'P2', ready: true, detail: '回撤、CVaR、压力测试与规则引擎' },
+      { key: 'l6', label: '执行回测层', priority: 'P1', ready: true, detail: '回测、Paper Trading 与绩效归因' },
+      { key: 'l7+', label: '实验与交付层', priority: 'P1', ready: true, detail: '实验记录、站点交付与报告沉淀' },
+    ],
+    storage: {
+      mode: 'local_fallback',
+      supabase_ready: false,
+      supabase_storage_ready: false,
+      r2_ready: false,
+      preferred_artifact_backend: 'local',
+    },
+    portfolio_preview: {
+      benchmark: 'SPY',
+      expected_alpha: 0.084,
+      gross_exposure: 1,
+      positions: [
+        { symbol: 'AAPL' },
+        { symbol: 'MSFT' },
+        { symbol: 'TSLA' },
+        { symbol: 'NVDA' },
+      ],
+    },
+    latest_backtest: {
+      metrics: {
+        sharpe: 1.42,
+        max_drawdown: 0.082,
+        cvar_95: 0.024,
+        information_ratio: 0.88,
+      },
+    },
+    training_plan: {
+      remote_ready: false,
+      adapter_strategy: 'Qwen2.5 / ESG domain LoRA continuation training',
+      target_environment: 'Cloud RTX 5090 Finetune Node',
+    },
+  };
+}
+
 function getFallbackOverview() {
   const now = new Date().toISOString();
 
@@ -985,6 +1180,7 @@ function getFallbackOverview() {
         tone: 'alert',
       },
     ],
+    quantPlatform: getFallbackQuantOverview(),
   };
 }
 

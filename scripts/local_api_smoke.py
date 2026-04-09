@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,10 +11,42 @@ import time
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PYTHON_EXE = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+load_dotenv(PROJECT_ROOT / ".env")
+
+
+def resolve_python_executable() -> str | None:
+    candidates = [
+        PROJECT_ROOT / ".venv" / "Scripts" / "python.exe",
+        PROJECT_ROOT / ".venv" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    current = sys.executable
+    if current and Path(current).exists():
+        return current
+
+    discovered = shutil.which("python")
+    if discovered:
+        return discovered
+
+    return None
+
+
+def emit_json(payload: dict) -> None:
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        print(text)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write(text.encode("utf-8", errors="backslashreplace"))
+        sys.stdout.buffer.write(b"\n")
 
 
 def wait_for_health(base_url: str, timeout: int) -> tuple[bool, dict | str]:
@@ -67,8 +100,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not PYTHON_EXE.exists():
-        print(json.dumps({"ok": False, "error": f"missing interpreter: {PYTHON_EXE}"}, ensure_ascii=False, indent=2))
+    python_exe = resolve_python_executable()
+    if not python_exe:
+        emit_json({
+            "ok": False,
+            "error": "missing interpreter: expected .venv or current Python executable",
+        })
         return 1
 
     base_url = f"http://{args.host}:{args.port}"
@@ -85,7 +122,7 @@ def main() -> int:
 
     proc = subprocess.Popen(
         [
-            str(PYTHON_EXE),
+            python_exe,
             "-m",
             "uvicorn",
             "gateway.main:app",
@@ -111,7 +148,7 @@ def main() -> int:
                 "stdout_tail": tail_log(stdout_log),
                 "stderr_tail": tail_log(stderr_log),
             }
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            emit_json(result)
             return 1
 
         analyze_response = requests.post(
@@ -122,11 +159,12 @@ def main() -> int:
 
         result = {
             "ok": analyze_response.ok,
+            "python_executable": python_exe,
             "health": health_payload,
             "analyze_status": analyze_response.status_code,
             "analyze_body": analyze_response.text,
         }
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        emit_json(result)
         return 0 if analyze_response.ok else 1
     finally:
         stop_process(proc)

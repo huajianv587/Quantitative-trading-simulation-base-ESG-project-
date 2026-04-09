@@ -5,6 +5,7 @@
 #      董事会多样性、高管薪酬、反腐机制、风险管理、股东权益（G）
 
 import json
+import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
@@ -242,7 +243,7 @@ class ESGScoringFramework:
             )
 
             # 解析JSON响应
-            scores_data = self._parse_llm_response(raw_response)
+            scores_data = self._parse_llm_response(raw_response, company_name, esg_data)
 
             # 构建报告对象
             report = self._build_report(company_name, esg_data, scores_data)
@@ -298,19 +299,164 @@ class ESGScoringFramework:
                 lines.append(f"  - {key}: {value}")
         return "\n".join(lines)
 
-    def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """解析LLM返回的JSON"""
+    def _parse_llm_response(self, response: str, company_name: str, esg_data: Dict[str, Any]) -> Dict[str, Any]:
+        """解析LLM返回的JSON，必要时退化为启发式结构化结果"""
+        text = response.strip()
         try:
             # 去掉markdown代码块
-            text = response.strip()
             if text.startswith("```"):
                 lines = text.split("\n")
                 text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
 
             return json.loads(text)
         except json.JSONDecodeError as e:
-            logger.error(f"[ESGScorer] JSON parse error: {e}")
-            raise ValueError(f"Failed to parse LLM response: {response[:200]}")
+            json_match = re.search(r"(\{[\s\S]*\})", text)
+            if json_match:
+                try:
+                    return json.loads(json_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+
+            logger.warning(f"[ESGScorer] JSON parse error, switching to heuristic fallback: {e}")
+            return self._build_fallback_scores(company_name, esg_data, text)
+
+    def _build_fallback_scores(self, company_name: str, esg_data: Dict[str, Any], raw_response: str) -> Dict[str, Any]:
+        """在无JSON输出时生成保守但完整的ESG结构化结果"""
+        source_count = len(esg_data.get("data_sources", []))
+        external = esg_data.get("external_ratings", {}) or {}
+        environmental = esg_data.get("environmental", {}) or {}
+        social = esg_data.get("social", {}) or {}
+        governance = esg_data.get("governance", {}) or {}
+
+        base_score = 58 + min(source_count * 2, 8)
+        external_bias = self._extract_numeric_signal(external)
+        if external_bias is not None:
+            base_score = max(35, min(88, int(external_bias)))
+
+        e_score = self._derive_dimension_score(base_score, environmental, positive_hints=("renewable", "reduction", "efficiency", "water"))
+        s_score = self._derive_dimension_score(base_score - 1, social, positive_hints=("safety", "diversity", "community", "training"))
+        g_score = self._derive_dimension_score(base_score + 1, governance, positive_hints=("board", "audit", "compliance", "transparency"))
+        overall_score = round(e_score * 0.35 + s_score * 0.33 + g_score * 0.32, 1)
+        raw_summary = raw_response.strip() or f"{company_name} fallback assessment generated without live JSON output."
+
+        return {
+            "e_scores": self._build_fallback_dimension_payload(
+                self.E_METRICS,
+                environmental,
+                e_score,
+                "Environmental score estimated from available disclosures and fallback heuristics.",
+            ),
+            "s_scores": self._build_fallback_dimension_payload(
+                self.S_METRICS,
+                social,
+                s_score,
+                "Social score estimated from workforce, community, and safety signals in fallback mode.",
+            ),
+            "g_scores": self._build_fallback_dimension_payload(
+                self.G_METRICS,
+                governance,
+                g_score,
+                "Governance score estimated from board, policy, and disclosure signals in fallback mode.",
+            ),
+            "overall_score": overall_score,
+            "overall_trend": "stable",
+            "peer_rank": "provisional",
+            "industry_position": "fallback estimate",
+            "key_strengths": self._build_strengths(company_name, e_score, s_score, g_score),
+            "key_weaknesses": self._build_weaknesses(e_score, s_score, g_score),
+            "recommendations": self._build_recommendations(e_score, s_score, g_score),
+            "fallback_summary": raw_summary[:300],
+        }
+
+    @staticmethod
+    def _extract_numeric_signal(payload: Dict[str, Any]) -> Optional[float]:
+        for value in payload.values():
+            if isinstance(value, (int, float)) and 0 <= float(value) <= 100:
+                return float(value)
+            if isinstance(value, str):
+                cleaned = value.replace("%", "").strip()
+                try:
+                    numeric = float(cleaned)
+                except ValueError:
+                    continue
+                if 0 <= numeric <= 100:
+                    return numeric
+        return None
+
+    @staticmethod
+    def _derive_dimension_score(base_score: float, payload: Dict[str, Any], positive_hints: tuple[str, ...]) -> int:
+        score = float(base_score)
+        serialized = json.dumps(payload, ensure_ascii=False).lower()
+        score += sum(3 for hint in positive_hints if hint in serialized)
+        score += min(len(payload) * 1.5, 6)
+        return max(32, min(90, int(round(score))))
+
+    def _build_fallback_dimension_payload(
+        self,
+        metrics_def: Dict[str, Dict[str, Any]],
+        payload: Dict[str, Any],
+        dimension_score: int,
+        summary: str,
+    ) -> Dict[str, Any]:
+        metrics = {}
+        serialized = json.dumps(payload, ensure_ascii=False)[:180] if payload else "Limited structured data available."
+        for index, metric_key in enumerate(metrics_def.keys()):
+            metric_score = max(30, min(92, dimension_score + 4 - index * 2))
+            metrics[metric_key] = {
+                "score": metric_score,
+                "reasoning": f"Fallback estimate based on available company disclosures. Evidence snapshot: {serialized}",
+                "trend": "stable",
+                "data_source": "heuristic_fallback",
+            }
+        return {
+            "overall_score": dimension_score,
+            "metrics": metrics,
+            "summary": summary,
+        }
+
+    @staticmethod
+    def _build_strengths(company_name: str, e_score: float, s_score: float, g_score: float) -> List[str]:
+        ranked = sorted(
+            [
+                ("environmental execution", e_score),
+                ("social stewardship", s_score),
+                ("governance discipline", g_score),
+            ],
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        return [
+            f"{company_name} shows comparatively stronger {ranked[0][0]} in the current fallback assessment.",
+            f"Disclosure coverage supports a provisional {ranked[1][0]} reading.",
+        ]
+
+    @staticmethod
+    def _build_weaknesses(e_score: float, s_score: float, g_score: float) -> List[str]:
+        ranked = sorted(
+            [
+                ("environmental data depth", e_score),
+                ("social program clarity", s_score),
+                ("governance transparency", g_score),
+            ],
+            key=lambda item: item[1],
+        )
+        return [
+            f"{ranked[0][0]} remains the least certain area and needs richer live-source evidence.",
+            "This report was generated in fallback mode, so peer benchmarking confidence is limited.",
+        ]
+
+    @staticmethod
+    def _build_recommendations(e_score: float, s_score: float, g_score: float) -> List[str]:
+        recommendations = [
+            "Reconnect a live LLM backend to replace heuristic fallback scoring with evidence-grounded structured analysis.",
+            "Expand direct ESG disclosures and third-party source coverage before using this score for production investment decisions.",
+        ]
+        weakest = min(
+            [("environmental", e_score), ("social", s_score), ("governance", g_score)],
+            key=lambda item: item[1],
+        )[0]
+        recommendations.append(f"Prioritize additional data collection for the {weakest} dimension.")
+        return recommendations
 
     def _build_report(self, company_name: str, esg_data: Dict[str, Any],
                      scores_data: Dict[str, Any]) -> ESGScoreReport:

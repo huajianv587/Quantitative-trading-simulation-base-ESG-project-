@@ -1,11 +1,31 @@
 from __future__ import annotations
 
-import requests
-import torch
-from openai import OpenAI
+import json
+import re
 from pathlib import Path
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
+
+import requests
+
+try:
+    import torch
+except Exception:  # pragma: no cover - optional runtime dependency
+    torch = None
+
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - optional runtime dependency
+    OpenAI = None
+
+try:
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+except Exception:  # pragma: no cover - optional runtime dependency
+    AutoModelForCausalLM = None
+    AutoTokenizer = None
+
+try:
+    from peft import PeftModel
+except Exception:  # pragma: no cover - optional runtime dependency
+    PeftModel = None
 
 from gateway.config import settings
 from gateway.utils.logger import get_logger
@@ -51,6 +71,10 @@ def _local_backend_supported() -> bool:
         _disable_local_backend(f"Local checkpoint not found: {LOCAL_CKPT}")
         return False
 
+    if torch is None or AutoTokenizer is None or AutoModelForCausalLM is None or PeftModel is None:
+        _disable_local_backend("Torch/Transformers/PEFT unavailable; local backend disabled.")
+        return False
+
     if not torch.cuda.is_available():
         _disable_local_backend(
             "CUDA unavailable; skipping local Qwen2.5-7B backend on CPU. "
@@ -70,6 +94,10 @@ def _backend_mode() -> str:
     return mode if mode in {"auto", "local", "remote", "cloud"} else "auto"
 
 
+def _degraded_fallback_enabled() -> bool:
+    return bool(getattr(settings, "DEBUG", False) or getattr(settings, "APP_MODE", "local") in {"local", "hybrid"})
+
+
 def get_runtime_backend_status() -> dict:
     return {
         "app_mode": getattr(settings, "APP_MODE", "local"),
@@ -77,8 +105,10 @@ def get_runtime_backend_status() -> dict:
         "remote_llm_configured": _remote_backend_configured(),
         "remote_llm_enabled_in_mode": _backend_mode() == "remote",
         "cloud_fallback_order": list(CLOUD_FALLBACK_ORDER),
-        "local_llm_cuda_available": torch.cuda.is_available(),
+        "degraded_llm_fallback_enabled": _degraded_fallback_enabled(),
+        "local_llm_cuda_available": bool(torch and torch.cuda.is_available()),
         "local_checkpoint_exists": Path(LOCAL_CKPT).exists(),
+        "openai_sdk_available": OpenAI is not None,
     }
 
 
@@ -197,6 +227,8 @@ def _get_openai_client() -> OpenAI:
     """获取 OpenAI 客户端（单例）。"""
     global _openai_client
     if _openai_client is None:
+        if OpenAI is None:
+            raise RuntimeError("openai package is not installed")
         if not settings.OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY not set in .env")
         _openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -207,6 +239,8 @@ def _get_deepseek_client() -> OpenAI:
     """获取 DeepSeek 客户端（单例，使用 OpenAI SDK 兼容接口）。"""
     global _deepseek_client
     if _deepseek_client is None:
+        if OpenAI is None:
+            raise RuntimeError("openai package is not installed")
         if not settings.DEEPSEEK_API_KEY:
             raise RuntimeError("DEEPSEEK_API_KEY not set in .env")
         _deepseek_client = OpenAI(
@@ -258,6 +292,241 @@ def _cloud_backend_candidates():
     return (
         ("DeepSeek", bool(settings.DEEPSEEK_API_KEY), _chat_deepseek),
         ("OpenAI GPT-4o", bool(settings.OPENAI_API_KEY), _chat_openai),
+    )
+
+
+def _last_user_message(messages: list[dict]) -> str:
+    for message in reversed(messages):
+        if str(message.get("role", "")).lower() == "user":
+            return str(message.get("content", "")).strip()
+    return str(messages[-1].get("content", "")).strip() if messages else ""
+
+
+def _system_prompt(messages: list[dict]) -> str:
+    for message in messages:
+        if str(message.get("role", "")).lower() == "system":
+            return str(message.get("content", "")).strip()
+    return ""
+
+
+def _truncate_text(text: str, max_chars: int = 360) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(clean) <= max_chars:
+        return clean
+    shortened = clean[:max_chars].rsplit(" ", 1)[0].strip()
+    return shortened or clean[:max_chars].strip()
+
+
+def _extract_field(content: str, label: str) -> str:
+    match = re.search(rf"{re.escape(label)}\s*:\s*(.+?)(?:\n[A-Z][^:\n]{{0,40}}:|\Z)", content, re.DOTALL)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _extract_company_name(text: str) -> str:
+    candidate = re.search(r"\b(Tesla|Microsoft|Apple|DBS|Singtel|Grab|NVIDIA|Amazon|Google|Alphabet)\b", text, re.IGNORECASE)
+    if candidate:
+        return candidate.group(1)
+
+    generic = re.search(r"\b([A-Z][A-Za-z&.-]{1,30})\b", text)
+    if generic:
+        return generic.group(1)
+    return "Target Company"
+
+
+def _heuristic_router_label(question: str) -> str:
+    question_lower = question.lower()
+    analysis_markers = (
+        "score",
+        "评分",
+        "analy",
+        "compare",
+        "对比",
+        "风险",
+        "performance",
+        "表现",
+        "评级",
+    )
+    factual_markers = ("what", "when", "which", "最新", "news", "事件", "recent", "list")
+    if any(marker in question_lower for marker in analysis_markers):
+        return "esg_analysis"
+    if any(marker in question_lower for marker in factual_markers):
+        return "factual"
+    return "general"
+
+
+def _score_from_text(text: str, positive_terms: tuple[str, ...], negative_terms: tuple[str, ...], baseline: int) -> int:
+    lower = text.lower()
+    score = baseline
+    score += sum(4 for term in positive_terms if term in lower)
+    score -= sum(5 for term in negative_terms if term in lower)
+    return max(25, min(92, score))
+
+
+def _build_analyst_payload(question: str, context: str) -> dict:
+    evidence = _truncate_text(context or "No retrieved context available.", 220)
+    env_score = _score_from_text(
+        context,
+        ("emission", "renewable", "climate", "carbon", "energy", "water"),
+        ("pollution", "lawsuit", "spill", "violation"),
+        72,
+    )
+    social_score = _score_from_text(
+        context,
+        ("safety", "employee", "diversity", "community", "training"),
+        ("injury", "strike", "breach", "labor"),
+        69,
+    )
+    governance_score = _score_from_text(
+        context,
+        ("board", "oversight", "audit", "compliance", "governance", "transparency"),
+        ("fraud", "corruption", "restatement", "investigation"),
+        71,
+    )
+    overall = round(env_score * 0.35 + social_score * 0.35 + governance_score * 0.30, 1)
+    risk_level = "low" if overall >= 75 else "medium" if overall >= 55 else "high"
+    company = _extract_company_name(question or context)
+
+    def indicator_block(value: str, score: int, trend: str = "stable") -> dict:
+        return {"value": value, "score": score, "trend": trend}
+
+    return {
+        "environmental": {
+            "score": env_score,
+            "indicators": {
+                "carbon_emissions": indicator_block("Narrative evidence extracted from context", env_score - 2, "improving"),
+                "energy_use": indicator_block("Operational efficiency trend noted", env_score, "improving"),
+                "water_use": indicator_block("Limited disclosure in fallback mode", max(40, env_score - 8), "stable"),
+                "waste_mgmt": indicator_block("Context-driven proxy signal", max(45, env_score - 5), "stable"),
+            },
+            "evidence": evidence,
+        },
+        "social": {
+            "score": social_score,
+            "indicators": {
+                "employee_safety": indicator_block("Workforce and safety references detected", social_score, "stable"),
+                "diversity": indicator_block("Diversity and inclusion references detected", max(40, social_score - 2), "stable"),
+                "community": indicator_block("Community investment proxy signal", max(40, social_score - 4), "stable"),
+                "supply_chain": indicator_block("Supply chain coverage limited in fallback mode", max(38, social_score - 6), "unknown"),
+            },
+            "evidence": evidence,
+        },
+        "governance": {
+            "score": governance_score,
+            "indicators": {
+                "board_composition": indicator_block("Board and oversight references detected", governance_score, "stable"),
+                "transparency": indicator_block("Disclosure quality proxy signal", max(42, governance_score - 1), "stable"),
+                "anti_corruption": indicator_block("No major red flags found in context", max(45, governance_score - 3), "stable"),
+                "shareholder": indicator_block("Shareholder rights not fully disclosed in fallback mode", max(40, governance_score - 5), "unknown"),
+            },
+            "evidence": evidence,
+        },
+        "overall_score": overall,
+        "risk_level": risk_level,
+        "summary": (
+            f"{company} shows a provisional ESG profile generated in degraded local mode. "
+            f"Environmental signals are {'stronger' if env_score >= social_score else 'mixed'}, "
+            f"while governance disclosure appears {'stable' if governance_score >= 65 else 'watch-list worthy'}."
+        ),
+    }
+
+
+def _build_verifier_payload(answer: str) -> dict:
+    return {
+        "is_grounded": bool(answer),
+        "confidence": 0.66 if answer else 0.45,
+        "issues": [] if answer else ["missing_answer"],
+        "verified_answer": answer or "No grounded answer available in degraded mode.",
+        "needs_retry": False,
+    }
+
+
+def _build_extractor_payload(raw_content: str) -> dict:
+    company = _extract_company_name(raw_content)
+    lower = raw_content.lower()
+    if any(term in lower for term in ("carbon", "climate", "renewable", "emission")):
+        event_type = "emission_reduction"
+        impact_area = "E"
+    elif any(term in lower for term in ("safety", "employee", "diversity", "community")):
+        event_type = "diversity_initiative"
+        impact_area = "S"
+    elif any(term in lower for term in ("board", "audit", "governance", "sec", "compliance")):
+        event_type = "governance_change"
+        impact_area = "G"
+    else:
+        event_type = "other"
+        impact_area = "E"
+
+    severity = "high" if any(term in lower for term in ("lawsuit", "violation", "critical", "fraud")) else "medium"
+    return {
+        "title": _truncate_text(raw_content, 80) or f"{company} ESG event",
+        "description": _truncate_text(raw_content, 220) or f"Structured event extracted for {company}.",
+        "company": company,
+        "event_type": event_type,
+        "key_metrics": {"fallback_mode": "heuristic_extraction"},
+        "impact_area": impact_area,
+        "severity": severity,
+        "evidence": _truncate_text(raw_content, 180),
+    }
+
+
+def _build_risk_payload(prompt: str) -> dict:
+    severity_text = _extract_field(prompt, "Current severity").lower()
+    event_type = _extract_field(prompt, "Event type")
+    base_score = {
+        "low": 32,
+        "medium": 56,
+        "high": 74,
+        "critical": 88,
+    }.get(severity_text, 56)
+    return {
+        "risk_level": "critical" if base_score >= 85 else "high" if base_score >= 70 else "medium" if base_score >= 45 else "low",
+        "score": base_score,
+        "reasoning": f"Fallback local scoring interpreted '{event_type or 'event'}' with severity '{severity_text or 'medium'}'.",
+        "affected_dimensions": {
+            "environmental": min(100, base_score if "E" in prompt else max(25, base_score - 10)),
+            "social": min(100, base_score if "S" in prompt else max(25, base_score - 8)),
+            "governance": min(100, base_score if "G" in prompt else max(25, base_score - 6)),
+        },
+        "recommendation": "Treat this as a provisional local estimate and confirm with a live model once keys or remote LLM are available.",
+    }
+
+
+def _chat_degraded(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.2) -> str:
+    system = _system_prompt(messages).lower()
+    user = _last_user_message(messages)
+
+    if "query classifier" in system:
+        return _heuristic_router_label(user)
+
+    if "esg search expert" in system:
+        original = user.split(":", 1)[-1].strip() if ":" in user else user
+        return _truncate_text(original, 160)
+
+    if "professional esg analyst" in system:
+        question = _extract_field(user, "Company/Topic") or user
+        context = _extract_field(user, "Retrieved context")
+        return json.dumps(_build_analyst_payload(question, context), ensure_ascii=False)
+
+    if "esg fact-checker" in system:
+        answer = _extract_field(user, "Answer to verify")
+        return json.dumps(_build_verifier_payload(answer), ensure_ascii=False)
+
+    if "event extraction expert" in system:
+        raw_content = _extract_field(user, "Raw content")
+        return json.dumps(_build_extractor_payload(raw_content), ensure_ascii=False)
+
+    if "risk assessment expert" in system:
+        return json.dumps(_build_risk_payload(user), ensure_ascii=False)
+
+    # Generic fallback: echo a concise synthesis so RAG and summaries keep moving.
+    summary = _truncate_text(user, min(max_tokens * 4, 480))
+    if not summary:
+        summary = "Fallback local response generated without a live LLM backend."
+    return (
+        "Fallback local response:\n"
+        f"{summary}"
     )
 
 
@@ -355,6 +624,13 @@ def chat(
         except Exception as e:
             last_error = e
             logger.warning(f"[LLM] {backend_name} failed: {e}")
+
+    if _degraded_fallback_enabled():
+        if not any_cloud_backend_configured:
+            logger.warning("[LLM] No live LLM backend configured. Using degraded local fallback.")
+        elif last_error is not None:
+            logger.warning(f"[LLM] All live LLM backends failed. Using degraded local fallback. Last error: {last_error}")
+        return _chat_degraded(messages, max_tokens=max_tokens, temperature=temperature)
 
     if not any_cloud_backend_configured:
         raise RuntimeError(

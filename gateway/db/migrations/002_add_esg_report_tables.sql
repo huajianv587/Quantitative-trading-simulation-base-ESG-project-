@@ -41,7 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_period           ON esg_reports (period_start, pe
 -- 作用：定期保存企业的 ESG 数据快照，用于历史对比和趋势分析
 -- 使用场景：每日同步企业数据，生成报告时读取快照
 
-CREATE TABLE IF NOT EXISTS company_data_snapshot (  #记录某家公司在某一天的“完整状态”
+CREATE TABLE IF NOT EXISTS company_data_snapshot (
     id                UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     company_name      VARCHAR(255) NOT NULL,   -- 公司名称，如"Apple Inc."
     ticker            VARCHAR(10),             -- 股票代码，如"AAPL"
@@ -194,21 +194,27 @@ ALTER TABLE user_report_subscriptions  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE push_feedback              ENABLE ROW LEVEL SECURITY;
 
 -- 简化的 RLS 策略：允许所有访问（开发阶段）
+DROP POLICY IF EXISTS "Allow all for esg_reports" ON esg_reports;
 CREATE POLICY "Allow all for esg_reports"
     ON esg_reports FOR ALL USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow all for company_data_snapshot" ON company_data_snapshot;
 CREATE POLICY "Allow all for company_data_snapshot"
     ON company_data_snapshot FOR ALL USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Users can view own push history" ON report_push_history;
 CREATE POLICY "Users can view own push history"
     ON report_push_history FOR ALL USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Users can manage own subscriptions" ON user_report_subscriptions;
 CREATE POLICY "Users can manage own subscriptions"
     ON user_report_subscriptions FOR ALL USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow all for push_rules" ON push_rules;
 CREATE POLICY "Allow all for push_rules"
     ON push_rules FOR ALL USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow all for push_feedback" ON push_feedback;
 CREATE POLICY "Allow all for push_feedback"
     ON push_feedback FOR ALL USING (true) WITH CHECK (true);
 
@@ -225,10 +231,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_push_rules_updated_at ON push_rules;
 CREATE TRIGGER update_push_rules_updated_at
     BEFORE UPDATE ON push_rules
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_user_report_subscriptions_updated_at ON user_report_subscriptions;
 CREATE TRIGGER update_user_report_subscriptions_updated_at
     BEFORE UPDATE ON user_report_subscriptions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

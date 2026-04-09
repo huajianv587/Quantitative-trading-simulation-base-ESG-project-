@@ -5,7 +5,6 @@
 from gateway.utils.llm_client import chat
 from gateway.utils.logger import get_logger
 from gateway.utils.cache import get_cache, set_cache   # 缓存：同一问题不重复调用 RAG
-from gateway.rag.rag_main import get_query_engine       # 复用已有 RAG 引擎
 from gateway.rag.text_quality import clean_document_text, make_text_fingerprint, score_text_quality, truncate_text
 from gateway.agents.prompts import (
     RETRIEVER_REWRITE_SYSTEM,
@@ -16,6 +15,12 @@ logger = get_logger(__name__)
 MAX_CONTEXT_NODES = 6
 MIN_CONTEXT_QUALITY_SCORE = 0.28
 MAX_CONTEXT_NODE_CHARS = 1800
+
+
+def get_query_engine():
+    from gateway.rag.rag_main import get_query_engine as _get_query_engine
+
+    return _get_query_engine()
 
 
 def _rewrite_query(question: str) -> str:

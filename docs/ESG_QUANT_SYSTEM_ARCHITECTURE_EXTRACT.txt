@@ -1,0 +1,1212 @@
+ESG-QUANT INTELLIGENCE SYSTEM
+终极量化AI Agent平台 · 完整架构设计文档
+从原始数据到自动化研究 → 回测 → 执行 → 报告的全栈AI量化系统
+架构版本 v2.0  ·  2025–2026
+NTU MCAAI · ESG Agentic RAG Copilot Extension
+图例说明 / Legend
+优先级标注
+数据说明
+工具/API
+SCI相关
+🔴 P1 核心层 — 必须先做
+💰 免费 / 🟡 低成本 / 🔴 付费
+Python库 / REST API / SDK
+📄 SCI数据产出点
+🟡 P2 进阶层 — 有资源做
+URL = 官方文档链接
+Model = 推荐AI/ML模型
+✨ SCI贡献点 (Novelty)
+🟣 P3 前沿层 — 发SCI用
+API Service = 云服务/付费API
+已有 = 你现有项目可复用
+🏆 核心差异化竞争力
+一、系统总览架构图
+本系统共26个功能模块，分布在8个垂直层次。横轴为数据流方向，纵轴为处理深度。
+系统层次
+核心功能
+主要工具/模型
+数据源/API
+优先级
+L0 数据接入层
+传统数据·另类数据·ESG数据
+yfinance, Alpaca SDK, sentinelsat
+Yahoo/EDGAR/Copernicus/FRED
+🔴 P1
+L1 数据治理层
+清洗·复权·对齐·幸存者偏差
+pandas, scipy, sklearn
+内部处理，无外部API
+🔴 P1
+L2 分析引擎层
+技术/基本面/因子/另类数据分析
+pandas-ta, Qlib, FMP API
+FMP/SEC EDGAR/Copernicus
+🔴 P1
+L3 模型训练层
+ML预测·RL策略·LLM微调
+XGBoost, LSTM, LoRA(已有)
+AutoDL/AWS SageMaker(已有)
+🟡 P2
+L4 Agent编排层
+LangGraph多Agent协同调度
+LangGraph(已有), LangChain
+内部编排，调用各层工具
+🔴 P1
+L5 风控合规层
+风险管理·压力测试·合规审查
+pyfolio, scipy, 自定义规则引擎
+内部计算
+🟡 P2
+L6 执行回测层
+回测引擎·模拟盘执行·绩效分析
+backtrader, Alpaca API
+Alpaca Paper Trading API
+🔴 P1
+L7 实验追踪层
+MLflow·版本控制·A/B测试
+MLflow, DVC, Optuna
+本地/云端存储
+🟡 P2
+L8 报告展示层
+自动报告·可视化面板·SCI数据存档
+Streamlit, pyfolio, Supabase(已有)
+Supabase / Qdrant(已有)
+🔴 P1
+二、L0 数据接入层
+🔴 P1 核心 · 所有分析的基础，必须首先搭建
+涵盖传统金融数据、另类数据（卫星/情绪/招聘/专利）和ESG专项数据三大类，全部优先免费数据源。
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+价格/量数据
+OHLCV日线/分钟线，多市场，历史数据回填
+yfinance
+Alpaca SDK
+ccxt(加密)
+💰 免费
+finance.yahoo.com
+alpaca.markets/docs
+github.com/ccxt/ccxt
+无需模型
+直接调API
+📄 回测基础数据集
+✨ 数据质量基准
+宏观经济数据
+利率/CPI/PMI/失业率/美联储政策，领先指标
+fredapi
+pandas-datareader
+💰 免费
+fred.stlouisfed.org
+api.stlouisfed.org/fred
+无需模型
+📄 宏观Regime分析
+✨ 策略切换依据
+基本面数据
+P/E P/B EV/EBITDA ROE 自由现金流，季度更新
+financedatabase
+FMP Python SDK
+💰 免费tier
+250次/天
+financialmodelingprep.com
+/api/v3/
+无需模型
+📄 估值因子有效性
+✨ ESG×估值组合研究
+SEC财报数据
+10-K 10-Q 原始XML，全历史免费，美股覆盖全
+edgar-online
+sec-edgar-downloader
+💰 完全免费
+efts.sec.gov/LATEST
+data.sec.gov/api/
+LLM解析层
+(L2接入)
+📄 LLM财报解析准确率
+✨ NLP×财务预测研究
+卫星遥感数据
+Sentinel-1/2 SAR+光学，10m分辨率，5天重访
+sentinelsat
+openeo-python
+💰 完全免费
+注册即用
+dataspace.copernicus.eu
+sentinel-hub.com/api
+YOLOv8(已有)
+ResNet CV
+📄 卫星信号×股价关系
+🏆 核心差异化数据源
+新闻情绪数据
+英文财经新闻，实时推送，关键词过滤
+newsapi-python
+feedparser
+💰 免费tier
+100次/天
+newsapi.org/docs
+newsdata.io/api
+FinBERT情绪
+FinGPT
+📄 新闻情绪×价格领先
+社交媒体情绪
+Reddit WallStreetBets/投资版，散户情绪反向
+praw(Reddit)
+snscrape
+💰 完全免费
+reddit.com/dev/api
+praw.readthedocs.io
+VADER/FinBERT
+LLM打分
+📄 散户情绪反向指标
+✨ 行为金融量化
+Google Trends
+搜索热度与股价关联，注意力效应
+pytrends
+💰 完全免费
+trends.google.com
+pypi.org/project/pytrends
+时序相关分析
+📄 注意力因子构建
+招聘数据
+职位发布量→公司业务扩张信号，领先财报
+LinkedIn爬虫
+Indeed RSS
+💰 免费(受限)
+linkedin.com/jobs
+indeed.com/rss
+NLP职位分类
+BERT
+✨ 招聘信号×营收预测
+专利数据
+创新能力量化，R&D强度代理指标
+patent-client
+USPTO PatentsView
+💰 完全免费
+patentsview.org/api
+api.patentsview.org
+文本嵌入
+聚类分析
+📄 创新因子×ESG技术
+ESG报告PDF
+公司可持续发展报告，ESG评分原始来源
+你的RAG系统
+(已有!)
+💰 完全免费
+(已部署)
+Qdrant已有
+38k节点
+Qwen2.5 LoRA
+(已有!)
+🏆 ESG RAG核心资产
+📄 ESG信息提取研究
+碳排放数据
+公司层面碳强度，Scope1/2/3排放
+Our World in Data
+Climate Trace
+💰 完全免费
+ourworldindata.org/data
+climatetrace.org/api
+时序分析
+📄 碳因子×股价研究
+三、L1 数据治理层
+🔴 P1 核心 · 数据质量直接决定回测可信度和SCI发表质量
+原始数据不可直接使用。这一层是量化系统最容易被忽略、也最容易踩坑的地方。
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+复权处理
+股票拆分/合并/分红自动复权，backward/forward
+yfinance auto_adjust
+pandas-datareader
+💰 免费
+内置功能
+无需外部API
+无需模型
+📄 数据标准化基准
+影响回测有效性
+缺失值处理
+价格空洞填充，停牌日识别，跨市场对齐
+pandas interpolate
+scipy
+💰 免费
+内部处理
+统计插值
+📄 数据质量报告
+异常值检测
+价格跳空/错误数据识别，Z-score/IQR过滤
+sklearn IsolationForest
+pyod
+💰 免费
+pypi.org/project/pyod
+Isolation Forest
+LOF异常检测
+📄 数据质量×模型稳定性
+幸存者偏差
+纳入退市/摘牌股票，避免回测虚高，最关键！
+Tiingo delisted API
+CSRP替代
+🟡 低成本
+api.tiingo.com
+约$10/月
+无需模型
+历史成分管理
+✨ 偏差修正×绩效研究
+📄 SCI方法论必备
+时间戳对齐
+不同数据源频率统一，卫星/日线/财报对齐
+pandas resample
+pandas merge_asof
+💰 免费
+内部处理
+时序重采样
+📄 多源数据融合方法
+数据血缘
+每个信号追溯来源，版本号，更新时间记录
+自定义元数据系统
+DVC数据版本
+💰 免费
+dvc.org
+github.com/iterative/dvc
+无需模型
+✨ 可复现性研究
+📄 SCI审稿必须有
+特征存储
+计算好的因子缓存，避免重复计算，加速回测
+Feast Feature Store
+Redis缓存
+💰 免费(自托管)
+feast.dev
+redis.io
+无需模型
+📄 系统效率对比实验
+四、L2 分析引擎层
+🔴 P1 核心 · 系统的信号生产车间，涵盖技术/基本面/因子/另类数据四大分析模块
+4.1 技术分析模块
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+趋势类指标
+MA/EMA/WMA 多周期，MACD信号线/柱，斐波那契回调位
+pandas-ta
+ta-lib
+💰 免费
+github.com/twopirllc/pandas-ta
+numpy/pandas内置
+无需模型
+数值计算
+📄 技术信号IC分析
+对比传统策略基准
+超买超卖
+RSI(9/14/21), KDJ随机指标, 布林带2σ/3σ, CCI
+pandas-ta
+ta-lib
+💰 免费
+ta-lib.org
+pandas-ta文档
+无需模型
+📄 超买超卖因子有效期
+量价指标
+OBV能量潮, VWAP成交量加权均价, MFI资金流向
+pandas-ta
+💰 免费
+内置计算
+无需模型
+📄 量价背离信号研究
+形态识别
+支撑阻力自动识别, 头肩顶底, 缺口, 双顶双底
+自定义算法
+scipy peaks
+💰 免费
+scipy.signal
+findpeaks
+CNN形态分类
+(可选P3)
+✨ 形态识别×收益预测
+微观结构
+买卖价差估算, 市场冲击成本, 流动性评分
+alpaca市场数据
+自定义
+💰 免费
+alpaca.markets
+/v2/stocks/quotes
+Kyle模型
+Amihud非流动性
+✨ 执行成本建模
+📄 回测真实性提升
+4.2 基本面分析模块
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+估值乘数
+P/E P/B P/S EV/EBITDA EV/FCF，行业横向比较
+FMP API
+yfinance
+💰 免费tier
+financialmodelingprep.com
+/api/v3/ratios/
+无需模型
+统计分析
+📄 估值因子×ESG溢价研究
+盈利质量
+ROE ROIC ROCE，自由现金流转化率，应计项目
+FMP API
+Edgar解析
+💰 免费tier
+FMP /financial-ratios
+SEC EDGAR API
+无需模型
+📄 盈利质量×ESG相关性
+成长性分析
+营收3/5年CAGR，EPS增速，研发投入增速
+FMP API
+💰 免费tier
+FMP /income-statement
+时序分析
+📄 成长因子×可持续性
+LLM财报解析
+自动读10-K/10-Q，提取关键指标，识别异常措辞
+你的LLM Pipeline
+(已有!)+LangChain
+💰 已有
++API费用
+sec.gov/cgi-bin/browse-edgar
+efts.sec.gov
+Qwen2.5(已有)
+Financial-LLaMA
+🏆 核心创新点
+📄 LLM财报解析准确率
+✨ NLP×基本面研究
+CEO讲话分析
+财报电话会议Transcript，语气/信心/不确定性量化
+Earning Call API
+RevSense
+🟡 低成本
+earningscall.biz
+revvity.com
+FinBERT语气
+LLM语义
+✨ 管理层信号×股价研究
+企业事件日历
+财报日/分红/回购/并购/FDA审批，事件窗口交易
+FMP Events API
+earningswhispers
+💰 免费tier
+FMP /stock_news
+earningswhispers.com
+无需模型
+日历管理
+📄 事件驱动因子研究
+4.3 量化因子模块
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+Alpha158因子
+158个经典因子（技术+基本面），Qlib内置，直接调用
+Microsoft Qlib
+💰 完全免费
+github.com/microsoft/qlib
+qlib.readthedocs.io
+LightGBM
+Linear Alpha
+📄 因子有效性基准测试
+因子IC/ICIR
+每个因子与未来收益相关性，衰减曲线，信号有效期
+Qlib内置
+alphalens
+💰 完全免费
+github.com/quantopian
+/alphalens
+统计检验
+t-test
+📄 ESG因子IC对比研究
+✨ 因子有效期量化
+PCA因子降维
+158因子→20主成分，消除多重共线性，稳定打分
+sklearn PCA
+factor_analyzer
+💰 完全免费
+scikit-learn.org
+/PCA
+PCA/FA/ICA
+✨ 因子降维×策略稳定性
+因子正交化
+Barra风格因子中性化，去除市值/行业暴露
+statsmodels OLS
+自定义
+💰 完全免费
+statsmodels.org
+OLS回归中性化
+📄 纯因子收益研究
+自动因子挖掘
+遗传算法生成因子表达式，类WorldQuant Alpha101
+gplearn基因编程
+Deap
+💰 完全免费
+github.com/trevorstephens
+/gplearn
+遗传规划
+符号回归
+🏆 前沿创新
+✨ AI自动因子发现研究
+多因子组合
+等权/IC加权/最大化IR打分，月度调仓
+自定义
+Qlib Portfolio
+💰 完全免费
+Qlib portfolio模块
+Ridge/LASSO
+因子权重优化
+📄 ESG多因子组合研究
+组合优化
+均值方差/风险平价/Black-Litterman/最大夏普
+PyPortfolioOpt
+Riskfolio-Lib
+💰 完全免费
+github.com/robertmartin8
+/PyPortfolioOpt
+Markowitz
+B-L模型
+✨ ESG约束组合优化研究
+4.4 另类数据分析模块
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+卫星车辆计数
+停车场车辆密度→零售销售代理指标，财报前信号
+YOLOv8(已有!)
+OpenCV
+💰 完全免费
+(已有模型)
+Copernicus免费卫星
+dataspace.copernicus.eu
+YOLOv8目标检测
+(你已做过!)
+🏆 最强差异化!
+📄 卫星×零售股研究
+NDVI植被指数
+农业公司/食品股产量预测，5天更新
+sentinelsat
+rasterio
+💰 完全免费
+Sentinel-2免费
+sentinelsat.readthedocs.io
+遥感指数计算
+时序分析
+📄 卫星农业因子研究
+港口船只计数
+贸易活跃度，航运股/供应链领先指标
+YOLOv8
+Sentinel-1 SAR
+💰 完全免费
+Copernicus SAR数据
+免费
+SAR目标检测
+YOLOv8
+✨ 港口活跃度×航运股
+工厂热成像
+红外波段工厂活动强度，工业产出代理
+Sentinel-3热红外
+rasterio
+💰 完全免费
+Copernicus Sentinel-3
+免费
+热图分析
+变化检测
+📄 工业活动×工业股研究
+网络图谱分析
+供应链网络/董事会关联/行业传导，NetworkX(已有!)
+NetworkX(已有!)
+nx-cugraph
+💰 完全免费
+(已有!)
+SEC代理投票文件
+Bloomberg供应链
+图神经网络
+GAT/GraphSAGE
+✨ 供应链传导×股价研究
+行为金融信号
+Put/Call比值，散户情绪反向，分析师羊群检测
+CBOE数据
+schwab API
+💰 免费
+cboe.com/data
+data.nasdaq.com
+情绪指数
+反向信号
+📄 行为偏差×收益异常
+五、L3 模型训练层
+🟡 P2 进阶 · 从规则信号升级到ML预测，接入你已有的LoRA训练能力
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+监督学习打分
+XGBoost/LightGBM多因子收益预测，特征重要性
+xgboost
+lightgbm
+optuna调参
+💰 完全免费
+xgboost.readthedocs.io
+lightgbm.readthedocs.io
+XGBoost
+LightGBM
+Random Forest
+📄 ML因子选股对比研究
+✨ 传统vs ML因子效果
+时序深度学习
+LSTM/Transformer价格序列预测，多步预测
+PyTorch(已有!)
+tsai库
+💰 免费+GPU
+github.com/timeseriesAI
+/tsai
+LSTM
+TemporalFusionTransformer
+PatchTST(2023最新)
+📄 深度学习×量化预测
+✨ Transformer时序对比
+RL策略Agent
+动态仓位调整，多期再平衡MDP建模
+TradeMaster(NTU)
+FinRL
+stable-baselines3
+💰 完全免费
+github.com/TradeMaster-NTU
+github.com/AI4Finance-Foundation
+PPO/SAC/TD3
+DQN
+🏆 RL×ESG量化前沿
+📄 CA6126课程对接!
+ESG LoRA微调
+Qwen2.5 ESG adapter继续训练，加入财务数据
+你的LoRA(已有!)
+PEFT库
+💰 已有!
+AutoDL
+huggingface.co/peft
+AutoDL RTX4080(已有)
+Qwen2.5-7B
++ESG LoRA(已有!)
+🏆 最核心优势!
+📄 ESG领域LLM评测
+✨ 领域微调有效性
+集成学习
+Stacking多个模型，Ensemble投票，提升稳定性
+sklearn ensemble
+votingclassifier
+💰 完全免费
+scikit-learn.org
+/ensemble
+Stacking
+Bagging
+Boosting
+📄 模型集成×策略稳定性
+因果推断
+因子→收益的因果关系，而非相关，DoWhy库
+dowhy
+lingam
+💰 完全免费
+github.com/py-why/dowhy
+pywhy.org
+Granger因果
+DoWhy图模型
+✨ ESG因果推断研究
+🏆 SCI高影响力方向
+六、L4 Agent编排层
+🔴 P1 核心 · 系统的大脑，LangGraph调度所有分析模块
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+Router Agent
+意图理解→任务分发，自然语言→结构化查询
+LangGraph(已有!)
+LangChain
+💰 已有!
+python.langchain.com
+github.com/langchain-ai
+Claude/GPT-4
+Qwen2.5(已有)
+📄 Agent决策质量评估
+Research Agent
+调用L2分析引擎，卫星解读，ESG变化检测
+LangGraph Tool
+你的RAG(已有!)
+💰 已有!
+Qdrant已有
+Vector Store
+RAG+LLM(已有!)
+🏆 核心Agent
+📄 自动研究质量评测
+Strategy Agent
+多因子打分，信号合成，仓位sizing
+LangGraph
+Qlib策略模块
+💰 免费
+Qlib文档
+qlib.readthedocs.io
+规则+ML混合
+策略逻辑
+📄 Agent策略生成研究
+Risk Agent
+实时风控，超阈值报警，止损触发
+LangGraph
+自定义规则
+💰 免费
+内部逻辑
+规则引擎
+统计监控
+📄 AI风控有效性研究
+Macro Agent
+宏观Regime识别，切换策略权重
+HMM隐马尔可夫
+hmmlearn
+💰 免费
+github.com/hmmlearn
+/hmmlearn
+HMM
+GMM聚类
+✨ Regime切换×策略研究
+Event Agent
+财报日监控，事件预警，紧急响应
+LangGraph
+FMP Events API
+💰 免费tier
+FMP /stock_news
+LLM事件分类
+📄 事件驱动Agent研究
+Report Agent
+自动生成分析报告，SCI数据存档，Streamlit展示
+LangGraph
+Streamlit
+Supabase(已有!)
+💰 已有!
+streamlit.io
+Supabase已有
+LLM报告生成
+📄 所有SCI数据出口
+🏆 系统最终输出
+自主研究Agent
+自动发现新因子假设，自动验证，类RD-Agent
+Qlib RD-Agent
+LangGraph
+💰 免费
+github.com/microsoft
+/RD-Agent
+Claude/GPT-4
+代码生成
+🏆 前沿创新!
+✨ AI自主研究能力
+知识记忆系统
+策略失效记录，决策溯源，市场事件知识库
+LangGraph Memory
+Supabase(已有!)
+💰 已有!
+Supabase已有
+Qdrant已有
+向量检索(已有)
+📄 Agent记忆对决策影响
+七、L5 风控合规层
+🟡 P2 进阶 · 没有这层的策略是不完整的，SCI论文也需要压力测试数据
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+回撤控制
+最大回撤阈值，超过X%自动平仓，动态止损
+自定义
+pyfolio
+💰 免费
+github.com/quantopian
+/pyfolio
+规则引擎
+📄 风控约束×收益影响
+夏普/Sortino监控
+实时夏普比率，Sortino比率，Calmar比率追踪
+pyfolio
+empyrical
+💰 完全免费
+github.com/quantopian
+/empyrical
+统计计算
+📄 风险调整收益研究
+压力测试
+2008金融危机/2020新冠/2022加息情景回测
+backtrader
+自定义情景
+💰 完全免费
+backtrader.com
+历史情景回放
+📄 极端情景稳健性研究
+✨ ESG策略抗跌性
+CVaR风险
+条件风险价值，肥尾风险，极端损失建模
+scipy
+PyPortfolioOpt
+💰 完全免费
+riskfolio-lib.readthedocs.io
+CVaR/EVT
+极值理论
+✨ 尾部风险×ESG研究
+因子暴露控制
+行业/市值/风格因子中性化，避免意外暴露
+自定义
+barra风格
+💰 免费
+内部计算
+OLS回归中性化
+📄 纯因子组合构建
+合规审查
+MNPI检测，内幕交易规则，新加坡PDPA合规
+自定义规则
+黑名单系统
+💰 免费
+MAS合规文件
+mas.gov.sg
+规则引擎
+NLP过滤
+✨ AI合规系统研究
+模型风险管理
+过拟合检测，信号衰减监控，模型有效性持续评估
+sklearn CV
+自定义监控
+💰 免费
+内部监控
+Walk-forward
+Purged K-fold
+📄 模型风险量化研究
+八、L6 执行回测层
+🔴 P1 核心 · 策略验证的实验场，模拟盘是你的主要验证方式
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+回测引擎
+事件驱动回测，支持日线/分钟线，摩擦成本建模
+backtrader
+Qlib Backtest
+💰 完全免费
+backtrader.com
+qlib.readthedocs.io
+历史数据回放
+📄 回测方法论设计
+✨ 幸存者偏差修正
+Walk-forward验证
+滚动训练窗口，避免前视偏差，真实样本外检验
+自定义
+Qlib Rolling
+💰 完全免费
+Qlib Rolling模块
+时间序列CV
+📄 样本外有效性研究
+Alpaca模拟盘
+Paper Trading账户，真实市场价格，API执行
+alpaca-trade-api
+alpaca-py
+💰 完全免费
+alpaca.markets
+api.alpaca.markets/v2
+无需模型
+直接API调用
+📄 模拟盘vs回测偏差研究
+交易成本建模
+佣金/滑点/市场冲击，真实执行成本估算
+自定义
+backtrader commission
+💰 免费
+backtrader docs
+线性/平方根
+冲击成本模型
+📄 交易成本×净收益研究
+绩效归因
+Brinson归因，因子贡献分解，哪个因子赚了钱
+pyfolio
+empyrical
+💰 完全免费
+github.com/quantopian
+/pyfolio
+Brinson模型
+Shapley归因
+📄 ESG因子贡献归因
+✨ Shapley值分解研究
+反事实分析
+去掉ESG因子后表现如何，对照组构建
+自定义对照组
+DoWhy
+💰 免费
+内部分析
+A/B策略对比
+🏆 SCI核心实验设计
+📄 ESG增量价值证明
+Monte Carlo模拟
+随机路径模拟，收益分布，策略鲁棒性
+numpy random
+scipy stats
+💰 完全免费
+内置库
+蒙特卡洛模拟
+📄 策略稳健性研究
+九、L7 实验追踪与基础设施层
+🟡 P2 进阶 · SCI发表需要完整的实验记录和可复现性
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+MLflow实验追踪
+记录每次回测参数/指标，版本比对，实验管理
+MLflow
+Weights&Biases
+💰 完全免费
+(自托管)
+mlflow.org
+wandb.ai(免费tier)
+无需模型
+📄 实验可复现性记录
+✨ SCI方法论必备
+数据版本控制
+因子/策略代码版本管理，回滚，协作
+DVC
+Git LFS
+💰 完全免费
+dvc.org
+git-lfs.com
+无需模型
+📄 研究复现性保障
+超参数优化
+贝叶斯优化策略参数，Optuna并行搜索
+Optuna
+Ray Tune
+💰 完全免费
+optuna.org
+docs.ray.io/tune
+贝叶斯优化
+TPE/CMA-ES
+📄 超参数敏感性研究
+任务调度
+定时数据更新，每日因子计算，自动化pipeline
+Prefect
+Apache Airflow
+💰 免费(自托管)
+prefect.io
+airflow.apache.org
+无需模型
+📄 系统自动化程度评估
+容器化部署
+Docker封装，依赖隔离，Railway部署(已有!)
+Docker(已有!)
+Railway(已有!)
+💰 已有!
+docker.com
+railway.app(已有)
+无需模型
+📄 系统部署架构
+信号漂移监控
+市场环境变化检测，因子失效预警，自动报警
+evidently
+alibi-detect
+💰 完全免费
+github.com/evidentlyai
+/evidently
+PSI/KL散度
+漂移检测
+✨ 模型监控×自适应策略
+成本监控
+API调用费用追踪，GPU成本，总TCO估算
+自定义记录
+Supabase(已有)
+💰 已有!
+Supabase已有
+无需模型
+📄 系统成本效益分析
+十、L8 报告展示与SCI数据层
+🔴 P1 核心 · 所有分析的最终出口，也是SCI论文数据的唯一来源
+模块
+核心功能
+工具/库
+成本
+API / URL
+推荐模型
+SCI数据产出 / 贡献点
+Streamlit面板
+持仓/收益/因子可视化，实时更新，交互分析
+Streamlit
+Plotly
+💰 完全免费
+streamlit.io
+plotly.com/python
+无需模型
+📄 系统可视化展示
+自动研究报告
+LLM生成投资研究报告，标准化格式，可读性强
+你的LLM(已有!)
+Jinja2模板
+💰 已有!
+已有LLM pipeline
+Qwen2.5(已有)
+🏆 核心功能
+📄 报告质量评测研究
+回测绩效报告
+Tearsheet，年化收益，夏普，最大回撤，分布图
+pyfolio
+QuantStats
+💰 完全免费
+github.com/quantopian
+/pyfolio
+quantstats.readthedocs.io
+统计分析
+📄 所有策略评测数据
+SCI数据存档
+每次分析结果结构化存储，实验日志，可追溯
+Supabase(已有!)
+Postgres
+💰 已有!
+Supabase已有
+无需模型
+📄 SCI数据基础设施
+🏆 论文数据来源
+对比基准报告
+策略vs SPY/QQQ/无ESG版本，统计显著性检验
+自定义
+scipy stats
+💰 免费
+内部计算
+t-test
+Bootstrap
+📄 SCI对照实验必须有
+因子分析报告
+IC/ICIR热力图，因子衰减，PCA主成分可视化
+alphalens
+matplotlib
+💰 完全免费
+github.com/quantopian
+/alphalens
+统计可视化
+📄 因子研究核心图表
+十一、SCI论文产出路线图
+🏆 你的系统天然积累3-5篇SCI数据，按期刊档次和难度排列
+论文方向
+研究问题
+你的数据来源
+目标期刊
+难度/时间
+1. ESG因子增量价值
+在多因子框架中，ESG评分变化对收益的边际贡献是否显著？
+L2 ESG模块 + L6反事实分析，有vs无ESG对照组
+Journal of Finance
+Financial Analysts J
+⭐⭐⭐
+6-9个月
+2. LLM财报解析
+LLM自动提取财报信息是否优于传统NLP？与人工分析师精度对比
+L0 SEC EDGAR + L2 LLM财报解析模块，准确率记录
+Expert Systems
+with Applications
+⭐⭐
+3-6个月
+3. 卫星数据×股价
+卫星遥感信号（NDVI/车辆计数）是否能在财报发布前预测股价方向？
+L0 Copernicus卫星 + L2 卫星CV模块 + L6 事件窗口回测
+Remote Sensing
+IEEE TGRS
+⭐⭐⭐⭐
+9-12个月
+4. Multi-Agent效率
+LangGraph多Agent框架在自动化量化研究中的效率和决策质量评估
+L4 Agent编排层 + L7 MLflow记录，与人工分析师对比实验
+Applied Intelligence
+Expert Systems
+⭐⭐
+3-6个月
+5. ESG因果推断
+ESG评级提升→股价上涨是相关还是因果？DoWhy因果图模型验证
+L3 因果推断模块 + L0 ESG RAG，时间序列因果检验
+Journal of Financial
+Economics
+⭐⭐⭐⭐⭐
+12个月+
+十二、开发路线图
+按依赖关系和价值优先级排列，先把骨架跑通，再逐层加深度
+阶段
+时间
+完成内容
+关键工具
+里程碑
+Phase 1
+第1-2周
+L0数据接入 + L1数据治理 + backtrader回测跑通，最简单的MA均线策略跑完整流程
+yfinance + pandas + backtrader
+✅ 第一个完整回测出来
+Phase 2
+第3-4周
+L2技术分析 + 基本面 + Qlib Alpha158因子接入，PCA降维，多因子IC分析
+pandas-ta + Qlib + sklearn PCA
+✅ 多因子打分选股
+Phase 3
+第5-6周
+ESG Agent接入(复用已有RAG) + LLM财报解析 + LangGraph Router串联所有Agent
+LangGraph(已有) + Qwen2.5(已有)
+✅ Multi-Agent跑通
+Phase 4
+第7-8周
+Alpaca Paper Trading接入 + Risk Agent + 自动报告生成 + Streamlit面板
+Alpaca API + Streamlit + pyfolio
+✅ 模拟盘开始运行
+Phase 5
+第9-12周
+Copernicus卫星数据接入 + YOLOv8(已有)车辆计数 + 卫星信号因子构建
+sentinelsat + YOLOv8(已有)
+✅ 卫星差异化数据上线
+Phase 6
+第13-16周
+MLflow实验追踪 + Walk-forward验证 + 压力测试 + 反事实分析 + 对照组实验
+MLflow + Optuna + pyfolio
+✅ SCI论文数据开始积累
+Phase 7
+第17-24周
+RL策略Agent(TradeMaster/CA6126对接) + 因果推断 + 自动因子挖掘 + 知识图谱
+FinRL + DoWhy + NetworkX(已有)
+✅ 开始写SCI论文
+十三、免费/低成本API速查表
+API名称
+数据类型
+限制
+成本
+URL
+yfinance
+价格/量/财务
+无官方限制
+💰 免费
+pypi.org/project/yfinance
+Alpaca Paper
+模拟盘交易
+无限制
+💰 免费
+alpaca.markets/docs
+FRED API
+宏观经济数据
+120次/分钟
+💰 免费
+fred.stlouisfed.org/docs/api
+SEC EDGAR
+10-K/10-Q财报
+10次/秒
+💰 完全免费
+efts.sec.gov/LATEST/search-index
+FMP 免费tier
+财务比率/事件
+250次/天
+💰 免费
+financialmodelingprep.com/developer
+Copernicus/ESA
+卫星遥感图像
+注册即用
+💰 完全免费
+dataspace.copernicus.eu
+Google Earth Engine
+卫星高级分析
+研究免费
+💰 免费(申请)
+earthengine.google.com
+NewsAPI
+英文新闻
+100次/天免费
+💰 免费tier
+newsapi.org/docs
+Reddit PRAW
+社交媒体情绪
+60次/分钟
+💰 完全免费
+praw.readthedocs.io
+pytrends
+Google搜索热度
+非官方
+💰 完全免费
+pypi.org/project/pytrends
+USPTO PatentsView
+专利数据
+无限制
+💰 完全免费
+patentsview.org/api/doc
+Our World in Data
+碳排放/ESG数据
+无限制
+💰 完全免费
+ourworldindata.org/data
+Qlib (Microsoft)
+量化因子/回测
+无限制
+💰 完全免费
+github.com/microsoft/qlib
+FinRL/FinGPT
+RL框架/金融LLM
+无限制
+💰 完全免费
+github.com/AI4Finance-Foundation
+TradeMaster (NTU)
+RL量化平台
+无限制
+💰 完全免费
+github.com/TradeMaster-NTU
+alphalens
+因子分析工具
+无限制
+💰 完全免费
+github.com/quantopian/alphalens
+pyfolio
+策略绩效分析
+无限制
+💰 完全免费
+github.com/quantopian/pyfolio
+PyPortfolioOpt
+组合优化
+无限制
+💰 完全免费
+github.com/robertmartin8/PyPortfolioOpt
+MLflow
+实验追踪
+无限制(自托管)
+💰 完全免费
+mlflow.org
+Prefect
+任务调度
+有免费tier
+💰 免费tier
+prefect.io
+— END · ESG-Quant Intelligence System Architecture v2.0 —

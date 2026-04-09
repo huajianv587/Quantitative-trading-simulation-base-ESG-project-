@@ -14,6 +14,9 @@ REPO_URL="https://${GIT_TOKEN}@github.com/huajianv587/ESG_Agentic.git"
 WORK_DIR="/root/esg-copilot"
 DATA_DIR="/root/autodl-tmp/data"    # AutoDL 推荐把数据放这里（高速 SSD）
 OUTPUT_DIR="/root/autodl-tmp/output"
+BUCKET="${TRAINING_S3_BUCKET:-jiang-data-2026-esg-training}"
+S3_PREFIX="${TRAINING_S3_PREFIX:-esg-finetune/data}"
+S3_OUTPUT_PREFIX="${TRAINING_S3_OUTPUT_PREFIX:-esg-finetune/output}"
 # ============================
 
 echo "====== [1/4] 克隆 / 更新代码 ======"
@@ -38,8 +41,8 @@ pip install -q peft bitsandbytes transformers datasets accelerate \
 #   aws configure  （填入 Access Key / Secret Key / region）
 # 然后取消下面三行注释：
 # mkdir -p "$DATA_DIR"
-# aws s3 cp s3://jiang-data-2026-esg-training/esg-finetune/data/train.jsonl "$DATA_DIR/train.jsonl"
-# aws s3 cp s3://jiang-data-2026-esg-training/esg-finetune/data/val.jsonl   "$DATA_DIR/val.jsonl"
+# aws s3 cp "s3://${BUCKET}/${S3_PREFIX}/train.jsonl" "$DATA_DIR/train.jsonl"
+# aws s3 cp "s3://${BUCKET}/${S3_PREFIX}/val.jsonl"   "$DATA_DIR/val.jsonl"
 
 echo "====== [3/4] 开始训练 ======"
 mkdir -p "$OUTPUT_DIR"
@@ -51,4 +54,4 @@ python "$WORK_DIR/training/finetune.py" \
 echo "====== [4/4] 完成！======"
 echo "模型保存在：$OUTPUT_DIR"
 echo "可在 AutoDL 控制台「文件管理」下载，或上传到 S3："
-echo "  aws s3 cp $OUTPUT_DIR/ s3://jiang-data-2026-esg-training/esg-finetune/output/ --recursive"
+echo "  aws s3 cp $OUTPUT_DIR/ s3://${BUCKET}/${S3_OUTPUT_PREFIX}/ --recursive"

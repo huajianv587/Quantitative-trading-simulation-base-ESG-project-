@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from gateway.utils import llm_client
 
@@ -132,3 +133,47 @@ def test_runtime_backend_status_reports_mode(monkeypatch):
     assert status["remote_llm_enabled_in_mode"] is True
     assert status["cloud_fallback_order"] == ["deepseek", "openai"]
     assert status["local_llm_cuda_available"] is False
+    assert status["degraded_llm_fallback_enabled"] is True
+
+
+def test_chat_uses_degraded_fallback_when_no_live_backends(monkeypatch):
+    monkeypatch.setattr(llm_client, "_local_fail_count", llm_client.MAX_LOCAL_FAILURES)
+    monkeypatch.setattr(llm_client, "_remote_fail_count", llm_client.MAX_REMOTE_FAILURES)
+    monkeypatch.setattr(llm_client.settings, "APP_MODE", "local")
+    monkeypatch.setattr(llm_client.settings, "LLM_BACKEND_MODE", "auto")
+    monkeypatch.setattr(llm_client.settings, "DEEPSEEK_API_KEY", "")
+    monkeypatch.setattr(llm_client.settings, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(llm_client.settings, "DEBUG", True)
+
+    result = llm_client.chat(
+        [
+            {"role": "system", "content": "You are an ESG query classifier. Return only the label."},
+            {"role": "user", "content": "Question: Analyze Tesla ESG score trend"},
+        ],
+        temperature=0.0,
+        max_tokens=20,
+    )
+
+    assert result == "esg_analysis"
+
+
+def test_degraded_analyst_fallback_returns_valid_json():
+    payload = llm_client._chat_degraded(
+        [
+            {"role": "system", "content": "You are a professional ESG analyst. Only return valid JSON."},
+            {
+                "role": "user",
+                "content": (
+                    "Company/Topic: Tesla\n\n"
+                    "Retrieved context:\n"
+                    "Tesla expanded renewable energy usage, improved board oversight, and reported worker safety training."
+                ),
+            },
+        ]
+    )
+
+    parsed = json.loads(payload)
+
+    assert parsed["overall_score"] >= 50
+    assert parsed["risk_level"] in {"low", "medium", "high"}
+    assert parsed["environmental"]["score"] >= 50

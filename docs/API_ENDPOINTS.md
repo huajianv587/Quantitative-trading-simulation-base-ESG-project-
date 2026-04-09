@@ -15,6 +15,77 @@
 
 ---
 
+## Quant API - ESG Quant 平台
+
+### GET /api/v1/quant/platform/overview
+
+返回整套 ESG Quant 平台总览，包括架构层、存储状态、信号预览、组合预览、最新回测和训练规划。
+
+### POST /api/v1/quant/research/run
+
+运行一轮 ESG Quant 研究流程。
+
+请求示例:
+
+```json
+{
+  "universe": ["AAPL", "MSFT", "TSLA"],
+  "benchmark": "SPY",
+  "research_question": "Generate an ESG quant shortlist.",
+  "capital_base": 500000,
+  "horizon_days": 15
+}
+```
+
+### POST /api/v1/quant/portfolio/optimize
+
+生成组合优化结果，返回持仓建议、约束和存储信息。
+
+### POST /api/v1/quant/backtests/run
+
+执行一轮回测，返回收益指标、时间线和风险告警。
+
+### GET /api/v1/quant/backtests
+
+查看历史回测记录。
+
+### POST /api/v1/quant/execution/paper
+
+生成 Paper Trading 执行清单。
+
+Additional request fields for `/api/v1/quant/execution/paper`:
+
+```json
+{
+  "submit_orders": false,
+  "max_orders": 2,
+  "per_order_notional": 1.0,
+  "order_type": "market",
+  "time_in_force": "day",
+  "extended_hours": false
+}
+```
+
+When `submit_orders=true` and Alpaca paper credentials are configured, the API will submit small paper orders and return broker receipts.
+
+### GET /api/v1/quant/execution/account
+
+Return Alpaca paper connection status, account snapshot, and market clock.
+
+### GET /api/v1/quant/execution/orders
+
+Return recent Alpaca paper orders.
+
+### GET /api/v1/quant/execution/positions
+
+Return current Alpaca paper positions.
+
+### GET /api/v1/quant/experiments
+
+查看最近的实验记录。
+
+---
+
 ## Agent API - 被动分析
 
 ### POST /agent/analyze

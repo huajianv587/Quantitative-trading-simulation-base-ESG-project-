@@ -1,0 +1,9 @@
+
+openai_api_key: ""
+deepseek_api_key: ""
+supabase_url: ""
+supabase_api_key: ""
+r2_account_id: ""
+r2_access_key_id: ""
+r2_secret_access_key: ""
+r2_bucket: ""

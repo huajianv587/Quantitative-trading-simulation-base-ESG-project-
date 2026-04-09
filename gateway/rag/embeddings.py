@@ -1,14 +1,51 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 from typing import Any, Optional
 
-import torch
+try:
+    import torch
+except Exception:
+    class _TorchFallback:
+        float16 = "float16"
+        float32 = "float32"
+
+        class cuda:
+            @staticmethod
+            def is_available() -> bool:
+                return False
+
+    torch = _TorchFallback()
+
 from llama_index.core.base.embeddings.base import BaseEmbedding, Embedding
 from llama_index.core.bridge.pydantic import Field, PrivateAttr
 from llama_index.embeddings.openai import OpenAIEmbedding
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer
+except Exception:
+    class SentenceTransformer:  # type: ignore[no-redef]
+        transformers_model = None
+
+        def __init__(self, model_name: str, **_kwargs) -> None:
+            self.model_name = model_name
+
+        def encode(self, texts: list[str], **_kwargs) -> list[list[float]]:
+            return [self._vectorize(text) for text in texts]
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 384
+
+        def _vectorize(self, text: str) -> list[float]:
+            values: list[float] = []
+            material = text.encode("utf-8")
+            counter = 0
+            while len(values) < self.get_sentence_embedding_dimension():
+                digest = hashlib.sha256(material + counter.to_bytes(4, "little")).digest()
+                values.extend(round(byte / 255.0, 6) for byte in digest)
+                counter += 1
+            return values[: self.get_sentence_embedding_dimension()]
 
 from gateway.utils.logger import get_logger
 

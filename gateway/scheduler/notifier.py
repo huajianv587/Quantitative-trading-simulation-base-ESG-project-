@@ -21,6 +21,7 @@ class Notifier:
 
     def __init__(self):
         self.db = get_client()
+        self.local_notifications: list[dict] = []
 
     def generate_notification_content(self, event: dict, risk_score: dict, user_id: str) -> dict:
         """
@@ -211,6 +212,77 @@ View full analysis: https://esg-dashboard.example.com/events/{event.get('id')}
         except Exception as e:
             logger.error(f"[Notifier] Failed to send webhook: {e}")
             return False
+
+    def send_notification(
+        self,
+        user_id: str,
+        report_id: str,
+        title: str,
+        content: str,
+        severity: str = "medium",
+        channels: list[str] | None = None,
+        template_id: str | None = None,
+    ) -> dict:
+        """
+        统一发送单条通知，供报告调度器直接调用。
+
+        在没有真实用户偏好 / 邮件地址时，仍会将通知保存到应用内缓冲区，
+        让本地演示和无 key 环境保持可闭环。
+        """
+        channels = channels or ["in_app"]
+        notification = {
+            "title": title,
+            "content": content,
+            "severity": severity,
+            "action_url": f"/admin/reports/{report_id}" if report_id else "",
+            "template_id": template_id,
+        }
+
+        pref = None
+        try:
+            response = self.db.table("user_preferences").select("*").eq("user_id", user_id).limit(1).execute()
+            pref = response.data[0] if response.data else None
+        except Exception as exc:
+            logger.warning(f"[Notifier] Preference lookup failed for {user_id}: {exc}")
+
+        sent_channels: list[str] = []
+        for channel in channels:
+            success = False
+            if channel == "email":
+                user_email = (pref or {}).get("email") or settings.SMTP_USER
+                if user_email:
+                    success = self.send_email_notification(user_email, notification)
+            elif channel == "in_app":
+                success = self.send_in_app_notification(user_id, notification)
+            elif channel == "webhook":
+                webhook_url = (pref or {}).get("webhook_url")
+                if webhook_url:
+                    success = self.send_webhook_notification(webhook_url, notification, {"id": report_id, "title": title})
+
+            if success:
+                sent_channels.append(channel)
+                self.save_notification_log(report_id, user_id, channel, "sent")
+            else:
+                self.save_notification_log(report_id, user_id, channel, "failed")
+
+        if not sent_channels:
+            local_copy = {
+                "user_id": user_id,
+                "report_id": report_id,
+                **notification,
+                "channels": channels,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self.local_notifications.append(local_copy)
+            logger.info(f"[Notifier] Stored local fallback notification for {user_id}")
+
+        return {
+            "user_id": user_id,
+            "report_id": report_id,
+            "requested_channels": channels,
+            "sent_channels": sent_channels,
+            "stored_locally": not sent_channels,
+        }
 
     def send_notifications(self, event_id: str, user_ids: list[str]) -> dict:
         """

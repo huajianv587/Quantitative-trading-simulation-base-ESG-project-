@@ -1,4 +1,6 @@
 import os
+import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,6 +16,144 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 # 模块级单例变量，初始为 None，首次调用 get_client() 时才真正创建连接
 _client: Client | None = None
 _httpx_client: HttpxClient | None = None
+_in_memory_client = None
+_in_memory_warning_emitted = False
+
+
+class _InMemoryResult:
+    def __init__(self, data):
+        self.data = data
+
+
+class _InMemoryTableQuery:
+    def __init__(self, database: "_InMemorySupabaseClient", table_name: str):
+        self._database = database
+        self._table_name = table_name
+        self._selected_fields: list[str] | None = None
+        self._action = "select"
+        self._payload = None
+        self._filters: list[tuple[str, str, object]] = []
+        self._order: tuple[str, bool] | None = None
+        self._limit: int | None = None
+
+    def select(self, fields: str = "*"):
+        if fields and fields != "*":
+            self._selected_fields = [item.strip() for item in fields.split(",") if item.strip()]
+        return self
+
+    def insert(self, payload):
+        self._action = "insert"
+        self._payload = payload
+        return self
+
+    def update(self, payload):
+        self._action = "update"
+        self._payload = payload
+        return self
+
+    def delete(self):
+        self._action = "delete"
+        return self
+
+    def eq(self, key, value):
+        self._filters.append(("eq", key, value))
+        return self
+
+    def gte(self, key, value):
+        self._filters.append(("gte", key, value))
+        return self
+
+    def lte(self, key, value):
+        self._filters.append(("lte", key, value))
+        return self
+
+    def in_(self, key, values):
+        self._filters.append(("in", key, list(values)))
+        return self
+
+    def order(self, key, desc: bool = False):
+        self._order = (key, desc)
+        return self
+
+    def limit(self, value: int):
+        self._limit = value
+        return self
+
+    def execute(self):
+        return self._database._execute_query(self)
+
+
+class _InMemorySupabaseClient:
+    backend = "in_memory"
+
+    def __init__(self):
+        self._tables: dict[str, list[dict]] = {}
+        self._lock = threading.Lock()
+
+    def table(self, name: str):
+        return _InMemoryTableQuery(self, name)
+
+    def _execute_query(self, query: _InMemoryTableQuery) -> _InMemoryResult:
+        with self._lock:
+            rows = self._tables.setdefault(query._table_name, [])
+
+            if query._action == "insert":
+                payloads = query._payload if isinstance(query._payload, list) else [query._payload]
+                inserted = []
+                for payload in payloads:
+                    row = dict(payload or {})
+                    row.setdefault("id", str(uuid.uuid4()))
+                    inserted.append(row)
+                    rows.append(row)
+                return _InMemoryResult([dict(item) for item in inserted])
+
+            matched = [row for row in rows if self._matches(row, query._filters)]
+
+            if query._action == "update":
+                updated = []
+                for row in matched:
+                    row.update(dict(query._payload or {}))
+                    updated.append(dict(row))
+                return _InMemoryResult(updated)
+
+            if query._action == "delete":
+                deleted = [dict(row) for row in matched]
+                self._tables[query._table_name] = [row for row in rows if row not in matched]
+                return _InMemoryResult(deleted)
+
+            result_rows = [dict(row) for row in matched]
+            if query._order is not None:
+                key, desc = query._order
+                result_rows.sort(key=lambda item: item.get(key) or "", reverse=desc)
+            if query._limit is not None:
+                result_rows = result_rows[:query._limit]
+            if query._selected_fields is not None:
+                result_rows = [
+                    {field: row.get(field) for field in query._selected_fields}
+                    for row in result_rows
+                ]
+            return _InMemoryResult(result_rows)
+
+    @staticmethod
+    def _matches(row: dict, filters: list[tuple[str, str, object]]) -> bool:
+        for op, key, value in filters:
+            current = row.get(key)
+            if op == "eq" and current != value:
+                return False
+            if op == "gte" and (current is None or current < value):
+                return False
+            if op == "lte" and (current is None or current > value):
+                return False
+            if op == "in" and current not in value:
+                return False
+        return True
+
+
+def _get_in_memory_client():
+    global _in_memory_client
+    if _in_memory_client is None:
+        _in_memory_client = _InMemorySupabaseClient()
+    return _in_memory_client
 
 
 def _build_client_options() -> SyncClientOptions:
@@ -61,7 +201,7 @@ def _validate_url(name: str, value: str) -> str:
 
 def get_client() -> Client:
     """单例：复用同一个 Supabase 连接。"""
-    global _client
+    global _client, _in_memory_warning_emitted
     if _client is None:                              # 尚未初始化，执行一次性建连
         url = _read_env("SUPABASE_URL")              # 从环境变量读取 Supabase 项目 URL
         # 支持多种API Key命名方式（优先级：SUPABASE_API_KEY > SUPABASE_SERVICE_ROLE_KEY > SUPABASE_KEY）
@@ -69,7 +209,14 @@ def get_client() -> Client:
                _read_env("SUPABASE_SERVICE_ROLE_KEY") or
                _read_env("SUPABASE_KEY"))            # 读取 anon/service_role API Key
         if not url or not key:
-            raise RuntimeError("SUPABASE_URL and one of [SUPABASE_API_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_KEY] must be set in .env")
+            if not _in_memory_warning_emitted:
+                print(
+                    "[Supabase] Missing SUPABASE_URL/API key. "
+                    "Using in-memory fallback client for local runtime.",
+                )
+                _in_memory_warning_emitted = True
+            _client = _get_in_memory_client()
+            return _client
         url = _validate_url("SUPABASE_URL", url)
         try:
             _client = create_client(                # 创建并缓存客户端，后续调用直接复用

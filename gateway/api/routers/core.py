@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from gateway.app_runtime import runtime
 from gateway.config import settings
@@ -22,6 +22,7 @@ def _module_status(request: Request) -> dict[str, bool]:
         "rag": query_engine is not None,
         "esg_scorer": runtime.esg_scorer is not None,
         "report_scheduler": runtime.report_scheduler is not None,
+        "quant_system": runtime.quant_system is not None,
     }
 
 
@@ -285,11 +286,20 @@ def health_ready(request: Request):
 
 @router.get("/", include_in_schema=False)
 def root():
+    product_site = Path(__file__).resolve().parents[3] / "site" / "index.html"
+    if product_site.exists():
+        return FileResponse(product_site)
     return RedirectResponse(url="/app", status_code=307)
 
 
 @router.get("/dashboard/overview")
 def dashboard_overview(request: Request):
+    if runtime.quant_system is not None:
+        try:
+            return runtime.quant_system.build_dashboard_overview()
+        except Exception as exc:
+            logger.warning(f"[Dashboard] Quant overview unavailable, falling back: {exc}")
+
     generated_at = datetime.now(timezone.utc)
     health_modules = {
         **_module_status(request),

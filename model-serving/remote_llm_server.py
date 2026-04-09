@@ -7,6 +7,7 @@ from typing import Any
 
 import torch
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from peft import PeftModel
@@ -14,6 +15,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -137,6 +139,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "cuda": torch.cuda.is_available(),
+        "base_model": DEFAULT_BASE_MODEL,
         "adapter_path": str(DEFAULT_ADAPTER_PATH),
         "model_loaded": _model is not None,
     }

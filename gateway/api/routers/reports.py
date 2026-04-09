@@ -82,6 +82,73 @@ def generate_report(req: ReportGenerateRequest, background_tasks: BackgroundTask
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/admin/reports/statistics")
+def get_report_statistics(
+    period: str = Query(...),
+    group_by: str = Query("report_type"),
+):
+    try:
+        start_date, end_date = period.split(":")
+        if runtime.get_client is None:
+            raise RuntimeError("Database module not available")
+
+        db = runtime.get_client()
+        reports = (
+            db.table("esg_reports")
+            .select("id, report_type, generated_at")
+            .gte("generated_at", start_date)
+            .lte("generated_at", end_date)
+            .execute()
+            .data
+        )
+
+        by_type = {"daily": 0, "weekly": 0, "monthly": 0}
+        for report in reports:
+            report_name = report.get("report_type")
+            if report_name in by_type:
+                by_type[report_name] += 1
+
+        push_statistics = {
+            "total_notifications": 0,
+            "delivered": 0,
+            "read": 0,
+            "click_through_rate": 0,
+        }
+
+        try:
+            push_rows = (
+                db.table("report_push_history")
+                .select("push_status, read_at, click_through")
+                .gte("created_at", start_date)
+                .lte("created_at", end_date)
+                .execute()
+                .data
+            )
+            total_pushes = len(push_rows)
+            delivered = sum(1 for row in push_rows if row.get("push_status") == "sent")
+            read = sum(1 for row in push_rows if row.get("read_at"))
+            clicked = sum(1 for row in push_rows if row.get("click_through"))
+            push_statistics = {
+                "total_notifications": total_pushes,
+                "delivered": delivered,
+                "read": read,
+                "click_through_rate": round((clicked / total_pushes) * 100, 2) if total_pushes else 0,
+            }
+        except Exception as push_exc:
+            logger.warning(f"Push statistics unavailable: {push_exc}")
+
+        return {
+            "period": {"start": start_date, "end": end_date},
+            "group_by": group_by,
+            "total_reports": len(reports),
+            "by_type": by_type,
+            "push_statistics": push_statistics,
+        }
+    except Exception as exc:
+        logger.error(f"Statistics error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/admin/reports/{report_id}")
 def get_report(report_id: str, report_type: Optional[str] = None):
     try:
@@ -150,70 +217,3 @@ def export_report(report_id: str, format: str = Query("pdf")):
         "message": "Report export",
         "download_url": f"/api/files/report_{report_id}.{format}",
     }
-
-
-@router.get("/admin/reports/statistics")
-def get_report_statistics(
-    period: str = Query(...),
-    group_by: str = Query("report_type"),
-):
-    try:
-        start_date, end_date = period.split(":")
-        if runtime.get_client is None:
-            raise RuntimeError("Database module not available")
-
-        db = runtime.get_client()
-        reports = (
-            db.table("esg_reports")
-            .select("id, report_type, generated_at")
-            .gte("generated_at", start_date)
-            .lte("generated_at", end_date)
-            .execute()
-            .data
-        )
-
-        by_type = {"daily": 0, "weekly": 0, "monthly": 0}
-        for report in reports:
-            report_name = report.get("report_type")
-            if report_name in by_type:
-                by_type[report_name] += 1
-
-        push_statistics = {
-            "total_notifications": 0,
-            "delivered": 0,
-            "read": 0,
-            "click_through_rate": 0,
-        }
-
-        try:
-            push_rows = (
-                db.table("report_push_history")
-                .select("push_status, read_at, click_through")
-                .gte("created_at", start_date)
-                .lte("created_at", end_date)
-                .execute()
-                .data
-            )
-            total_pushes = len(push_rows)
-            delivered = sum(1 for row in push_rows if row.get("push_status") == "sent")
-            read = sum(1 for row in push_rows if row.get("read_at"))
-            clicked = sum(1 for row in push_rows if row.get("click_through"))
-            push_statistics = {
-                "total_notifications": total_pushes,
-                "delivered": delivered,
-                "read": read,
-                "click_through_rate": round((clicked / total_pushes) * 100, 2) if total_pushes else 0,
-            }
-        except Exception as push_exc:
-            logger.warning(f"Push statistics unavailable: {push_exc}")
-
-        return {
-            "period": {"start": start_date, "end": end_date},
-            "group_by": group_by,
-            "total_reports": len(reports),
-            "by_type": by_type,
-            "push_statistics": push_statistics,
-        }
-    except Exception as exc:
-        logger.error(f"Statistics error: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))

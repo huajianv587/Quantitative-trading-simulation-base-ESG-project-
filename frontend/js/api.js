@@ -360,6 +360,60 @@ export const dashboard = {
 };
 
 // ============================================
+// Quant System API
+// ============================================
+
+export const quant = {
+  overview: () => {
+    return request('GET', '/api/v1/quant/platform/overview', null, { quiet: true });
+  },
+
+  getUniverse: () => {
+    return request('GET', '/api/v1/quant/universe/default', null, { quiet: true });
+  },
+
+  runResearch: (payload) => {
+    return request('POST', '/api/v1/quant/research/run', payload);
+  },
+
+  optimizePortfolio: (payload) => {
+    return request('POST', '/api/v1/quant/portfolio/optimize', payload);
+  },
+
+  runBacktest: (payload) => {
+    return request('POST', '/api/v1/quant/backtests/run', payload);
+  },
+
+  listBacktests: () => {
+    return request('GET', '/api/v1/quant/backtests', null, { quiet: true });
+  },
+
+  getBacktest: (backtestId) => {
+    return request('GET', `/api/v1/quant/backtests/${encodeURIComponent(backtestId)}`, null, { quiet: true });
+  },
+
+  createExecutionPlan: (payload) => {
+    return request('POST', '/api/v1/quant/execution/paper', payload);
+  },
+
+  getExecutionAccount: () => {
+    return request('GET', '/api/v1/quant/execution/account', null, { quiet: true });
+  },
+
+  listExecutionOrders: (status = 'all', limit = 20) => {
+    return request('GET', `/api/v1/quant/execution/orders?status=${encodeURIComponent(status)}&limit=${encodeURIComponent(limit)}`, null, { quiet: true });
+  },
+
+  listExecutionPositions: () => {
+    return request('GET', '/api/v1/quant/execution/positions', null, { quiet: true });
+  },
+
+  listExperiments: () => {
+    return request('GET', '/api/v1/quant/experiments', null, { quiet: true });
+  },
+};
+
+// ============================================
 // 导出 API 对象
 // ============================================
 
@@ -372,6 +426,7 @@ export const api = {
   subscriptions,
   system,
   dashboard,
+  quant,
 };
 
 export default api;

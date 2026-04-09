@@ -5,10 +5,12 @@
 set -e  # 任意一步报错就停止
 
 # ========== 配置区 ==========
-BUCKET="jiang-data-2026-esg-training"
-S3_DATA="s3://${BUCKET}/esg-finetune/data"
-S3_OUTPUT="s3://${BUCKET}/esg-finetune/output"
-REPO_URL="https://github.com/huajianv587/ESG_Agentic.git"  # 改成你的 git 地址
+BUCKET="${TRAINING_S3_BUCKET:-jiang-data-2026-esg-training}"
+S3_PREFIX="${TRAINING_S3_PREFIX:-esg-finetune/data}"
+S3_OUTPUT_PREFIX="${TRAINING_S3_OUTPUT_PREFIX:-esg-finetune/output}"
+S3_DATA="s3://${BUCKET}/${S3_PREFIX}"
+S3_OUTPUT="s3://${BUCKET}/${S3_OUTPUT_PREFIX}"
+REPO_URL="${TRAINING_REPO_URL:-https://github.com/huajianv587/ESG_Agentic.git}"
 WORK_DIR="/home/ubuntu/esg-copilot"
 # ============================
 

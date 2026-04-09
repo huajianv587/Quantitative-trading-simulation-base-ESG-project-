@@ -1,12 +1,13 @@
 import boto3
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
-BUCKET    = "jiang-data-2026-esg-training"
-S3_PREFIX = "esg-finetune/data"
+BUCKET = os.getenv("TRAINING_S3_BUCKET", "jiang-data-2026-esg-training")
+S3_PREFIX = os.getenv("TRAINING_S3_PREFIX", "esg-finetune/data")
 
 LOCAL_FILES = {
     "train.jsonl": PROJECT_ROOT / "data" / "processed" / "train.jsonl",

@@ -2,6 +2,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -13,14 +14,18 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
 const frontendDir = join(projectRoot, 'frontend');
+const siteDir = join(projectRoot, 'site');
 const distDir = join(projectRoot, 'dist');
 const distAppDir = join(distDir, 'app');
+const distSiteDir = join(distDir, 'site');
 
 const apiBaseUrl = String(process.env.ESG_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
 rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distAppDir, { recursive: true });
+mkdirSync(distSiteDir, { recursive: true });
 copyDirectory(frontendDir, distAppDir);
+copyDirectory(siteDir, distSiteDir);
 
 writeFileSync(
   join(distAppDir, 'app-config.js'),
@@ -30,25 +35,7 @@ writeFileSync(
 
 writeFileSync(
   join(distDir, 'index.html'),
-  `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="0; url=/app/">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Redirecting...</title>
-</head>
-<body>
-  <script>window.location.replace('/app/');</script>
-</body>
-</html>
-`,
-  'utf8',
-);
-
-writeFileSync(
-  join(distDir, '_redirects'),
-  '/ /app/ 302\n',
+  readText(join(siteDir, 'index.html')),
   'utf8',
 );
 
@@ -75,4 +62,8 @@ function copyDirectory(sourceDir, targetDir) {
       copyFileSync(sourcePath, targetPath);
     }
   }
+}
+
+function readText(path) {
+  return readFileSync(path, 'utf8');
 }

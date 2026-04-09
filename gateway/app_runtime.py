@@ -45,12 +45,16 @@ class RuntimeContext:
     data_source_manager: Any = None
     report_generator: Any = None
     report_scheduler: Any = None
+    quant_system: Any = None
     report_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     sync_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def ensure_session(self, session_id: str, user_id: Optional[str] = None) -> None:
         if session_id and self.create_session is not None:
-            self.create_session(session_id=session_id, user_id=user_id)
+            try:
+                self.create_session(session_id=session_id, user_id=user_id)
+            except Exception as exc:
+                logger.warning(f"Session initialization skipped: {exc}")
 
     def serialize_model(self, model: Any) -> Any:
         if model is None:
@@ -78,46 +82,82 @@ class RuntimeContext:
         return flattened
 
     def fetch_report_row(self, report_id: str) -> Optional[dict[str, Any]]:
-        if self.get_client is None:
+        if self.get_client is not None:
+            response = (
+                self.get_client()
+                .table("esg_reports")
+                .select("id, report_type, title, period_start, period_end, data, generated_at")
+                .eq("id", report_id)
+                .limit(1)
+                .execute()
+            )
+            if response.data:
+                return response.data[0]
+
+        memory_job = self.report_jobs.get(report_id)
+        if not memory_job or not memory_job.get("report"):
             return None
 
-        response = (
-            self.get_client()
-            .table("esg_reports")
-            .select("id, report_type, title, period_start, period_end, data, generated_at")
-            .eq("id", report_id)
-            .limit(1)
-            .execute()
-        )
-        return response.data[0] if response.data else None
+        report = dict(memory_job["report"])
+        return {
+            "id": report.get("report_id") or report.get("id") or report_id,
+            "report_type": report.get("report_type"),
+            "title": report.get("title"),
+            "period_start": report.get("period_start"),
+            "period_end": report.get("period_end"),
+            "data": report,
+            "generated_at": report.get("generated_at"),
+        }
 
     def fetch_latest_report_row(
         self,
         report_type: str,
         company: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
-        if self.get_client is None:
+        if self.get_client is not None:
+            response = (
+                self.get_client()
+                .table("esg_reports")
+                .select("id, report_type, title, period_start, period_end, data, generated_at")
+                .eq("report_type", report_type)
+                .order("generated_at", desc=True)
+                .limit(20)
+                .execute()
+            )
+
+            for row in response.data or []:
+                payload = row.get("data") or {}
+                analyses = payload.get("company_analyses") or []
+                if not company:
+                    return row
+                if any(str(item.get("company_name", "")).lower() == company.lower() for item in analyses):
+                    return row
+
+        memory_rows = []
+        for job_id, job in self.report_jobs.items():
+            payload = job.get("report") or {}
+            if not payload:
+                continue
+            if report_type and payload.get("report_type") != report_type:
+                continue
+            analyses = payload.get("company_analyses") or []
+            if company and not any(str(item.get("company_name", "")).lower() == company.lower() for item in analyses):
+                continue
+            memory_rows.append({
+                "id": payload.get("report_id") or payload.get("id") or job_id,
+                "report_type": payload.get("report_type"),
+                "title": payload.get("title"),
+                "period_start": payload.get("period_start"),
+                "period_end": payload.get("period_end"),
+                "data": payload,
+                "generated_at": payload.get("generated_at"),
+            })
+
+        if not memory_rows:
             return None
 
-        response = (
-            self.get_client()
-            .table("esg_reports")
-            .select("id, report_type, title, period_start, period_end, data, generated_at")
-            .eq("report_type", report_type)
-            .order("generated_at", desc=True)
-            .limit(20)
-            .execute()
-        )
-
-        for row in response.data or []:
-            payload = row.get("data") or {}
-            analyses = payload.get("company_analyses") or []
-            if not company:
-                return row
-            if any(str(item.get("company_name", "")).lower() == company.lower() for item in analyses):
-                return row
-
-        return None
+        memory_rows.sort(key=lambda row: row.get("generated_at") or "", reverse=True)
+        return memory_rows[0]
 
     def generate_report_by_type(self, report_type: str, companies: list[str]):
         if self.report_generator is None:
@@ -292,6 +332,18 @@ def build_runtime() -> RuntimeContext:
         ("ReportScheduler", "PushRule", "ReportSubscription"),
         "ReportScheduler",
     )
+    get_quant_system, = _optional_import(
+        "gateway.quant.service",
+        ("get_quant_system",),
+        "QuantSystem",
+    )
+
+    quant_system = None
+    if get_quant_system is not None:
+        try:
+            quant_system = get_quant_system(get_client=get_client)
+        except Exception as exc:
+            logger.warning(f"Quant system init failed: {exc}")
 
     return RuntimeContext(
         get_query_engine=get_query_engine,
@@ -310,6 +362,7 @@ def build_runtime() -> RuntimeContext:
         ReportScheduler=ReportScheduler,
         PushRule=PushRule,
         ReportSubscription=ReportSubscription,
+        quant_system=quant_system,
     )
 
 

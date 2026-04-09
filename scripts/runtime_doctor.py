@@ -13,7 +13,15 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 load_dotenv(PROJECT_ROOT / ".env")
+
+from gateway.scheduler.data_sources import DataSourceManager
+from gateway.db.supabase_client import get_client
+from gateway.quant.alpaca import AlpacaPaperClient
+from gateway.quant.storage import QuantStorageGateway
 
 
 def probe_json(url: str, timeout: int = 5) -> tuple[bool, dict | str]:
@@ -39,6 +47,7 @@ def main() -> int:
     remote_llm_url = os.getenv("REMOTE_LLM_URL", "").rstrip("/")
     qdrant_url = os.getenv("QDRANT_URL", "http://127.0.0.1:6333").rstrip("/")
     local_api_url = os.getenv("LOCAL_API_URL", "http://127.0.0.1:8000").rstrip("/")
+    alpaca = AlpacaPaperClient()
     report = {
         "python": {
             "executable": sys.executable,
@@ -56,6 +65,13 @@ def main() -> int:
             "langgraph": pkg_available("langgraph"),
             "schedule": pkg_available("schedule"),
         },
+        "integrations": {
+            "training_s3_bucket": os.getenv("TRAINING_S3_BUCKET", ""),
+            "sagemaker_role_arn": os.getenv("SAGEMAKER_EXECUTION_ROLE_ARN", ""),
+            "data_sources": DataSourceManager().source_status(),
+            "quant_storage": QuantStorageGateway(get_client=get_client).status(),
+            "alpaca_paper": alpaca.connection_status(),
+        },
         "health": {},
     }
 
@@ -68,6 +84,23 @@ def main() -> int:
 
     ok, payload = probe_json(f"{local_api_url}/health", timeout=10)
     report["health"]["local_api"] = {"ok": ok, "payload": payload}
+
+    if alpaca.configured():
+        try:
+            report["health"]["alpaca_paper"] = {
+                "ok": True,
+                "payload": {
+                    "account": alpaca.get_account().get("status"),
+                    "clock_open": bool(alpaca.get_clock().get("is_open")),
+                },
+            }
+        except Exception as exc:
+            report["health"]["alpaca_paper"] = {"ok": False, "payload": str(exc)}
+    else:
+        report["health"]["alpaca_paper"] = {
+            "ok": False,
+            "payload": "missing ALPACA_API_KEY / ALPACA_API_SECRET (or supported APCA aliases)",
+        }
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

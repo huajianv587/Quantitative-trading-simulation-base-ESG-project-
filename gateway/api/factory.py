@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from gateway.api.routers import admin, agent, core, reports, scheduler, user
+from gateway.api.routers import admin, agent, core, quant, reports, scheduler, user
 from gateway.app_runtime import RuntimeContext, runtime
 from gateway.utils.logger import get_logger
 
@@ -66,12 +66,20 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
     app.include_router(admin.router)
     app.include_router(user.router)
     app.include_router(scheduler.router)
+    app.include_router(quant.router)
 
     frontend_path = Path(__file__).resolve().parents[2] / "frontend"
+    site_path = Path(__file__).resolve().parents[2] / "site"
     if frontend_path.exists():
         app.mount("/app", StaticFiles(directory=frontend_path, html=True), name="frontend")
         logger.info(f"Frontend mounted at /app from {frontend_path}")
     else:
         logger.warning(f"Frontend directory not found at {frontend_path}")
+
+    if site_path.exists():
+        app.mount("/site", StaticFiles(directory=site_path, html=True), name="site")
+        logger.info(f"Product site mounted at /site from {site_path}")
+    else:
+        logger.warning(f"Product site directory not found at {site_path}")
 
     return app

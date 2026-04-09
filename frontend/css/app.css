@@ -811,6 +811,45 @@ button {
   padding: 20px;
 }
 
+.status-card {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.status-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 36px rgba(3, 7, 18, 0.18);
+}
+
+.status-card::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.42), transparent);
+}
+
+.status-card--success {
+  border-color: rgba(16, 185, 129, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.08);
+}
+
+.status-card--warning {
+  border-color: rgba(245, 158, 11, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.08);
+}
+
+.status-card--danger {
+  border-color: rgba(239, 68, 68, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.08);
+}
+
+.status-card--accent {
+  border-color: rgba(94, 165, 255, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(94, 165, 255, 0.08);
+}
+
 /* ============================================
    标签徽章
    ============================================ */
@@ -2548,6 +2587,131 @@ tbody tr:hover {
   }
 }
 
+.overview-architecture__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  gap: 18px;
+}
+
+.overview-layer-grid,
+.overview-runtime-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.overview-layer-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.overview-layer-card,
+.overview-runtime-card {
+  position: relative;
+  overflow: hidden;
+  padding: 18px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(18, 29, 45, 0.96), rgba(13, 20, 31, 0.98));
+  border: 1px solid rgba(94, 165, 255, 0.14);
+}
+
+.overview-layer-card::after,
+.overview-runtime-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(220px circle at var(--mx, 50%) var(--my, 50%), rgba(94, 165, 255, 0.1), transparent 72%);
+  opacity: 0;
+  transition: opacity 0.28s ease;
+}
+
+.overview-layer-card:hover::after,
+.overview-runtime-card:hover::after {
+  opacity: 1;
+}
+
+.overview-layer-card__top,
+.overview-runtime-card__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.overview-layer-card__key,
+.overview-runtime-card__eyebrow {
+  color: #8ec5ff;
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.overview-layer-card__priority {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(94, 165, 255, 0.1);
+  color: #dcecff;
+  font-size: 0.78rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.overview-layer-card h3 {
+  margin: 14px 0 0;
+  font-size: 1.08rem;
+  letter-spacing: -0.03em;
+}
+
+.overview-layer-card p,
+.overview-runtime-card__detail {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  line-height: 1.68;
+}
+
+.overview-layer-card__status {
+  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(176, 191, 211, 0.82);
+  font-size: 0.84rem;
+}
+
+.overview-layer-card__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #64748b;
+  box-shadow: 0 0 0 6px rgba(100, 116, 139, 0.12);
+}
+
+.overview-layer-card.is-ready .overview-layer-card__dot {
+  background: #10b981;
+  box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.12);
+}
+
+.overview-layer-card.is-ready {
+  border-color: rgba(16, 185, 129, 0.18);
+}
+
+.overview-runtime-card__value {
+  margin-top: 14px;
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.05em;
+  color: #f5f9fd;
+}
+
+.overview-runtime-card__detail {
+  font-size: 0.95rem;
+}
+
+.overview-runtime-card__meta {
+  margin-top: 14px;
+  color: rgba(176, 191, 211, 0.78);
+  font-size: 0.84rem;
+}
+
 @media (max-width: 1440px) {
   body {
     min-width: 1180px;
@@ -2570,6 +2734,7 @@ tbody tr:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .overview-architecture__grid,
   .overview-scoreboard__grid,
   .overview-monitor__grid,
   .query-interface-grid,
@@ -2636,6 +2801,10 @@ tbody tr:hover {
   .overview-command-grid,
   .overview-stat-grid,
   .overview-health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-layer-grid {
     grid-template-columns: 1fr;
   }
 

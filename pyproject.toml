@@ -1,0 +1,19 @@
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "esg-quant-intelligence"
+version = "0.1.0"
+description = "Industrial ESG Quant platform with Agent research, backtesting, reporting, Supabase metadata, and R2 artifacts."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "ESG Quant IO Team" }
+]
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

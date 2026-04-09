@@ -301,7 +301,8 @@ class ReportScheduler:
         rule.updated_at = datetime.now()
 
         try:
-            supabase_client.table("push_rules").insert(rule.dict()).execute()
+            payload = rule.model_dump(mode="json") if hasattr(rule, "model_dump") else rule.dict()
+            supabase_client.table("push_rules").insert(payload).execute()
             self.push_rules_cache[rule.id] = rule
 
             logger.info(f"[ReportScheduler] Push rule {rule.id} created: {rule.rule_name}")

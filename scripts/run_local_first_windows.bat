@@ -3,10 +3,7 @@ setlocal
 
 cd /d "%~dp0.."
 
-if not exist ".venv\Scripts\python.exe" (
-  echo [run] Missing .venv. Run scripts\bootstrap_local_windows.bat first.
-  exit /b 1
-)
+call :resolve_python || exit /b 1
 
 if not exist ".env" (
   echo [run] Missing .env file. Copy .env.example to .env and fill in your settings first.
@@ -22,4 +19,21 @@ echo [run] LLM_BACKEND_MODE=%LLM_BACKEND_MODE%
 echo [run] Fallback order: local ^> DeepSeek ^> OpenAI
 echo [run] To re-enable a remote GPU host later, use scripts\run_local_hybrid_windows.bat
 
-".venv\Scripts\python.exe" -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
+"%PYTHON_BIN%" -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
+exit /b %errorlevel%
+
+:resolve_python
+if exist ".venv\Scripts\python.exe" (
+  set "PYTHON_BIN=%CD%\.venv\Scripts\python.exe"
+  goto :eof
+)
+
+where python >nul 2>&1
+if not errorlevel 1 (
+  set "PYTHON_BIN=python"
+  echo [run] .venv not found, using Python from PATH.
+  goto :eof
+)
+
+echo [run] Python interpreter not found. Run scripts\bootstrap_local_windows.bat or install Python first.
+exit /b 1

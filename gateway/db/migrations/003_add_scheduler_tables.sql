@@ -252,14 +252,17 @@ ALTER TABLE event_user_matches     ENABLE ROW LEVEL SECURITY;
 -- ────────────────────────────────────────────────────────────────────────────
 -- 注意：update_updated_at_column() 函数在 002 中已定义
 
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at
     BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_user_holdings_updated_at ON user_holdings;
 CREATE TRIGGER update_user_holdings_updated_at
     BEFORE UPDATE ON user_holdings
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_user_preferences_updated_at ON user_preferences;
 CREATE TRIGGER update_user_preferences_updated_at
     BEFORE UPDATE ON user_preferences
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
