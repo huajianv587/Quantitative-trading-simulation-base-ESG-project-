@@ -16,6 +16,11 @@ class QuantPortfolioRequest(BaseModel):
     benchmark: str = "SPY"
     capital_base: float = 1_000_000
     research_question: str = ""
+    preset_name: str | None = None
+    objective: str | None = None
+    max_position_weight: float | None = None
+    max_sector_concentration: float | None = None
+    esg_floor: float | None = None
 
 
 class QuantP1StackRequest(BaseModel):

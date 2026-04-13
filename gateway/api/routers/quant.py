@@ -84,6 +84,11 @@ def optimize_portfolio(req: QuantPortfolioRequest):
         benchmark=req.benchmark,
         capital_base=req.capital_base,
         research_question=req.research_question,
+        preset_name=req.preset_name,
+        objective=req.objective,
+        max_position_weight=req.max_position_weight,
+        max_sector_concentration=req.max_sector_concentration,
+        esg_floor=req.esg_floor,
     )
 
 

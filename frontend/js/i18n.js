@@ -1487,6 +1487,7 @@ function shouldSkipTextNode(node) {
   const parent = node?.parentElement;
   if (!parent) return true;
   if (parent.closest('[data-i18n]')) return true;
+  if (parent.closest('[data-no-autotranslate="true"]')) return true;
 
   const tagName = parent.tagName;
   return tagName === 'SCRIPT' || tagName === 'STYLE' || tagName === 'TEXTAREA';
@@ -1517,6 +1518,7 @@ function translateTextNode(node) {
 
 function shouldSkipAttribute(el, attr) {
   if (!el) return true;
+  if (el.closest('[data-no-autotranslate="true"]')) return true;
   if (attr === 'placeholder' && el.hasAttribute('data-i18n-placeholder')) return true;
   if (attr === 'title' && el.hasAttribute('data-i18n-title')) return true;
   if (attr === 'value' && el.tagName !== 'INPUT') return true;

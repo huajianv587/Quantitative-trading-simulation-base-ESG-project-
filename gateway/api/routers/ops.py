@@ -19,6 +19,7 @@ def _quant_service():
 
 @router.get("/runtime")
 def runtime_snapshot(request: Request) -> dict[str, Any]:
+    runtime.ensure_optional_services(start_scheduler=True)
     quant_service = _quant_service()
     brokers = quant_service.list_execution_brokers() if quant_service is not None else []
     return {
@@ -96,6 +97,7 @@ def metrics_snapshot() -> dict[str, Any]:
 
 @router.get("/healthcheck")
 def healthcheck_snapshot() -> dict[str, Any]:
+    runtime.ensure_optional_services(start_scheduler=True)
     quant_service = _quant_service()
     if quant_service is None:
         return {

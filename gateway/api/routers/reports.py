@@ -16,6 +16,7 @@ router = APIRouter()
 
 @router.post("/admin/reports/generate")
 def generate_report(req: ReportGenerateRequest, background_tasks: BackgroundTasks):
+    runtime.ensure_optional_services(start_scheduler=True)
     if not runtime.report_generator:
         raise HTTPException(status_code=503, detail="Report Generator not ready")
 

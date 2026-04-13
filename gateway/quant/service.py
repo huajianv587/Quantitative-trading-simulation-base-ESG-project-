@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
 from pydantic import BaseModel
@@ -367,23 +368,514 @@ class QuantSystemService:
         )
         return record
 
+    @staticmethod
+    def _normalize_weight_vector(raw_weights: list[float], cap: float | None = None) -> list[float]:
+        if not raw_weights:
+            return []
+        total = sum(max(float(weight), 0.0) for weight in raw_weights)
+        if total <= 0:
+            return [round(1.0 / len(raw_weights), 4) for _ in raw_weights]
+
+        normalized = [max(float(weight), 0.0) / total for weight in raw_weights]
+        if cap is None:
+            return [round(weight, 4) for weight in normalized]
+
+        effective_cap = max(float(cap), 1.0 / len(normalized))
+        remaining = set(range(len(normalized)))
+        remaining_total = sum(normalized)
+        target_total = 1.0
+        final_weights = [0.0 for _ in normalized]
+
+        while remaining:
+            capped_any = False
+            for index in list(remaining):
+                if remaining_total <= 0 or target_total <= 0:
+                    break
+                proposed = normalized[index] / remaining_total * target_total
+                if proposed > effective_cap:
+                    final_weights[index] = effective_cap
+                    target_total -= effective_cap
+                    remaining_total -= normalized[index]
+                    remaining.remove(index)
+                    capped_any = True
+            if not capped_any:
+                for index in remaining:
+                    final_weights[index] = normalized[index] / max(remaining_total, 1e-9) * max(target_total, 0.0)
+                break
+
+        return [round(weight, 4) for weight in final_weights]
+
+    def _build_returns_frame(self, symbols: list[str], lookback_days: int = 90) -> pd.DataFrame:
+        series_map: dict[str, pd.Series] = {}
+        for symbol in symbols:
+            try:
+                result = self.market_data.get_daily_bars(symbol, limit=max(lookback_days, 60))
+                bars = result.bars.copy()
+                if bars.empty or "close" not in bars:
+                    continue
+                bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True, errors="coerce")
+                bars = bars.dropna(subset=["timestamp"]).sort_values("timestamp").drop_duplicates("timestamp", keep="last")
+                closes = bars.set_index("timestamp")["close"].astype(float)
+                returns = closes.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+                if len(returns) < 20:
+                    continue
+                series_map[str(symbol).upper()] = returns.tail(lookback_days)
+            except Exception as exc:
+                logger.warning(f"[Quant] Market return history unavailable for {symbol}: {exc}")
+
+        if not series_map:
+            return pd.DataFrame()
+
+        frame = pd.DataFrame(series_map).sort_index().tail(lookback_days)
+        return frame.dropna(how="all").fillna(0.0)
+
+    def _estimate_liquidity_snapshot(self, symbol: str, capital_base: float) -> dict[str, float]:
+        fallback_price = max(((_stable_seed(symbol, "price") % 24000) / 100.0), 20.0)
+        payload = {
+            "last_price": fallback_price,
+            "adv_shares": max(250_000.0, (_stable_seed(symbol, "adv") % 4_000_000) + 250_000.0),
+            "adv_dollars": 0.0,
+            "realized_volatility": 0.18,
+            "spread_proxy_bps": 8.0,
+            "participation_rate": 0.0,
+            "order_notional": 0.0,
+        }
+        payload["adv_dollars"] = payload["adv_shares"] * payload["last_price"]
+
+        try:
+            bars = self.market_data.get_daily_bars(symbol, limit=60).bars.copy()
+            if not bars.empty:
+                bars["close"] = bars["close"].astype(float)
+                bars["volume"] = bars["volume"].astype(float)
+                bars["dollar_volume"] = bars["close"] * bars["volume"]
+                last_price = float(bars["close"].iloc[-1])
+                adv_shares = float(bars["volume"].tail(20).mean() or 0.0)
+                adv_dollars = float(bars["dollar_volume"].tail(20).mean() or 0.0)
+                returns = bars["close"].pct_change().replace([np.inf, -np.inf], np.nan).dropna().tail(20)
+                realized_volatility = float(returns.std(ddof=0) * math.sqrt(252)) if len(returns) > 1 else payload["realized_volatility"]
+                spread_proxy_bps = _bounded(4.5 + realized_volatility * 240.0, 3.5, 42.0)
+                payload.update(
+                    {
+                        "last_price": max(last_price, 1.0),
+                        "adv_shares": max(adv_shares, payload["adv_shares"]),
+                        "adv_dollars": max(adv_dollars, payload["adv_dollars"]),
+                        "realized_volatility": _bounded(realized_volatility or payload["realized_volatility"], 0.06, 0.85),
+                        "spread_proxy_bps": spread_proxy_bps,
+                    }
+                )
+        except Exception as exc:
+            logger.warning(f"[Quant] Liquidity snapshot fallback for {symbol}: {exc}")
+
+        payload["order_notional"] = max(capital_base, 1.0)
+        payload["participation_rate"] = _bounded(payload["order_notional"] / max(payload["adv_dollars"], 1.0), 0.0, 5.0)
+        return payload
+
+    def _rebalance_sector_cap(
+        self,
+        *,
+        weights: list[float],
+        positions: list[PortfolioPosition],
+        signal_lookup: dict[str, ResearchSignal],
+        sector_cap: float | None,
+        single_name_cap: float | None,
+    ) -> list[float]:
+        if not weights:
+            return []
+        if sector_cap is None or float(sector_cap) >= 0.999:
+            return self._normalize_weight_vector(weights, cap=single_name_cap)
+
+        adjusted = list(self._normalize_weight_vector(weights, cap=single_name_cap))
+        sector_cap = max(float(sector_cap), max(1.0 / len(adjusted), 0.01))
+        sectors = [
+            str((signal_lookup.get(position.symbol).sector if signal_lookup.get(position.symbol) else "Unknown") or "Unknown")
+            for position in positions
+        ]
+
+        for _ in range(8):
+            sector_totals: dict[str, float] = {}
+            for index, sector in enumerate(sectors):
+                sector_totals[sector] = sector_totals.get(sector, 0.0) + float(adjusted[index])
+
+            violating = {sector for sector, total in sector_totals.items() if total > sector_cap + 1e-6}
+            if not violating:
+                break
+
+            overflow = 0.0
+            recipients: list[int] = []
+            for index, sector in enumerate(sectors):
+                if sector in violating:
+                    total = sector_totals[sector]
+                    scaled = adjusted[index] * (sector_cap / max(total, 1e-9))
+                    overflow += adjusted[index] - scaled
+                    adjusted[index] = scaled
+                else:
+                    recipients.append(index)
+
+            if overflow <= 1e-8 or not recipients:
+                adjusted = self._normalize_weight_vector(adjusted, cap=single_name_cap)
+                break
+
+            pool = sum(adjusted[index] for index in recipients)
+            for index in recipients:
+                adjusted[index] += overflow * (
+                    (adjusted[index] / pool) if pool > 0 else (1.0 / len(recipients))
+                )
+            adjusted = self._normalize_weight_vector(adjusted, cap=single_name_cap)
+
+        return adjusted
+
+    def _allocate_objective_weights(
+        self,
+        positions: list[PortfolioPosition],
+        signal_lookup: dict[str, ResearchSignal],
+        *,
+        objective_key: str,
+        max_position_weight: float | None,
+        max_sector_concentration: float | None,
+    ) -> tuple[list[float], dict[str, Any]]:
+        if not positions:
+            return [], {"mode": "empty"}
+
+        single_name_cap = float(max_position_weight) if max_position_weight is not None else None
+        symbols = [position.symbol for position in positions]
+        base_weights = np.array([max(float(position.weight), 0.0001) for position in positions], dtype=float)
+        expected_returns = np.array([max(float(position.expected_return), 0.0) for position in positions], dtype=float)
+
+        returns_frame = self._build_returns_frame(symbols, lookback_days=90)
+        diagnostics: dict[str, Any] = {
+            "mode": "heuristic",
+            "objective": objective_key,
+            "history_rows": int(len(returns_frame)),
+            "history_assets": int(len(returns_frame.columns)),
+        }
+
+        if returns_frame.empty or len(returns_frame.columns) < 2:
+            if objective_key == "equal_weight":
+                raw = np.ones(len(positions), dtype=float)
+            elif objective_key == "risk_parity":
+                raw = np.array(
+                    [
+                        1.0 / max(
+                            float(signal_lookup.get(position.symbol).predicted_volatility_10d or 0.18)
+                            if signal_lookup.get(position.symbol)
+                            else 0.18,
+                            0.04,
+                        )
+                        for position in positions
+                    ],
+                    dtype=float,
+                )
+            elif objective_key == "minimum_variance":
+                raw = np.array(
+                    [
+                        1.0
+                        / max(
+                            float(signal_lookup.get(position.symbol).predicted_volatility_10d or 0.18)
+                            if signal_lookup.get(position.symbol)
+                            else 0.18,
+                            0.04,
+                        )
+                        ** 2
+                        for position in positions
+                    ],
+                    dtype=float,
+                )
+            else:
+                raw = base_weights
+        else:
+            aligned_symbols = [symbol for symbol in symbols if symbol in returns_frame.columns]
+            if len(aligned_symbols) == len(symbols):
+                cov = returns_frame[aligned_symbols].cov().fillna(0.0)
+                cov_matrix = cov.to_numpy(dtype=float)
+                diag = np.diag(cov_matrix)
+                avg_var = max(float(np.nanmean(diag)) if diag.size else 0.0, 1e-6)
+                shrunk_cov = cov_matrix * 0.72 + np.eye(len(symbols)) * avg_var * 0.28
+                inv_cov = np.linalg.pinv(shrunk_cov + np.eye(len(symbols)) * max(avg_var * 0.05, 1e-6))
+                vol = np.sqrt(np.clip(np.diag(shrunk_cov), 1e-8, None))
+                corr = np.divide(
+                    shrunk_cov,
+                    np.outer(vol, vol),
+                    out=np.zeros_like(shrunk_cov),
+                    where=np.outer(vol, vol) > 0,
+                )
+                avg_corr = np.clip((corr.sum(axis=1) - 1.0) / max(len(symbols) - 1, 1), 0.0, 0.95)
+                diagnostics.update(
+                    {
+                        "mode": "covariance_shrinkage",
+                        "average_variance": round(avg_var, 8),
+                        "average_correlation": round(float(np.mean(avg_corr)) if len(avg_corr) else 0.0, 4),
+                    }
+                )
+
+                if objective_key == "equal_weight":
+                    raw = np.ones(len(symbols), dtype=float)
+                elif objective_key == "risk_parity":
+                    raw = 1.0 / np.clip(vol, 1e-4, None)
+                elif objective_key == "minimum_variance":
+                    raw = inv_cov @ np.ones(len(symbols), dtype=float)
+                elif objective_key == "maximum_diversification":
+                    raw = (1.0 / np.clip(vol, 1e-4, None)) / (1.0 + avg_corr)
+                else:
+                    mu = np.clip(expected_returns, 0.0, None)
+                    if not np.any(mu > 0):
+                        mu = np.clip(base_weights, 0.0, None)
+                    raw = inv_cov @ (mu + 0.12 * (base_weights / base_weights.sum()))
+                    raw = raw / (1.0 + avg_corr)
+            else:
+                raw = base_weights
+
+        raw = np.clip(raw, 0.0, None)
+        if float(raw.sum()) <= 0:
+            raw = np.clip(base_weights, 0.0, None)
+        weights = self._normalize_weight_vector(raw.tolist(), cap=single_name_cap)
+        weights = self._rebalance_sector_cap(
+            weights=weights,
+            positions=positions,
+            signal_lookup=signal_lookup,
+            sector_cap=max_sector_concentration,
+            single_name_cap=single_name_cap,
+        )
+        diagnostics["sector_cap"] = max_sector_concentration
+        diagnostics["single_name_cap"] = single_name_cap
+        return weights, diagnostics
+
+    def _apply_portfolio_request_overrides(
+        self,
+        portfolio: PortfolioSummary,
+        signals: list[ResearchSignal],
+        *,
+        objective: str | None = None,
+        max_position_weight: float | None = None,
+        max_sector_concentration: float | None = None,
+        esg_floor: float | None = None,
+        preset_name: str | None = None,
+    ) -> PortfolioSummary:
+        def _position_esg_score(position: PortfolioPosition) -> float:
+            signal = signal_lookup.get(position.symbol)
+            if signal is None:
+                return round(float(position.score or 0.0), 2)
+            dimension_scores = [
+                float(signal.e_score or 0.0),
+                float(signal.s_score or 0.0),
+                float(signal.g_score or 0.0),
+            ]
+            if any(score > 0 for score in dimension_scores):
+                return round(sum(dimension_scores) / len(dimension_scores), 2)
+            return round(float(signal.overall_score or 0.0), 2)
+
+        if not portfolio.positions:
+            updated_constraints = dict(portfolio.constraints)
+            if objective:
+                updated_constraints["optimization_objective"] = objective
+            if max_position_weight is not None:
+                updated_constraints["requested_max_single_name_weight"] = round(float(max_position_weight), 4)
+            if max_sector_concentration is not None:
+                updated_constraints["requested_max_sector_concentration"] = round(float(max_sector_concentration), 4)
+            if esg_floor is not None:
+                updated_constraints["esg_floor"] = round(float(esg_floor), 2)
+            if preset_name:
+                updated_constraints["preset_name"] = preset_name
+            return portfolio.model_copy(update={"constraints": updated_constraints})
+
+        signal_lookup = {signal.symbol: signal for signal in signals}
+        filtered_positions = list(portfolio.positions)
+        floor = float(esg_floor) if esg_floor is not None else None
+        floor_relaxed = False
+        achieved_floor = None
+        if floor is not None:
+            filtered_positions = [
+                position
+                for position in filtered_positions
+                if _position_esg_score(position) >= floor
+            ]
+
+        if not filtered_positions:
+            fallback_positions = list(portfolio.positions)
+            if floor is not None and fallback_positions:
+                filtered_positions = fallback_positions
+                achieved_floor = min(_position_esg_score(position) for position in filtered_positions)
+                floor_relaxed = True
+            else:
+                updated_constraints = dict(portfolio.constraints)
+                updated_constraints.update({
+                    "status": "no_trade",
+                    "candidate_mode": "request_filter_rejected_all",
+                    "signal_filter": "request_filter_rejected_all",
+                })
+                if floor is not None:
+                    updated_constraints["esg_floor"] = round(floor, 2)
+                if objective:
+                    updated_constraints["optimization_objective"] = objective
+                if preset_name:
+                    updated_constraints["preset_name"] = preset_name
+                if max_position_weight is not None:
+                    updated_constraints["requested_max_single_name_weight"] = round(float(max_position_weight), 4)
+                if max_sector_concentration is not None:
+                    updated_constraints["requested_max_sector_concentration"] = round(float(max_sector_concentration), 4)
+                return portfolio.model_copy(update={"positions": [], "gross_exposure": 0.0, "net_exposure": 0.0, "expected_alpha": 0.0, "constraints": updated_constraints})
+
+        if floor_relaxed and achieved_floor is None:
+            achieved_floor = min(_position_esg_score(position) for position in filtered_positions)
+
+        if floor_relaxed:
+            updated_constraints = dict(portfolio.constraints)
+            updated_constraints.update({
+                "status": "ready",
+                "candidate_mode": "request_filter_best_effort",
+                "signal_filter": "best_effort_esg_relaxation",
+                "esg_floor_policy": "best_effort",
+                "requested_esg_floor": round(floor or 0.0, 2),
+                "achieved_min_esg_score": round(float(achieved_floor or 0.0), 2),
+                "esg_floor_shortfall": round(max(float(floor or 0.0) - float(achieved_floor or 0.0), 0.0), 2),
+            })
+            if objective:
+                updated_constraints["optimization_objective"] = objective
+            if preset_name:
+                updated_constraints["preset_name"] = preset_name
+            if max_position_weight is not None:
+                updated_constraints["requested_max_single_name_weight"] = round(float(max_position_weight), 4)
+            if max_sector_concentration is not None:
+                updated_constraints["requested_max_sector_concentration"] = round(float(max_sector_concentration), 4)
+        else:
+            updated_constraints = dict(portfolio.constraints)
+
+        objective_key = str(objective or "maximum_sharpe").strip().lower()
+        normalized_weights, allocation_meta = self._allocate_objective_weights(
+            filtered_positions,
+            signal_lookup,
+            objective_key=objective_key,
+            max_position_weight=max_position_weight,
+            max_sector_concentration=max_sector_concentration,
+        )
+        updated_positions: list[PortfolioPosition] = []
+        for position, weight in zip(filtered_positions, normalized_weights):
+            updated_positions.append(
+                position.model_copy(
+                    update={
+                        "weight": round(weight, 4),
+                        "thesis": f"{position.thesis} | Objective {objective_key}" if objective_key else position.thesis,
+                    }
+                )
+            )
+
+        updated_constraints["optimization_objective"] = objective_key
+        if max_position_weight is not None:
+            updated_constraints["max_single_name_weight"] = round(float(max_position_weight), 4)
+        if max_sector_concentration is not None:
+            updated_constraints["max_sector_tilt"] = round(float(max_sector_concentration), 4)
+            updated_constraints["requested_max_sector_concentration"] = round(float(max_sector_concentration), 4)
+        if floor is not None:
+            updated_constraints["esg_floor"] = round(floor, 2)
+        if preset_name:
+            updated_constraints["preset_name"] = preset_name
+
+        updated_constraints["allocator"] = allocation_meta.get("mode", "heuristic")
+        updated_constraints["allocator_history_rows"] = float(allocation_meta.get("history_rows", 0) or 0)
+        if allocation_meta.get("average_correlation") is not None:
+            updated_constraints["allocator_average_correlation"] = float(allocation_meta.get("average_correlation") or 0.0)
+
+        expected_alpha = round(sum(position.weight * position.expected_return for position in updated_positions), 4)
+        gross_exposure = round(sum(position.weight for position in updated_positions), 4)
+        return portfolio.model_copy(
+            update={
+                "positions": updated_positions,
+                "gross_exposure": gross_exposure,
+                "net_exposure": gross_exposure,
+                "expected_alpha": expected_alpha,
+                "constraints": updated_constraints,
+            }
+        )
+
     def optimize_portfolio(
         self,
         universe_symbols: list[str] | None = None,
         benchmark: str | None = None,
         capital_base: float | None = None,
         research_question: str = "",
+        preset_name: str | None = None,
+        objective: str | None = None,
+        max_position_weight: float | None = None,
+        max_sector_concentration: float | None = None,
+        esg_floor: float | None = None,
     ) -> dict[str, Any]:
         benchmark = benchmark or self.default_benchmark
         capital_base = capital_base or self.default_capital
         signals = self._build_signals(self.get_default_universe(universe_symbols), research_question, benchmark)
         portfolio = self._build_portfolio(signals, capital_base, benchmark)
+        portfolio = self._apply_portfolio_request_overrides(
+            portfolio,
+            signals,
+            objective=objective,
+            max_position_weight=max_position_weight,
+            max_sector_concentration=max_sector_concentration,
+            esg_floor=esg_floor,
+            preset_name=preset_name,
+        )
+        signal_lookup = {signal.symbol: signal for signal in signals}
+        holdings = []
+        weighted_volatility = 0.0
+        weighted_esg = 0.0
+        for position in portfolio.positions:
+            signal = signal_lookup.get(position.symbol)
+            weighted_volatility += position.weight * float(
+                signal.predicted_volatility_10d
+                if signal and signal.predicted_volatility_10d is not None
+                else 0.18
+            )
+            weighted_esg += position.weight * float(signal.overall_score if signal else 0.0)
+            holdings.append(
+                {
+                    "symbol": position.symbol,
+                    "company_name": position.company_name,
+                    "sector": signal.sector if signal else "Unknown",
+                    "weight": position.weight,
+                    "expected_return": position.expected_return,
+                    "risk_budget": position.risk_budget,
+                    "score": position.score,
+                    "side": position.side,
+                    "thesis": position.thesis,
+                    "strategy_bucket": position.strategy_bucket,
+                    "decision_score": position.decision_score,
+                    "regime_posture": position.regime_posture,
+                    "execution_tactic": position.execution_tactic,
+                    "expected_fill_probability": position.expected_fill_probability,
+                    "estimated_slippage_bps": position.estimated_slippage_bps,
+                    "estimated_impact_bps": position.estimated_impact_bps,
+                    "esg_score": round(float(signal.overall_score), 2) if signal else None,
+                    "e_score": round(float(signal.e_score), 2) if signal else None,
+                    "s_score": round(float(signal.s_score), 2) if signal else None,
+                    "g_score": round(float(signal.g_score), 2) if signal else None,
+                }
+            )
+        expected_volatility = round(weighted_volatility, 6) if holdings else 0.0
+        sharpe_estimate = round(
+            portfolio.expected_alpha / expected_volatility,
+            6,
+        ) if expected_volatility > 0 else 0.0
 
         record = {
             "optimization_id": f"portfolio-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
             "created_at": _iso_now(),
             "benchmark": benchmark,
+            "request_config": {
+                "preset_name": preset_name,
+                "objective": objective,
+                "max_position_weight": max_position_weight,
+                "max_sector_concentration": max_sector_concentration,
+                "esg_floor": esg_floor,
+            },
             "portfolio": portfolio.model_dump(),
+            "holdings": holdings,
+            "positions": [position.model_dump() for position in portfolio.positions],
+            "expected_return": round(portfolio.expected_alpha, 6),
+            "expected_alpha": round(portfolio.expected_alpha, 6),
+            "expected_volatility": expected_volatility,
+            "sharpe_estimate": sharpe_estimate,
+            "gross_exposure": portfolio.gross_exposure,
+            "net_exposure": portfolio.net_exposure,
+            "turnover_estimate": portfolio.turnover_estimate,
+            "average_esg_score": round(weighted_esg, 4) if holdings else 0.0,
+            "status": portfolio.constraints.get("status", "ready"),
             "signals_used": [_as_dict(signal) for signal in signals[:6]],
             "storage": {},
         }
@@ -1724,6 +2216,36 @@ class QuantSystemService:
             ],
         )
         payload = validation.model_dump()
+        if validation.out_of_sample_sharpe >= 1.0 and validation.overfit_score <= 25 and validation.robustness_score >= 70:
+            recommendation = "GO"
+        elif validation.out_of_sample_sharpe >= 0.5 and validation.overfit_score <= 45:
+            recommendation = "REVIEW"
+        else:
+            recommendation = "NO-GO"
+        payload["recommendation"] = recommendation
+        payload["summary"] = (
+            f"OOS Sharpe {validation.out_of_sample_sharpe:.2f}, "
+            f"overfit score {validation.overfit_score:.1f}, "
+            f"robustness {validation.robustness_score:.1f}."
+        )
+        payload["windows"] = [
+            {
+                "window": index + 1,
+                "in_sample_sharpe": validation.in_sample_sharpe,
+                "out_of_sample_sharpe": window.sharpe,
+            }
+            for index, window in enumerate(validation.walk_forward_windows)
+        ]
+        payload["regime_performance"] = [
+            {
+                "regime": str(window.bucket or window.label).replace("_", " ").title(),
+                "periods": 1,
+                "return": f"{window.cumulative_return * 100:.1f}%",
+                "sharpe": f"{window.sharpe:.2f}",
+                "max_dd": f"-{abs(window.max_drawdown) * 100:.1f}%",
+            }
+            for window in validation.walk_forward_windows
+        ]
         payload["storage"] = self.storage.persist_record("validations", validation.validation_id, payload)
         self._persist_experiment(
             name=strategy_name,
@@ -1837,6 +2359,7 @@ class QuantSystemService:
             impact_bps = position.estimated_impact_bps or self._estimate_order_impact_bps(position, capital_base)
             fill_probability = position.expected_fill_probability or self._estimate_order_fill_probability(
                 position,
+                capital_base=capital_base,
                 slippage_bps=float(slippage_bps),
                 impact_bps=float(impact_bps),
             )
@@ -2740,9 +3263,14 @@ class QuantSystemService:
                 "meta": heartbeat,
             },
             "remote_llm": {
-                "ok": bool(remote_llm.get("configured"))
-                and remote_llm.get("backend_mode") == "remote"
-                and bool(remote_llm.get("reachable")),
+                "ok": (
+                    remote_llm.get("backend_mode") in {"cloud", "auto"}
+                    or (
+                        bool(remote_llm.get("configured"))
+                        and remote_llm.get("backend_mode") == "remote"
+                        and bool(remote_llm.get("reachable"))
+                    )
+                ),
                 "detail": remote_llm.get("base_url") or "REMOTE_LLM_URL not configured",
                 "meta": remote_llm,
             },
@@ -2761,6 +3289,8 @@ class QuantSystemService:
             for item in str(getattr(settings, "API_HEALTHCHECK_REQUIRED_COMPONENTS", "api,quant_scheduler,remote_llm,qdrant")).split(",")
             if item.strip()
         ]
+        if remote_llm.get("backend_mode") in {"cloud", "auto"}:
+            required = [item for item in required if item != "remote_llm"] + ["remote_llm"]
         ready = all(components.get(item, {}).get("ok", False) for item in required)
         return {
             "generated_at": _iso_now(),
@@ -3062,45 +3592,76 @@ class QuantSystemService:
 
     def _estimate_order_slippage_bps(self, position: PortfolioPosition, capital_base: float) -> float:
         base = float(getattr(settings, "EXECUTION_DEFAULT_SLIPPAGE_BPS", 8.0) or 8.0)
-        vol_proxy = _bounded(1.0 - float(position.risk_budget or 0.5), 0.0, 1.0)
-        concentration = float(position.weight)
-        capital_scale = _bounded(capital_base / 1_000_000.0, 0.2, 5.0)
+        order_notional = max(capital_base * max(float(position.weight or 0.0), 0.0), 0.0)
+        snapshot = self._estimate_liquidity_snapshot(position.symbol, order_notional)
+        participation = _bounded(snapshot["participation_rate"], 0.0, 1.5)
+        volatility = _bounded(snapshot["realized_volatility"], 0.06, 0.85)
+        spread = snapshot["spread_proxy_bps"]
+        urgency = {
+            "passive_limit": 0.82,
+            "twap": 0.96,
+            "adaptive": 1.03,
+            "aggressive_market": 1.24,
+        }.get(str(position.execution_tactic or "").lower(), 1.0)
         slippage = (
-            base
-            + float(getattr(settings, "EXECUTION_SLIPPAGE_VOL_MULTIPLIER", 42.0) or 42.0) * vol_proxy * 0.25
-            + 12.0 * concentration
-            + 3.5 * capital_scale
+            spread * 0.45 * urgency
+            + 78.0 * math.sqrt(max(participation, 0.0)) * max(volatility, 0.08)
+            + 10.0 * max(float(position.weight or 0.0), 0.0) * urgency
+            + base * 0.35
         )
-        return round(_bounded(slippage, base * 0.5, 95.0), 2)
+        return round(_bounded(slippage, max(base * 0.5, 2.5), 95.0), 2)
 
     def _estimate_order_impact_bps(self, position: PortfolioPosition, capital_base: float) -> float:
         base = float(getattr(settings, "EXECUTION_DEFAULT_IMPACT_BPS", 5.0) or 5.0)
-        participation = float(position.weight) * max(capital_base, 1.0) / 1_000_000.0
-        vol_proxy = _bounded(1.0 - float(position.risk_budget or 0.5), 0.0, 1.0)
+        order_notional = max(capital_base * max(float(position.weight or 0.0), 0.0), 0.0)
+        snapshot = self._estimate_liquidity_snapshot(position.symbol, order_notional)
+        participation = _bounded(snapshot["participation_rate"], 0.0, 2.0)
+        volatility = _bounded(snapshot["realized_volatility"], 0.06, 0.85)
         impact = (
             base
-            + float(getattr(settings, "EXECUTION_IMPACT_VOL_MULTIPLIER", 28.0) or 28.0) * vol_proxy * 0.2
-            + float(getattr(settings, "EXECUTION_IMPACT_PARTICIPATION_COEFF", 160.0) or 160.0) * participation * 0.1
+            + 95.0 * volatility * math.sqrt(max(participation, 0.0))
+            + 18.0 * participation
+            + 6.5 * max(float(position.weight or 0.0), 0.0)
         )
-        return round(_bounded(impact, base * 0.5, 85.0), 2)
+        if str(position.execution_tactic or "").lower() == "aggressive_market":
+            impact *= 1.18
+        elif str(position.execution_tactic or "").lower() == "passive_limit":
+            impact *= 0.88
+        return round(_bounded(impact, max(base * 0.5, 2.0), 85.0), 2)
 
     def _estimate_order_fill_probability(
         self,
         position: PortfolioPosition,
         *,
+        capital_base: float,
         slippage_bps: float,
         impact_bps: float,
     ) -> float:
         base = float(getattr(settings, "EXECUTION_FILL_PROBABILITY_BASE", 0.72) or 0.72)
         min_fill = float(getattr(settings, "EXECUTION_FILL_PROBABILITY_MIN", 0.08) or 0.08)
         max_fill = float(getattr(settings, "EXECUTION_FILL_PROBABILITY_MAX", 0.98) or 0.98)
-        confidence_bonus = ((float(position.score) / 100.0) - 0.5) * 0.22
-        cost_penalty = (slippage_bps + impact_bps) / 220.0
-        probability = base + confidence_bonus - cost_penalty
-        if str(position.execution_tactic or "").lower() == "passive_limit":
-            probability -= 0.08
-        if str(position.execution_tactic or "").lower() == "aggressive_market":
-            probability += 0.05
+        order_notional = max(capital_base * max(float(position.weight or 0.0), 0.0), 0.0)
+        snapshot = self._estimate_liquidity_snapshot(position.symbol, order_notional)
+        participation = _bounded(snapshot["participation_rate"], 0.0, 2.0)
+        volatility = _bounded(snapshot["realized_volatility"], 0.06, 0.85)
+        confidence_bonus = ((float(position.score) / 100.0) - 0.5) * 0.24
+        urgency = {
+            "passive_limit": -0.18,
+            "twap": -0.05,
+            "adaptive": 0.0,
+            "aggressive_market": 0.10,
+        }.get(str(position.execution_tactic or "").lower(), 0.0)
+        logit = (
+            1.10
+            + confidence_bonus
+            + urgency
+            - 4.4 * math.sqrt(max(participation, 0.0))
+            - 1.65 * volatility
+            - (slippage_bps / 120.0)
+            - (impact_bps / 145.0)
+            + (base - 0.72)
+        )
+        probability = 1.0 / (1.0 + math.exp(-logit))
         return round(_bounded(probability, min_fill, max_fill), 4)
 
     def _select_execution_tactic(self, position: PortfolioPosition) -> str:
@@ -3174,7 +3735,7 @@ class QuantSystemService:
         fill_probability: float | None = None,
         calibrated_confidence: float | None = None,
     ) -> ValidationWindow:
-        drift = portfolio.expected_alpha / max(duration, 20)
+        drift = portfolio.expected_alpha / 252.0
         daily_returns: list[float] = []
         nav = 1.0
         peak = 1.0
@@ -3182,16 +3743,16 @@ class QuantSystemService:
         for step in range(max(20, duration)):
             seed = _stable_seed(strategy_name, portfolio.strategy_name, label, str(step + start_offset))
             cyclical = math.sin((step + start_offset) / 7) * 0.0018
-            idiosyncratic = ((seed % 37) - 18) / 10000
+            idiosyncratic = ((seed % 25) - 12) / 10000
             cost_drag = (portfolio.turnover_estimate * (slippage_bps + impact_cost_bps)) / 1_000_000
             daily_return = drift + cyclical + idiosyncratic - cost_drag
             daily_returns.append(daily_return)
             nav *= 1 + daily_return
             peak = max(peak, nav)
             max_drawdown = max(max_drawdown, 1 - nav / peak)
-        annualized_return = (nav ** (252 / max(1, duration))) - 1
+        annualized_return = _bounded(statistics.mean(daily_returns) * 252 if daily_returns else 0.0, -0.95, 1.5)
         annualized_vol = statistics.pstdev(daily_returns) * math.sqrt(252) if len(daily_returns) > 1 else 0.0
-        sharpe = annualized_return / annualized_vol if annualized_vol else 0.0
+        sharpe = _bounded(annualized_return / annualized_vol if annualized_vol else 0.0, -4.5, 4.5)
         turnover_drag = portfolio.turnover_estimate * (slippage_bps + impact_cost_bps) / 10000
         end_date = date.today() - timedelta(days=start_offset)
         start_date = end_date - timedelta(days=duration)
@@ -3423,6 +3984,7 @@ class QuantSystemService:
             float(getattr(settings, "P2_DECISION_MIN_SCORE", 0.54) or 0.54),
             float(strategy_profile["paper_gate_min_decision_score"]),
         )
+        candidate_status = "ready"
         long_candidates = [
             signal
             for signal in signals
@@ -3432,6 +3994,47 @@ class QuantSystemService:
             and (signal.decision_score is None or signal.decision_score >= decision_floor)
             and (signal.graph_contagion_risk is None or signal.graph_contagion_risk < float(getattr(settings, "P2_GRAPH_CONTAGION_LIMIT", 0.62) or 0.62))
         ][: int(strategy_profile["max_positions"])]
+        if not long_candidates:
+            long_candidates = [
+                signal
+                for signal in signals
+                if signal.action != "short"
+                and signal.overall_score >= 50
+                and (signal.predicted_drawdown_20d is None or signal.predicted_drawdown_20d < 0.32)
+                and (signal.predicted_volatility_10d is None or signal.predicted_volatility_10d < 0.42)
+                and (signal.graph_contagion_risk is None or signal.graph_contagion_risk < 0.78)
+            ][: max(1, min(int(strategy_profile["max_positions"]), 4))]
+            if long_candidates:
+                candidate_status = "watchlist_fallback"
+        if not long_candidates:
+            long_candidates = [
+                signal
+                for signal in signals
+                if signal.action == "neutral"
+                and signal.confidence >= 0.88
+                and signal.overall_score >= 40
+                and (signal.predicted_drawdown_20d is None or signal.predicted_drawdown_20d < 0.36)
+                and (signal.predicted_volatility_10d is None or signal.predicted_volatility_10d < 0.46)
+                and (signal.graph_contagion_risk is None or signal.graph_contagion_risk < 0.82)
+            ][: max(1, min(int(strategy_profile["max_positions"]), 4))]
+            if long_candidates:
+                candidate_status = "confidence_fallback"
+        minimum_target_positions = max(1, min(int(strategy_profile["max_positions"]), 3))
+        if 0 < len(long_candidates) < minimum_target_positions:
+            existing_symbols = {signal.symbol for signal in long_candidates}
+            breadth_candidates = [
+                signal
+                for signal in signals
+                if signal.symbol not in existing_symbols
+                and signal.action != "short"
+                and signal.overall_score >= 48
+                and (signal.predicted_drawdown_20d is None or signal.predicted_drawdown_20d < 0.34)
+                and (signal.predicted_volatility_10d is None or signal.predicted_volatility_10d < 0.45)
+            ]
+            needed = minimum_target_positions - len(long_candidates)
+            if needed > 0 and breadth_candidates:
+                long_candidates.extend(breadth_candidates[:needed])
+                candidate_status = "breadth_fallback"
         if not long_candidates:
             return PortfolioSummary(
                 strategy_name=f"ESG P2 Decision Stack - {strategy_profile['label']}",
@@ -3449,6 +4052,7 @@ class QuantSystemService:
                     "execution_mode": "paper_first",
                     "signal_filter": "long_only",
                     "status": "no_trade",
+                    "candidate_mode": "strict",
                     "regime_overlay": "enabled",
                     "p1_stack": "active" if self.p1_suite.available() else "heuristic",
                     "p2_strategy_selector": active_strategy,
@@ -3596,6 +4200,24 @@ class QuantSystemService:
                 )
             )
 
+        single_name_cap = min(
+            float(strategy_profile["max_single_name_weight"]),
+            float(getattr(settings, "EXECUTION_SINGLE_NAME_WEIGHT_CAP", 0.26) or 0.26),
+        )
+        sector_cap = float(getattr(settings, "PORTFOLIO_DEFAULT_SECTOR_CAP", 0.20) or 0.20)
+        optimized_weights, allocation_meta = self._allocate_objective_weights(
+            positions,
+            {signal.symbol: signal for signal in long_candidates},
+            objective_key="maximum_sharpe",
+            max_position_weight=single_name_cap,
+            max_sector_concentration=sector_cap,
+        )
+        if optimized_weights and len(optimized_weights) == len(positions):
+            positions = [
+                position.model_copy(update={"weight": round(weight, 4)})
+                for position, weight in zip(positions, optimized_weights)
+            ]
+
         total_weight = sum(position.weight for position in positions)
         normalized_positions: list[PortfolioPosition] = []
         for position in positions:
@@ -3609,6 +4231,7 @@ class QuantSystemService:
             impact_bps = self._estimate_order_impact_bps(normalized, capital_base)
             fill_probability = self._estimate_order_fill_probability(
                 normalized,
+                capital_base=capital_base,
                 slippage_bps=slippage_bps,
                 impact_bps=impact_bps,
             )
@@ -3635,14 +4258,25 @@ class QuantSystemService:
             expected_alpha=expected_alpha,
             positions=normalized_positions,
             constraints={
-                "max_single_name_weight": 0.24,
-                "max_sector_tilt": 0.20,
+                "max_single_name_weight": round(single_name_cap, 4),
+                "max_sector_tilt": round(sector_cap, 4),
                 "esg_floor": 60.0,
                 "execution_mode": "paper_first",
+                "candidate_mode": candidate_status,
+                "signal_filter": {
+                    "ready": "long_only",
+                    "watchlist_fallback": "neutral_watchlist_fallback",
+                    "breadth_fallback": "neutral_breadth_fallback",
+                    "confidence_fallback": "high_confidence_neutral_fallback",
+                }.get(candidate_status, "neutral_watchlist_fallback"),
+                "status": candidate_status,
                 "regime_overlay": "enabled",
                 "p1_stack": "active" if self.p1_suite.available() else "heuristic",
                 "p2_strategy_selector": active_strategy,
                 "graph_overlay": "enabled",
+                "allocator": allocation_meta.get("mode", "heuristic"),
+                "allocator_history_rows": float(allocation_meta.get("history_rows", 0) or 0),
+                "allocator_average_correlation": float(allocation_meta.get("average_correlation", 0.0) or 0.0),
                 "decision_min_score": round(decision_floor, 4),
             },
         )

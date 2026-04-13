@@ -91,6 +91,8 @@ def analyze_esg(
 
 @router.post("/agent/esg-score")
 def get_esg_score(req: ESGScoreRequest):
+    if runtime.esg_scorer is None and runtime.data_source_manager is None:
+        runtime.ensure_optional_services()
     if not runtime.esg_scorer:
         raise HTTPException(status_code=503, detail="ESG Scorer not ready")
 

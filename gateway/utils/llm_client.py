@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 import requests
@@ -28,6 +29,7 @@ except Exception:  # pragma: no cover - optional runtime dependency
     PeftModel = None
 
 from gateway.config import settings
+from gateway.utils.cache import get_cache, set_cache
 from gateway.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -47,6 +49,12 @@ _openai_client   = None  # OpenAI 客户端实例
 _deepseek_client = None  # DeepSeek 客户端实例
 _local_fail_count = 0    # 本地模型连续失败计数器（熔断器）
 _remote_fail_count = 0   # 远端 GPU 服务连续失败计数器（熔断器）
+_remote_retry_after = 0.0
+_remote_health_cache = {
+    "checked_at": 0.0,
+    "reachable": None,
+    "detail": "",
+}
 
 def _disable_local_backend(reason: str) -> None:
     """熔断本地模型后端，避免后续请求重复卡在不可用路径。"""
@@ -58,10 +66,71 @@ def _disable_local_backend(reason: str) -> None:
 
 def _disable_remote_backend(reason: str) -> None:
     """熔断远端模型服务，避免每次请求都卡在不可用的网络路径。"""
-    global _remote_fail_count
+    global _remote_fail_count, _remote_retry_after
     if _remote_fail_count < MAX_REMOTE_FAILURES:
         logger.warning(f"[LLM] {reason}")
     _remote_fail_count = MAX_REMOTE_FAILURES
+    cooldown_seconds = max(int(getattr(settings, "REMOTE_LLM_COOLDOWN_SECONDS", 60) or 60), 5)
+    _remote_retry_after = time.time() + cooldown_seconds
+
+
+def _remote_backend_retry_ready() -> bool:
+    global _remote_fail_count
+    if _remote_fail_count < MAX_REMOTE_FAILURES:
+        return True
+    if time.time() >= _remote_retry_after:
+        _remote_fail_count = max(0, MAX_REMOTE_FAILURES - 1)
+        return True
+    return False
+
+
+def _remote_backend_healthy(force: bool = False) -> bool:
+    global _remote_health_cache
+    if not _remote_backend_configured():
+        return False
+
+    ttl_seconds = max(int(getattr(settings, "REMOTE_LLM_HEALTH_TTL_SECONDS", 30) or 30), 1)
+    now = time.time()
+    checked_at = float(_remote_health_cache.get("checked_at") or 0.0)
+    if (
+        not force
+        and checked_at
+        and now - checked_at < ttl_seconds
+        and _remote_health_cache.get("reachable") is not None
+    ):
+        return bool(_remote_health_cache.get("reachable"))
+
+    health_url = f"{settings.REMOTE_LLM_URL.rstrip('/')}/health"
+    timeout_seconds = max(float(getattr(settings, "REMOTE_LLM_HEALTH_TIMEOUT", 2.0) or 2.0), 0.5)
+    reachable = False
+    detail = ""
+    try:
+        response = requests.get(health_url, timeout=timeout_seconds)
+        reachable = response.ok
+        detail = f"status={response.status_code}"
+    except Exception as exc:
+        detail = str(exc)
+
+    _remote_health_cache = {
+        "checked_at": now,
+        "reachable": reachable,
+        "detail": detail[:240],
+    }
+    return reachable
+
+
+def _chat_cache_key(messages: list[dict], temperature: float, max_tokens: int, backend_mode: str) -> str:
+    payload = json.dumps(
+        {
+            "backend_mode": backend_mode,
+            "temperature": round(float(temperature), 4),
+            "max_tokens": int(max_tokens),
+            "messages": messages,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return f"llm_chat::{payload}"
 
 
 def _local_backend_supported() -> bool:
@@ -210,7 +279,10 @@ def _chat_remote(messages: list[dict], max_tokens: int = 1024, temperature: floa
             "temperature": temperature,
         },
         headers=headers,
-        timeout=settings.REMOTE_LLM_TIMEOUT,
+        timeout=(
+            max(float(getattr(settings, "REMOTE_LLM_CONNECT_TIMEOUT", 2.0) or 2.0), 0.5),
+            max(float(getattr(settings, "REMOTE_LLM_TIMEOUT", 180) or 180), 1.0),
+        ),
     )
     response.raise_for_status()
 
@@ -231,7 +303,11 @@ def _get_openai_client() -> OpenAI:
             raise RuntimeError("openai package is not installed")
         if not settings.OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY not set in .env")
-        _openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        _openai_client = OpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            timeout=max(float(getattr(settings, "CLOUD_LLM_TIMEOUT_SECONDS", 20.0) or 20.0), 1.0),
+            max_retries=max(int(getattr(settings, "CLOUD_LLM_MAX_RETRIES", 1) or 1), 0),
+        )
     return _openai_client
 
 
@@ -246,6 +322,8 @@ def _get_deepseek_client() -> OpenAI:
         _deepseek_client = OpenAI(
             api_key=settings.DEEPSEEK_API_KEY,
             base_url="https://api.deepseek.com",
+            timeout=max(float(getattr(settings, "CLOUD_LLM_TIMEOUT_SECONDS", 20.0) or 20.0), 1.0),
+            max_retries=max(int(getattr(settings, "CLOUD_LLM_MAX_RETRIES", 1) or 1), 0),
         )
     return _deepseek_client
 
@@ -566,12 +644,17 @@ def chat(
     allow_local = backend_mode in {"auto", "local"}
     allow_remote = backend_mode == "remote"
     allow_cloud = backend_mode in {"auto", "local", "remote", "cloud"}
+    cache_key = _chat_cache_key(messages, temperature, max_tokens, backend_mode)
+    cached = get_cache(cache_key)
+    if cached:
+        return str(cached)
 
     # ── 1. 本地 LoRA 模型 ────────────────────────────────────────────────
     if allow_local and _local_fail_count < MAX_LOCAL_FAILURES:
         try:
             result = _chat_local(messages, max_new_tokens=max_tokens)
             _local_fail_count = 0   # 成功则重置计数
+            set_cache(cache_key, result, ttl_seconds=getattr(settings, "LLM_RESPONSE_CACHE_TTL_SECONDS", 900))
             return result
         except Exception as e:
             _local_fail_count += 1
@@ -585,21 +668,26 @@ def chat(
 
     # ── 2. 远端 GPU LoRA 服务（仅 remote 模式）───────────────────────────
     if allow_remote and _remote_backend_configured():
-        if _remote_fail_count < MAX_REMOTE_FAILURES:
-            try:
-                result = _chat_remote(messages, max_tokens=max_tokens, temperature=temperature)
-                _remote_fail_count = 0
-                logger.info("[LLM] Response from remote GPU LLM service.")
-                return result
-            except Exception as e:
-                _remote_fail_count += 1
-                logger.warning(
-                    f"[LLM] Remote LLM failed ({_remote_fail_count}/{MAX_REMOTE_FAILURES}): {e}"
-                )
-                if _remote_fail_count >= MAX_REMOTE_FAILURES:
-                    logger.error("[LLM] Remote LLM disabled after repeated failures, switching to cloud API.")
+        if _remote_backend_retry_ready():
+            if not _remote_backend_healthy():
+                _disable_remote_backend("Remote LLM health probe failed; temporarily using fallback backend.")
+            else:
+                try:
+                    result = _chat_remote(messages, max_tokens=max_tokens, temperature=temperature)
+                    _remote_fail_count = 0
+                    set_cache(cache_key, result, ttl_seconds=getattr(settings, "LLM_RESPONSE_CACHE_TTL_SECONDS", 900))
+                    logger.info("[LLM] Response from remote GPU LLM service.")
+                    return result
+                except Exception as e:
+                    _remote_fail_count += 1
+                    logger.warning(
+                        f"[LLM] Remote LLM failed ({_remote_fail_count}/{MAX_REMOTE_FAILURES}): {e}"
+                    )
+                    if _remote_fail_count >= MAX_REMOTE_FAILURES:
+                        _disable_remote_backend("Remote LLM disabled after repeated failures, switching to cloud API.")
         else:
-            logger.debug("[LLM] Remote LLM skipped (too many failures), using cloud API.")
+            retry_after = max(_remote_retry_after - time.time(), 0.0)
+            logger.debug(f"[LLM] Remote LLM circuit open for another {retry_after:.1f}s; using cloud API.")
 
     if not allow_cloud:
         raise RuntimeError(
@@ -620,6 +708,7 @@ def chat(
         try:
             result = backend_func(messages, max_tokens=max_tokens, temperature=temperature)
             logger.info(f"[LLM] Response from {backend_name}.")
+            set_cache(cache_key, result, ttl_seconds=getattr(settings, "LLM_RESPONSE_CACHE_TTL_SECONDS", 900))
             return result
         except Exception as e:
             last_error = e
@@ -630,7 +719,13 @@ def chat(
             logger.warning("[LLM] No live LLM backend configured. Using degraded local fallback.")
         elif last_error is not None:
             logger.warning(f"[LLM] All live LLM backends failed. Using degraded local fallback. Last error: {last_error}")
-        return _chat_degraded(messages, max_tokens=max_tokens, temperature=temperature)
+        result = _chat_degraded(messages, max_tokens=max_tokens, temperature=temperature)
+        set_cache(
+            cache_key,
+            result,
+            ttl_seconds=min(int(getattr(settings, "LLM_RESPONSE_CACHE_TTL_SECONDS", 900) or 900), 300),
+        )
+        return result
 
     if not any_cloud_backend_configured:
         raise RuntimeError(

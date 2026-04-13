@@ -176,3 +176,63 @@ def test_quant_execution_websocket_stream_emits_snapshot():
     assert payload["broker_id"] == "alpaca"
     assert "controls" in payload
     assert "orders" in payload
+
+
+def test_portfolio_optimize_relaxes_unreachable_esg_floor_with_best_effort_holdings():
+    client = TestClient(main_module.app)
+
+    response = client.post(
+        "/api/v1/quant/portfolio/optimize",
+        json={
+            "universe": ["PG", "UNH", "JPM", "MSFT"],
+            "benchmark": "SPY",
+            "capital_base": 500000,
+            "research_question": "Build a resilient ESG-aware quality portfolio.",
+            "preset_name": "Quality Core",
+            "objective": "maximum_sharpe",
+            "max_position_weight": 0.26,
+            "max_sector_concentration": 0.2,
+            "esg_floor": 60,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["portfolio"]
+    assert payload["positions"]
+    assert payload["constraints"]["status"] != "no_trade"
+    assert payload["constraints"]["candidate_mode"] != "request_filter_rejected_all"
+    if payload["constraints"].get("candidate_mode") == "request_filter_best_effort":
+        assert payload["constraints"]["signal_filter"] == "best_effort_esg_relaxation"
+        assert payload["constraints"]["requested_esg_floor"] == 60.0
+        assert payload["constraints"]["achieved_min_esg_score"] < 60.0
+
+
+def test_portfolio_optimize_uses_high_confidence_neutral_fallback_for_large_cap_blend():
+    client = TestClient(main_module.app)
+
+    response = client.post(
+        "/api/v1/quant/portfolio/optimize",
+        json={
+            "universe": ["AAPL", "MSFT", "AMZN", "GOOGL", "META", "BRK.B"],
+            "benchmark": "SPY",
+            "capital_base": 1000000,
+            "research_question": "User journey Large Cap Blend",
+            "preset_name": "Large Cap Blend",
+            "objective": "risk_parity",
+            "max_position_weight": 0.25,
+            "max_sector_concentration": 0.45,
+            "esg_floor": 60,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["portfolio"]
+    assert payload["positions"]
+    assert payload["constraints"]["status"] != "no_trade"
+    assert payload["constraints"]["candidate_mode"] in {
+        "confidence_fallback",
+        "breadth_fallback",
+        "watchlist_fallback",
+        "request_filter_best_effort",
+        "ready",
+    }

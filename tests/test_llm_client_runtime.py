@@ -4,6 +4,11 @@ import json
 from gateway.utils import llm_client
 
 
+def _clear_llm_cache(monkeypatch):
+    monkeypatch.setattr(llm_client, "get_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(llm_client, "set_cache", lambda *_args, **_kwargs: None)
+
+
 def test_local_backend_supported_skips_cpu_only_hosts(monkeypatch):
     monkeypatch.setattr(llm_client, "LOCAL_CKPT", str(Path(__file__)))
     monkeypatch.setattr(llm_client, "_local_fail_count", 0)
@@ -15,6 +20,7 @@ def test_local_backend_supported_skips_cpu_only_hosts(monkeypatch):
 
 def test_chat_remote_uses_configured_service(monkeypatch):
     captured = {}
+    _clear_llm_cache(monkeypatch)
 
     class DummyResponse:
         def raise_for_status(self):
@@ -45,10 +51,11 @@ def test_chat_remote_uses_configured_service(monkeypatch):
     assert captured["url"] == "http://127.0.0.1:8010/chat"
     assert captured["json"]["max_tokens"] == 256
     assert captured["headers"]["Authorization"] == "Bearer secret-token"
-    assert captured["timeout"] == 42
+    assert captured["timeout"] == (2.0, 42.0)
 
 
 def test_chat_prefers_deepseek_before_remote_and_openai_in_auto_mode(monkeypatch):
+    _clear_llm_cache(monkeypatch)
     monkeypatch.setattr(llm_client, "_local_fail_count", llm_client.MAX_LOCAL_FAILURES)
     monkeypatch.setattr(llm_client, "_remote_fail_count", 0)
     monkeypatch.setattr(llm_client.settings, "LLM_BACKEND_MODE", "auto")
@@ -77,6 +84,7 @@ def test_chat_prefers_deepseek_before_remote_and_openai_in_auto_mode(monkeypatch
 
 
 def test_chat_falls_back_to_openai_after_deepseek_failure(monkeypatch):
+    _clear_llm_cache(monkeypatch)
     monkeypatch.setattr(llm_client, "_local_fail_count", llm_client.MAX_LOCAL_FAILURES)
     monkeypatch.setattr(llm_client, "_remote_fail_count", 0)
     monkeypatch.setattr(llm_client.settings, "LLM_BACKEND_MODE", "auto")
@@ -99,10 +107,15 @@ def test_chat_falls_back_to_openai_after_deepseek_failure(monkeypatch):
 
 
 def test_chat_remote_mode_skips_local_backend(monkeypatch):
+    _clear_llm_cache(monkeypatch)
     monkeypatch.setattr(llm_client, "_local_fail_count", 0)
     monkeypatch.setattr(llm_client, "_remote_fail_count", 0)
     monkeypatch.setattr(llm_client.settings, "LLM_BACKEND_MODE", "remote")
     monkeypatch.setattr(llm_client.settings, "REMOTE_LLM_URL", "http://127.0.0.1:8010")
+    monkeypatch.setattr(llm_client, "_remote_backend_retry_ready", lambda: True)
+    monkeypatch.setattr(llm_client, "_remote_backend_healthy", lambda force=False: True)
+    monkeypatch.setattr(llm_client.settings, "DEEPSEEK_API_KEY", "")
+    monkeypatch.setattr(llm_client.settings, "OPENAI_API_KEY", "")
     monkeypatch.setattr(
         llm_client,
         "_chat_local",
@@ -120,6 +133,7 @@ def test_chat_remote_mode_skips_local_backend(monkeypatch):
 
 
 def test_runtime_backend_status_reports_mode(monkeypatch):
+    _clear_llm_cache(monkeypatch)
     monkeypatch.setattr(llm_client.settings, "APP_MODE", "hybrid")
     monkeypatch.setattr(llm_client.settings, "LLM_BACKEND_MODE", "remote")
     monkeypatch.setattr(llm_client.settings, "REMOTE_LLM_URL", "http://127.0.0.1:8010")
@@ -137,6 +151,7 @@ def test_runtime_backend_status_reports_mode(monkeypatch):
 
 
 def test_chat_uses_degraded_fallback_when_no_live_backends(monkeypatch):
+    _clear_llm_cache(monkeypatch)
     monkeypatch.setattr(llm_client, "_local_fail_count", llm_client.MAX_LOCAL_FAILURES)
     monkeypatch.setattr(llm_client, "_remote_fail_count", llm_client.MAX_REMOTE_FAILURES)
     monkeypatch.setattr(llm_client.settings, "APP_MODE", "local")

@@ -230,6 +230,7 @@ function mockReport(type, companies, id, title) {
 /* ── Render Report ── */
 function renderReport(container, report) {
   const analyses = report.company_analyses || report.data?.company_analyses || [];
+  const evidenceSummary = report.evidence_summary || report.data?.evidence_summary || null;
   const toolbar = container.querySelector('#report-toolbar');
   toolbar.style.display = 'flex';
   container.querySelector('#report-toolbar-title').textContent = report.title || 'Report';
@@ -239,11 +240,11 @@ function renderReport(container, report) {
       <td style="font-weight:600;color:var(--text-primary)">${a.company_name || a.company || '—'}</td>
       <td style="font-family:var(--f-mono);font-size:11px">${a.ticker || '—'}</td>
       <td class="cell-num" style="color:${scoreColor(a.esg_score)};font-weight:700">${a.esg_score != null ? Number(a.esg_score).toFixed(1) : '—'}</td>
-      <td class="cell-num" style="color:var(--green)">${a.environment || '—'}</td>
-      <td class="cell-num" style="color:var(--cyan)">${a.social || '—'}</td>
-      <td class="cell-num" style="color:var(--purple)">${a.governance || '—'}</td>
-      <td class="cell-num ${(a.change_3m||'0').startsWith('-')?'neg':'pos'}">${a.change_3m ? (a.change_3m.startsWith('+')||a.change_3m.startsWith('-')?'':'+') + a.change_3m + ' pts' : '—'}</td>
-      <td><span class="badge badge-${a.recommendation==='BUY'?'filled':a.recommendation==='SELL'?'failed':'neutral'}" style="font-size:9px">${a.recommendation||'—'}</span></td>
+      <td class="cell-num" style="color:var(--green)">${metricValue(a, 'environment', 'e_score')}</td>
+      <td class="cell-num" style="color:var(--cyan)">${metricValue(a, 'social', 's_score')}</td>
+      <td class="cell-num" style="color:var(--purple)">${metricValue(a, 'governance', 'g_score')}</td>
+      <td class="cell-num ${(String(a.change_3m||'0')).startsWith('-')?'neg':'pos'}">${formatChange(a.change_3m)}</td>
+      <td><span class="badge badge-${signalTone(a)}" style="font-size:9px">${signalLabel(a)}</span></td>
     </tr>`).join('');
 
   container.querySelector('#report-body').innerHTML = `
@@ -271,10 +272,25 @@ function renderReport(container, report) {
       </div>` : ''}
 
       <!-- Summary -->
-      ${report.summary ? `
+      ${(report.executive_summary || report.summary) ? `
       <div style="background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:8px;padding:14px 16px">
         <div style="font-size:9px;color:var(--green);font-family:var(--f-mono);letter-spacing:0.1em;margin-bottom:6px">EXECUTIVE SUMMARY</div>
-        <div style="font-size:12px;color:var(--text-secondary);line-height:1.65">${report.summary}</div>
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.65">${report.executive_summary || report.summary}</div>
+      </div>` : ''}
+
+      ${evidenceSummary ? `
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+        ${[
+          ['Grounded', evidenceSummary.grounded_companies ?? '—', 'company analyses with strong citation coverage'],
+          ['Coverage', evidenceSummary.total_companies ?? analyses.length ?? '—', 'companies assessed in this report'],
+          ['Citations', evidenceSummary.citation_count ?? '—', 'ranked supporting excerpts'],
+          ['Verifier', formatRatio(evidenceSummary.average_grounding_confidence), evidenceSummary.verification_mode || 'deterministic citation overlap'],
+        ].map(([label, value, hint]) => `
+          <div style="background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px">
+            <div style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono);letter-spacing:0.1em;text-transform:uppercase">${label}</div>
+            <div style="font-size:16px;color:var(--text-primary);font-family:var(--f-display);margin-top:6px">${value}</div>
+            <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.45">${hint}</div>
+          </div>`).join('')}
       </div>` : ''}
 
       <!-- Company Analysis Table -->
@@ -286,6 +302,8 @@ function renderReport(container, report) {
           <tbody>${rows}</tbody>
         </table></div>
       </div>` : ''}
+
+      ${renderGrounding(analyses)}
 
       <!-- Top Signals -->
       ${report.top_signals?.length ? `
@@ -314,4 +332,76 @@ function renderReport(container, report) {
 
 function scoreColor(v) {
   return v >= 70 ? 'var(--green)' : v >= 50 ? 'var(--amber)' : 'var(--red)';
+}
+
+function metricValue(row, directKey, metricKey) {
+  const raw = row?.[directKey] ?? row?.key_metrics?.[metricKey];
+  return raw == null ? '—' : Number(raw).toFixed(1);
+}
+
+function formatChange(value) {
+  if (value == null || value === '') return '—';
+  const text = String(value);
+  if (text === '0') return '0.0 pts';
+  const signed = text.startsWith('+') || text.startsWith('-') ? text : `+${text}`;
+  return `${signed} pts`;
+}
+
+function signalLabel(row) {
+  return row?.recommendation || row?.grounding_status?.toUpperCase() || 'HOLD';
+}
+
+function signalTone(row) {
+  const label = String(signalLabel(row)).toUpperCase();
+  if (label === 'BUY' || label === 'GROUNDED') return 'filled';
+  if (label === 'SELL' || label === 'WEAK') return 'failed';
+  return 'neutral';
+}
+
+function formatRatio(value) {
+  if (value == null || value === '') return '—';
+  return `${(Number(value) * 100).toFixed(0)}%`;
+}
+
+function renderGrounding(analyses) {
+  const grounded = (analyses || []).filter(a => (a.citations || []).length);
+  if (!grounded.length) return '';
+  return `
+    <div>
+      <div style="font-size:9px;color:var(--cyan);letter-spacing:0.12em;font-family:var(--f-display);font-weight:700;margin-bottom:8px">GROUNDING & CITATIONS</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        ${grounded.map(analysis => `
+          <div style="background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;padding:14px 16px">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+              <div>
+                <div style="font-size:13px;color:var(--text-primary);font-weight:700">${analysis.company_name}${analysis.ticker ? ` · ${analysis.ticker}` : ''}</div>
+                <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.55">${analysis.verified_summary || analysis.summary || ''}</div>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+                <span class="badge badge-${signalTone(analysis)}">${(analysis.grounding_status || 'partial').toUpperCase()}</span>
+                <span class="badge badge-neutral">${formatRatio(analysis.grounding_confidence)}</span>
+              </div>
+            </div>
+            ${analysis.verification_notes?.length ? `
+              <div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(255,179,0,0.06);border:1px solid rgba(255,179,0,0.14);font-size:10px;color:var(--text-dim);line-height:1.5">
+                ${analysis.verification_notes.join(' · ')}
+              </div>` : ''}
+            <div style="margin-top:12px;display:grid;gap:8px">
+              ${(analysis.citations || []).map((citation, idx) => `
+                <div style="padding:10px 12px;border-radius:7px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05)">
+                  <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+                    <div style="font-size:10px;color:var(--text-primary);font-weight:600">${idx + 1}. ${citation.source || citation.label || 'Source'}</div>
+                    <div style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">${citation.source_type || 'evidence'} · ${citation.relevance != null ? citation.relevance.toFixed(2) : 'n/a'}</div>
+                  </div>
+                  <div style="margin-top:6px;font-size:10px;color:var(--text-dim);line-height:1.6">${citation.snippet || ''}</div>
+                  ${(citation.url || citation.filed_at) ? `
+                    <div style="margin-top:6px;font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">
+                      ${citation.filed_at ? `date: ${citation.filed_at}` : ''}
+                      ${citation.url ? `${citation.filed_at ? ' · ' : ''}<a href="${citation.url}" target="_blank" rel="noreferrer" style="color:var(--cyan)">source</a>` : ''}
+                    </div>` : ''}
+                </div>`).join('')}
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`;
 }

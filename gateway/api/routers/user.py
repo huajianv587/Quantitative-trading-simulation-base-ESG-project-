@@ -14,6 +14,7 @@ router = APIRouter()
 
 @router.post("/user/reports/subscribe")
 def subscribe_reports(req: UserReportSubscribeRequest, user_id: str = "user_123"):
+    runtime.ensure_optional_services(start_scheduler=True)
     if not runtime.report_scheduler or runtime.ReportSubscription is None:
         raise HTTPException(status_code=503, detail="Report Scheduler not ready")
 

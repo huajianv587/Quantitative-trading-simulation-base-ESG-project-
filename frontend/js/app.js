@@ -41,13 +41,14 @@ function buildTopbarActions() {
   const lang = getLang();
   const user = getAuthUser();
   const theme = getTheme();
+  const zhLabel = lang === 'en' ? 'CH' : '中';
   actions.innerHTML = `
     <!-- Theme toggle -->
     <button class="theme-toggle" id="theme-toggle-btn" title="Toggle light/dark mode">${theme === 'light' ? '🌙' : '☀'}</button>
     <!-- Language toggle -->
-    <div class="topbar-lang-toggle">
-      <button class="lang-btn${lang==='zh'?' active':''}" id="tb-lang-zh" data-lang="zh">中</button>
-      <button class="lang-btn${lang==='en'?' active':''}" id="tb-lang-en" data-lang="en">EN</button>
+    <div class="topbar-lang-toggle" data-no-autotranslate="true" translate="no">
+      <button class="lang-btn${lang==='zh'?' active':''}" id="tb-lang-zh" data-lang="zh" data-no-autotranslate="true" translate="no">${zhLabel}</button>
+      <button class="lang-btn${lang==='en'?' active':''}" id="tb-lang-en" data-lang="en" data-no-autotranslate="true" translate="no">EN</button>
     </div>
     ${user ? `
     <!-- User menu (authenticated) -->

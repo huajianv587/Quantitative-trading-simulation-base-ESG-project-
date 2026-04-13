@@ -6,10 +6,13 @@
 
 import json
 import re
+import requests
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
+from gateway.config import settings
 from gateway.utils.llm_client import chat
+from gateway.utils.cache import get_cache, set_cache
 from gateway.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -211,9 +214,40 @@ class ESGScoringFramework:
         self.llm_model = llm_model
         self.metrics_cache = {}
 
+    def _live_llm_ready(self) -> bool:
+        backend_mode = str(getattr(settings, "LLM_BACKEND_MODE", "auto") or "auto").strip().lower()
+        if backend_mode != "remote":
+            return True
+
+        base_url = str(getattr(settings, "REMOTE_LLM_URL", "") or "").strip()
+        if not base_url:
+            return False
+
+        cache_key = f"esg_remote_health::{base_url.rstrip('/')}"
+        cached = get_cache(cache_key)
+        if cached is not None:
+            return bool(cached)
+
+        try:
+            response = requests.get(
+                f"{base_url.rstrip('/')}/health",
+                timeout=max(float(getattr(settings, "REMOTE_LLM_HEALTH_TIMEOUT", 2.0) or 2.0), 0.5),
+            )
+            ready = response.ok
+        except Exception:
+            ready = False
+
+        set_cache(
+            cache_key,
+            ready,
+            ttl_seconds=max(int(getattr(settings, "REMOTE_LLM_HEALTH_TTL_SECONDS", 30) or 30), 5),
+        )
+        return ready
+
     def score_esg(self, company_name: str, esg_data: Dict[str, Any],
                   peers: Optional[List[str]] = None,
-                  include_history: bool = False) -> ESGScoreReport:
+                  include_history: bool = False,
+                  prefer_fast_mode: bool = False) -> ESGScoreReport:
         """
         生成完整的ESG评分报告
 
@@ -227,26 +261,64 @@ class ESGScoringFramework:
             ESGScoreReport: 完整的评分报告
         """
         logger.info(f"[ESGScorer] Starting ESG scoring for {company_name}")
+        cache_key = json.dumps(
+            {
+                "company": company_name,
+                "peers": peers or [],
+                "include_history": include_history,
+                "payload": esg_data,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        cached = self.metrics_cache.get(cache_key) or get_cache(f"esg_score::{cache_key}")
+        if cached:
+            if isinstance(cached, ESGScoreReport):
+                return cached
+            try:
+                report = ESGScoreReport.model_validate(cached)
+                self.metrics_cache[cache_key] = report
+                return report
+            except Exception:
+                pass
 
         try:
             # 准备用于LLM的数据摘要
             data_summary = self._prepare_data_summary(company_name, esg_data, peers)
 
             # 调用LLM进行评分
-            raw_response = chat(
+            try:
+                backend_mode = str(getattr(settings, "LLM_BACKEND_MODE", "auto") or "auto").strip().lower()
+                if prefer_fast_mode and backend_mode == "cloud":
+                    raise RuntimeError("Fast-mode report scoring prefers deterministic structured fallback in cloud mode")
+                if not self._live_llm_ready():
+                    raise RuntimeError("Remote ESG LLM service is unavailable")
+                raw_response = chat(
                 messages=[
                     {"role": "system", "content": self.SYSTEM_PROMPT},
                     {"role": "user", "content": data_summary}
                 ],
-                temperature=0.3,
-                max_tokens=2000
+                temperature=0.2,
+                max_tokens=800
             )
 
             # 解析JSON响应
-            scores_data = self._parse_llm_response(raw_response, company_name, esg_data)
+                scores_data = self._parse_llm_response(raw_response, company_name, esg_data)
+            except Exception as exc:
+                logger.warning(f"[ESGScorer] LLM unavailable, using heuristic fallback for {company_name}: {exc}")
+                scores_data = self._build_fallback_scores(
+                    company_name,
+                    esg_data,
+                    f"LLM unavailable: {exc}",
+                )
 
             # 构建报告对象
             report = self._build_report(company_name, esg_data, scores_data)
+            if len(self.metrics_cache) >= 128:
+                self.metrics_cache.pop(next(iter(self.metrics_cache)))
+            self.metrics_cache[cache_key] = report
+            set_cache(f"esg_score::{cache_key}", report.model_dump(mode="json"), ttl_hours=6)
 
             logger.info(f"[ESGScorer] Completed ESG scoring: {company_name} score={report.overall_score}")
             return report
@@ -290,14 +362,31 @@ class ESGScoringFramework:
             return "无数据"
 
         lines = []
-        for key, value in data.items():
+        for index, (key, value) in enumerate(data.items()):
+            if index >= 8:
+                lines.append("  - ... additional structured fields omitted for latency control")
+                break
             if isinstance(value, dict):
                 lines.append(f"  {key}:")
-                for k, v in value.items():
-                    lines.append(f"    - {k}: {v}")
+                for nested_index, (k, v) in enumerate(value.items()):
+                    if nested_index >= 4:
+                        lines.append("    - ...")
+                        break
+                    lines.append(f"    - {k}: {self._truncate_value(v)}")
+            elif isinstance(value, list):
+                preview = ", ".join(self._truncate_value(item) for item in value[:3])
+                lines.append(f"  - {key}: [{preview}{', ...' if len(value) > 3 else ''}]")
             else:
-                lines.append(f"  - {key}: {value}")
+                lines.append(f"  - {key}: {self._truncate_value(value)}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _truncate_value(value: Any, max_chars: int = 120) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if len(text) <= max_chars:
+            return text
+        shortened = text[:max_chars].rsplit(" ", 1)[0].strip()
+        return f"{shortened or text[:max_chars].strip()}..."
 
     def _parse_llm_response(self, response: str, company_name: str, esg_data: Dict[str, Any]) -> Dict[str, Any]:
         """解析LLM返回的JSON，必要时退化为启发式结构化结果"""

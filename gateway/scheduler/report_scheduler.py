@@ -260,22 +260,50 @@ class ReportScheduler:
         """将报告保存到数据库"""
         report_id = str(uuid.uuid4())
         report_payload = report.model_dump(mode="json") if hasattr(report, "model_dump") else report.dict()
+        period_start = report.period_start.isoformat()
+        period_end = report.period_end.isoformat()
+        persisted_payload = {
+            "report_type": report.report_type,
+            "title": report.title,
+            "period_start": period_start,
+            "period_end": period_end,
+            "data": report_payload,
+            "generated_at": datetime.now().isoformat(),
+        }
 
         try:
             supabase_client.table("esg_reports").insert({
                 "id": report_id,
-                "report_type": report.report_type,
-                "title": report.title,
-                "period_start": report.period_start.isoformat(),
-                "period_end": report.period_end.isoformat(),
-                "data": report_payload,
-                "generated_at": datetime.now().isoformat(),
+                **persisted_payload,
             }).execute()
 
             logger.info(f"[ReportScheduler] Report {report_id} saved to database")
             return report_id
 
         except Exception as e:
+            error_text = str(e).lower()
+            if "duplicate key" in error_text or "unique constraint" in error_text:
+                try:
+                    existing_rows = (
+                        supabase_client.table("esg_reports")
+                        .select("id")
+                        .eq("report_type", report.report_type)
+                        .eq("period_start", period_start)
+                        .eq("period_end", period_end)
+                        .limit(1)
+                        .execute()
+                        .data
+                    )
+                    if existing_rows:
+                        existing_id = str(existing_rows[0]["id"])
+                        try:
+                            supabase_client.table("esg_reports").update(persisted_payload).eq("id", existing_id).execute()
+                        except Exception as update_exc:
+                            logger.warning(f"[ReportScheduler] Duplicate report update skipped: {update_exc}")
+                        logger.info(f"[ReportScheduler] Reused existing report {existing_id} for identical period payload")
+                        return existing_id
+                except Exception as lookup_exc:
+                    logger.warning(f"[ReportScheduler] Duplicate report lookup failed: {lookup_exc}")
             logger.error(f"[ReportScheduler] Error saving report: {e}")
             raise
 

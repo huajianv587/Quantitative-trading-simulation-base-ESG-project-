@@ -49,6 +49,83 @@ class RuntimeContext:
     report_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     sync_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    def _ensure_runtime_service(
+        self,
+        *,
+        instance_attr: str,
+        class_attr: str,
+        label: str,
+        post_init: Any | None = None,
+    ) -> Any:
+        existing = getattr(self, instance_attr, None)
+        if existing is not None:
+            return existing
+
+        cls = getattr(self, class_attr, None)
+        if cls is None:
+            return None
+
+        try:
+            instance = cls()
+            if post_init is not None:
+                post_init(instance)
+            setattr(self, instance_attr, instance)
+            logger.info(f"[Runtime] {label} initialized")
+            return instance
+        except Exception as exc:
+            logger.warning(f"[Runtime] {label} init failed: {exc}")
+            return None
+
+    def ensure_optional_services(self, *, start_scheduler: bool = False) -> dict[str, bool]:
+        scorer = self._ensure_runtime_service(
+            instance_attr="esg_scorer",
+            class_attr="ESGScoringFramework",
+            label="ESG Scorer",
+        )
+        visualizer = self._ensure_runtime_service(
+            instance_attr="esg_visualizer",
+            class_attr="ESGVisualizer",
+            label="ESG Visualizer",
+        )
+        data_source_manager = self._ensure_runtime_service(
+            instance_attr="data_source_manager",
+            class_attr="DataSourceManager",
+            label="Data Source Manager",
+        )
+        report_generator = self._ensure_runtime_service(
+            instance_attr="report_generator",
+            class_attr="ESGReportGenerator",
+            label="Report Generator",
+        )
+
+        report_scheduler = getattr(self, "report_scheduler", None)
+        if report_scheduler is None:
+            report_scheduler = self._ensure_runtime_service(
+                instance_attr="report_scheduler",
+                class_attr="ReportScheduler",
+                label="Report Scheduler",
+            )
+
+        if (
+            start_scheduler
+            and report_scheduler is not None
+            and hasattr(report_scheduler, "start_background_scheduler")
+            and not bool(getattr(report_scheduler, "is_running", False))
+        ):
+            try:
+                report_scheduler.start_background_scheduler()
+                logger.info("[Runtime] Report Scheduler background loop started")
+            except Exception as exc:
+                logger.warning(f"[Runtime] Report Scheduler start failed: {exc}")
+
+        return {
+            "esg_scorer": scorer is not None,
+            "esg_visualizer": visualizer is not None,
+            "data_source_manager": data_source_manager is not None,
+            "report_generator": report_generator is not None,
+            "report_scheduler": report_scheduler is not None,
+        }
+
     def ensure_session(self, session_id: str, user_id: Optional[str] = None) -> None:
         if session_id and self.create_session is not None:
             try:
@@ -247,41 +324,7 @@ class RuntimeContext:
             else:
                 logger.warning("[Startup] RAG engine skipped (module not available)")
 
-        if self.esg_scorer is None and self.ESGScoringFramework is not None:
-            try:
-                self.esg_scorer = self.ESGScoringFramework()
-                logger.info("[Startup] ESG Scorer initialized")
-            except Exception as exc:
-                logger.warning(f"[Startup] ESG Scorer failed: {exc}")
-
-        if self.esg_visualizer is None and self.ESGVisualizer is not None:
-            try:
-                self.esg_visualizer = self.ESGVisualizer()
-                logger.info("[Startup] ESG Visualizer initialized")
-            except Exception as exc:
-                logger.warning(f"[Startup] ESG Visualizer failed: {exc}")
-
-        if self.data_source_manager is None and self.DataSourceManager is not None:
-            try:
-                self.data_source_manager = self.DataSourceManager()
-                logger.info("[Startup] Data Source Manager initialized")
-            except Exception as exc:
-                logger.warning(f"[Startup] Data Source Manager failed: {exc}")
-
-        if self.report_generator is None and self.ESGReportGenerator is not None:
-            try:
-                self.report_generator = self.ESGReportGenerator()
-                logger.info("[Startup] Report Generator initialized")
-            except Exception as exc:
-                logger.warning(f"[Startup] Report Generator failed: {exc}")
-
-        if self.report_scheduler is None and self.ReportScheduler is not None:
-            try:
-                self.report_scheduler = self.ReportScheduler()
-                self.report_scheduler.start_background_scheduler()
-                logger.info("[Startup] Report Scheduler started")
-            except Exception as exc:
-                logger.warning(f"[Startup] Report Scheduler failed: {exc}")
+        self.ensure_optional_services(start_scheduler=True)
 
         logger.info("[Startup] All modules initialized successfully")
 

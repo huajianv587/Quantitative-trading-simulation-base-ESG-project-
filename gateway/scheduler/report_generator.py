@@ -2,15 +2,40 @@
 # 职责：根据收集的数据和评分结果，生成日/周/月ESG报告
 
 import json
+import importlib.util
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from gateway.utils.llm_client import chat
+from gateway.utils.cache import get_cache, set_cache
 from gateway.utils.logger import get_logger
 from gateway.agents.esg_scorer import ESGScoringFramework, ESGScoreReport
 from gateway.agents.esg_visualizer import ESGVisualizer
+from gateway.rag.indexer import index_ready
+from gateway.rag.rag_main import get_query_engine
 
 logger = get_logger(__name__)
+GROUNDING_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "into",
+    "have",
+    "has",
+    "been",
+    "were",
+    "will",
+    "about",
+    "company",
+    "group",
+    "report",
+    "esg",
+}
 
 
 # ── 报告数据模型 ──────────────────────────────────────────────────────────
@@ -48,6 +73,11 @@ class CompanyAnalysis(BaseModel):
     summary: str
     key_metrics: Dict[str, Any]
     peer_rank: Optional[str] = None
+    grounding_status: Optional[str] = None
+    grounding_confidence: Optional[float] = None
+    verified_summary: Optional[str] = None
+    verification_notes: List[str] = Field(default_factory=list)
+    citations: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ESGReport(BaseModel):
@@ -74,6 +104,7 @@ class ESGReport(BaseModel):
     generated_at: datetime
     data_sources: List[str]
     confidence_score: float
+    evidence_summary: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ── 报告生成器 ─────────────────────────────────────────────────────────────
@@ -99,6 +130,359 @@ class ESGReportGenerator:
         """初始化报告生成器"""
         self.scorer = ESGScoringFramework()
         self.visualizer = ESGVisualizer()
+        self.report_cache_ttl_seconds = 900
+
+    def _report_cache_key(self, report_type: str, companies: List[str]) -> str:
+        normalized_companies = sorted(str(company).strip().upper() for company in companies if str(company).strip())
+        bucket = datetime.utcnow().strftime("%Y-%m-%d")
+        return f"esg_report::{report_type}::{bucket}::{','.join(normalized_companies)}"
+
+    def _load_cached_report(self, report_type: str, companies: List[str]) -> Optional[ESGReport]:
+        cached = get_cache(self._report_cache_key(report_type, companies))
+        if not cached:
+            return None
+        try:
+            return ESGReport.model_validate(cached)
+        except Exception:
+            return None
+
+    def _store_cached_report(self, report: ESGReport, companies: List[str]) -> None:
+        key = self._report_cache_key(report.report_type, companies)
+        set_cache(
+            key,
+            report.model_dump(mode="json"),
+            ttl_seconds=max(int(getattr(self, "report_cache_ttl_seconds", 900) or 900), 60),
+        )
+
+    @staticmethod
+    def _clip_text(text: str, max_chars: int = 220) -> str:
+        clean = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(clean) <= max_chars:
+            return clean
+        shortened = clean[:max_chars].rsplit(" ", 1)[0].strip()
+        return f"{shortened or clean[:max_chars].strip()}..."
+
+    @staticmethod
+    def _keyword_set(text: str) -> set[str]:
+        return {
+            token.lower()
+            for token in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{3,}", str(text or ""))
+            if token.lower() not in GROUNDING_STOPWORDS
+        }
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _grounding_cache_key(self, report_type: str, company_name: str, ticker: Optional[str]) -> str:
+        return (
+            f"esg_report_grounding::{report_type}::"
+            f"{str(company_name or '').strip().lower()}::{str(ticker or '').strip().upper()}"
+        )
+
+    @staticmethod
+    def _extract_node_content(node: Any) -> tuple[str, dict[str, Any], float]:
+        score = 0.0
+        metadata: dict[str, Any] = {}
+        if hasattr(node, "score"):
+            score = ESGReportGenerator._safe_float(getattr(node, "score"), 0.0)
+
+        candidate = getattr(node, "node", node)
+        if hasattr(candidate, "metadata") and isinstance(candidate.metadata, dict):
+            metadata = dict(candidate.metadata)
+        elif hasattr(node, "metadata") and isinstance(node.metadata, dict):
+            metadata = dict(node.metadata)
+
+        if hasattr(candidate, "get_content"):
+            content = candidate.get_content()
+        elif hasattr(node, "get_content"):
+            content = node.get_content()
+        else:
+            content = str(node)
+        return str(content or ""), metadata, score
+
+    @staticmethod
+    def _infer_source_type(source: str) -> str:
+        lower = str(source or "").lower()
+        if "sec" in lower:
+            return "sec_filing"
+        if "news" in lower or "finnhub" in lower:
+            return "news"
+        if "scheduler" in lower:
+            return "event"
+        if lower:
+            return "rag_doc"
+        return "unknown"
+
+    def _collect_rag_citations(
+        self,
+        *,
+        company_name: str,
+        ticker: Optional[str],
+        report_type: str,
+    ) -> List[Dict[str, Any]]:
+        if importlib.util.find_spec("qdrant_client") is None:
+            return []
+        if not index_ready():
+            return []
+        query = f"{company_name} {ticker or ''} {report_type} ESG governance environmental social controversies"
+        try:
+            response = get_query_engine().query(query)
+        except Exception as exc:
+            logger.warning(f"[ReportGenerator] Grounding retrieval failed for {company_name}: {exc}")
+            return []
+
+        citations: List[Dict[str, Any]] = []
+        for index, node in enumerate(getattr(response, "source_nodes", []) or []):
+            content, metadata, score = self._extract_node_content(node)
+            if not content:
+                continue
+            source = (
+                metadata.get("source")
+                or metadata.get("file_name")
+                or metadata.get("path")
+                or metadata.get("doc_id")
+                or f"RAG chunk {index + 1}"
+            )
+            citations.append(
+                {
+                    "label": "retrieval",
+                    "source": source,
+                    "source_type": self._infer_source_type(str(source)),
+                    "snippet": self._clip_text(content, 260),
+                    "url": metadata.get("url") or metadata.get("source_url"),
+                    "filed_at": metadata.get("created_at") or metadata.get("date"),
+                    "base_score": round(score, 6),
+                }
+            )
+        return citations
+
+    def _rerank_citations(
+        self,
+        *,
+        company_name: str,
+        ticker: Optional[str],
+        summary: str,
+        citations: List[Dict[str, Any]],
+        limit: int = 4,
+    ) -> List[Dict[str, Any]]:
+        if not citations:
+            return []
+
+        company_terms = self._keyword_set(f"{company_name} {ticker or ''}")
+        summary_terms = self._keyword_set(summary)
+        ranked: List[Dict[str, Any]] = []
+        for item in citations:
+            snippet = str(item.get("snippet") or "")
+            source = str(item.get("source") or "")
+            text_terms = self._keyword_set(f"{snippet} {source}")
+            company_overlap = len(company_terms & text_terms)
+            summary_overlap = len(summary_terms & text_terms)
+            score = self._safe_float(item.get("base_score"), 0.0)
+            score += company_overlap * 1.4
+            score += summary_overlap * 0.8
+            if company_name.lower() in snippet.lower():
+                score += 0.75
+            if ticker and ticker.lower() in snippet.lower():
+                score += 0.45
+            if item.get("source_type") == "sec_filing":
+                score += 0.55
+            if item.get("source_type") == "news":
+                score += 0.30
+            ranked.append({**item, "relevance": round(score, 4)})
+
+        ranked.sort(key=lambda item: item.get("relevance", 0.0), reverse=True)
+        return ranked[:limit]
+
+    def _verify_citations(self, summary: str, citations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not summary:
+            return {
+                "status": "missing",
+                "confidence": 0.0,
+                "notes": ["No summary was available for citation verification."],
+                "verified_summary": "",
+            }
+        if not citations:
+            return {
+                "status": "missing",
+                "confidence": 0.0,
+                "notes": ["No citations were retrieved for this analysis."],
+                "verified_summary": summary,
+            }
+
+        citation_terms = self._keyword_set(" ".join(str(item.get("snippet") or "") for item in citations))
+        sentences = [item.strip() for item in re.split(r"(?<=[.!?。；;])\s+", summary) if item.strip()]
+        coverage_scores: List[float] = []
+        notes: List[str] = []
+        for sentence in sentences or [summary]:
+            lowered = sentence.lower()
+            if "screens at" in lowered or "/100" in lowered or "esg trend" in lowered:
+                continue
+            keywords = self._keyword_set(sentence)
+            if not keywords:
+                continue
+            overlap = len(keywords & citation_terms)
+            coverage = overlap / max(len(keywords), 1)
+            coverage_scores.append(coverage)
+            if coverage < 0.45:
+                notes.append(f"Weak citation coverage for: {self._clip_text(sentence, 90)}")
+
+        confidence = round(sum(coverage_scores) / max(len(coverage_scores), 1), 4)
+        if confidence >= 0.65:
+            status = "grounded"
+        elif confidence >= 0.4:
+            status = "partial"
+        else:
+            status = "weak"
+
+        return {
+            "status": status,
+            "confidence": confidence,
+            "notes": notes,
+            "verified_summary": summary,
+        }
+
+    def _build_grounding_bundle(
+        self,
+        *,
+        company_name: str,
+        ticker: Optional[str],
+        report_type: str,
+        summary: str,
+        company_data: Any,
+    ) -> Dict[str, Any]:
+        cache_key = self._grounding_cache_key(report_type, company_name, ticker)
+        cached = get_cache(cache_key)
+        if isinstance(cached, dict):
+            return cached
+
+        candidates: List[Dict[str, Any]] = []
+        candidates.extend(self._collect_rag_citations(company_name=company_name, ticker=ticker, report_type=report_type))
+
+        for item in (getattr(company_data, "recent_news", None) or [])[:4]:
+            snippet = item.get("description") or item.get("content") or item.get("title")
+            if not snippet:
+                continue
+            candidates.append(
+                {
+                    "label": "news",
+                    "source": item.get("source") or "News",
+                    "source_type": "news",
+                    "snippet": self._clip_text(snippet, 240),
+                    "url": item.get("url"),
+                    "filed_at": item.get("published_at"),
+                    "base_score": 0.35,
+                }
+            )
+
+        governance = getattr(company_data, "governance", {}) or {}
+        for item in governance.get("sec_governance_evidence", [])[:4]:
+            snippet = item.get("snippet")
+            if not snippet:
+                continue
+            candidates.append(
+                {
+                    "label": item.get("label") or "sec_evidence",
+                    "source": item.get("source") or f"SEC {item.get('form') or 'filing'}",
+                    "source_type": "sec_filing",
+                    "snippet": self._clip_text(snippet, 240),
+                    "url": item.get("url"),
+                    "filed_at": item.get("filed_at"),
+                    "base_score": 0.6,
+                }
+            )
+
+        citations = self._rerank_citations(
+            company_name=company_name,
+            ticker=ticker,
+            summary=summary,
+            citations=candidates,
+            limit=4,
+        )
+        verification = self._verify_citations(summary, citations)
+        bundle = {
+            "query": f"{company_name} {ticker or ''} {report_type} ESG evidence",
+            "citations": citations,
+            "grounding_status": verification["status"],
+            "grounding_confidence": verification["confidence"],
+            "verification_notes": verification["notes"],
+            "verified_summary": verification["verified_summary"],
+            "citation_count": len(citations),
+            "retrieval_stack": "hybrid_bm25_vector_plus_news_sec",
+        }
+        set_cache(cache_key, bundle, ttl_seconds=600)
+        return bundle
+
+    def _attach_grounding(self, analysis: CompanyAnalysis, *, report_type: str, company_data: Any) -> CompanyAnalysis:
+        bundle = self._build_grounding_bundle(
+            company_name=analysis.company_name,
+            ticker=analysis.ticker,
+            report_type=report_type,
+            summary=analysis.summary,
+            company_data=company_data,
+        )
+        return analysis.model_copy(
+            update={
+                "grounding_status": bundle.get("grounding_status"),
+                "grounding_confidence": bundle.get("grounding_confidence"),
+                "verified_summary": bundle.get("verified_summary"),
+                "verification_notes": bundle.get("verification_notes") or [],
+                "citations": bundle.get("citations") or [],
+            }
+        )
+
+    def _compose_company_summary(self, company_name: str, company_data: Any, esg_report: ESGScoreReport) -> str:
+        parts = [f"{company_name} screens at {esg_report.overall_score:.1f}/100 with a {esg_report.overall_trend} ESG trend."]
+        recent_news = (getattr(company_data, "recent_news", None) or [])[:1]
+        if recent_news:
+            lead = recent_news[0]
+            headline = lead.get("title") or lead.get("description") or lead.get("content")
+            if headline:
+                parts.append(f"Recent news signal: {self._clip_text(headline, 120)}")
+        governance = getattr(company_data, "governance", {}) or {}
+        sec_evidence = (governance.get("sec_governance_evidence") or [])[:1]
+        if sec_evidence:
+            parts.append(f"SEC governance evidence: {self._clip_text(sec_evidence[0].get('snippet') or '', 120)}")
+        return " ".join(part for part in parts if part).strip()
+
+    def _finalize_grounding_summary(self, report: ESGReport) -> None:
+        analyses = list(report.company_analyses or [])
+        citation_count = sum(len(item.citations or []) for item in analyses)
+        grounded = sum(1 for item in analyses if item.grounding_status == "grounded")
+        average_confidence = (
+            round(
+                sum(float(item.grounding_confidence or 0.0) for item in analyses) / len(analyses),
+                4,
+            )
+            if analyses
+            else 0.0
+        )
+        report.evidence_summary = {
+            "grounded_companies": grounded,
+            "total_companies": len(analyses),
+            "citation_count": citation_count,
+            "average_grounding_confidence": average_confidence,
+            "retrieval_stack": "hybrid_bm25_vector_plus_news_sec",
+            "verification_mode": "deterministic_citation_overlap",
+        }
+
+    def _apply_grounding_data_sources(self, report: ESGReport) -> None:
+        sources = set(report.data_sources or [])
+        citation_source_types = {
+            str(citation.get("source_type") or "").strip().lower()
+            for analysis in report.company_analyses or []
+            for citation in analysis.citations or []
+        }
+        if "news" in citation_source_types:
+            sources.add("news")
+        if "sec_filing" in citation_source_types:
+            sources.add("sec_edgar")
+        if "rag_doc" in citation_source_types or "event" in citation_source_types:
+            sources.add("qdrant_hybrid")
+        report.data_sources = sorted(source for source in sources if source)
 
     def generate_daily_report(self, companies: List[str],
                              focus_on: Optional[str] = None) -> ESGReport:
@@ -113,6 +497,9 @@ class ESGReportGenerator:
             focus_on: 特定关注的维度（E/S/G）
         """
         logger.info("[ReportGenerator] Generating daily report")
+        cached = self._load_cached_report("daily", companies)
+        if cached is not None:
+            return cached
 
         report = ESGReport(
             report_type="daily",
@@ -134,7 +521,9 @@ class ESGReportGenerator:
         try:
             # 从数据库获取最近24小时的事件
             from gateway.db.supabase_client import supabase_client
+            from gateway.scheduler.data_sources import DataSourceManager
 
+            data_mgr = DataSourceManager()
             events = supabase_client.table("extracted_events").select("*").gte(
                 "created_at",
                 (datetime.now() - timedelta(days=1)).isoformat()
@@ -150,23 +539,32 @@ class ESGReportGenerator:
                 if not company_company_events:
                     continue
 
+                company_data = data_mgr.fetch_company_data(company_name)
+                leading_event = company_company_events[0]
                 analysis = CompanyAnalysis(
                     company_name=company_name,
+                    ticker=company_data.ticker,
                     esg_score=0.0,
                     trend="stable",
-                    summary=f"有 {len(company_company_events)} 个新的ESG相关事件",
+                    summary=(
+                        f"{company_name} had {len(company_company_events)} fresh ESG events in the last 24h. "
+                        f"Priority topic: {leading_event.get('title') or leading_event.get('description') or 'event monitor'}."
+                    ),
                     key_metrics={
                         "events_count": len(company_company_events),
                         "critical_count": len([e for e in company_company_events if e.get("severity") == "critical"]),
                     }
                 )
-                report.company_analyses.append(analysis)
+                report.company_analyses.append(self._attach_grounding(analysis, report_type="daily", company_data=company_data))
 
             # 识别风险预警
             report.risk_alerts = self._extract_risk_alerts(events, threshold="high")
 
             # 生成执行摘要
             report.executive_summary = self._generate_summary(report)
+            self._finalize_grounding_summary(report)
+            self._apply_grounding_data_sources(report)
+            self._store_cached_report(report, companies)
 
             logger.info("[ReportGenerator] Daily report generated successfully")
             return report
@@ -187,6 +585,9 @@ class ESGReportGenerator:
         - 优秀实践案例
         """
         logger.info("[ReportGenerator] Generating weekly report")
+        cached = self._load_cached_report("weekly", companies)
+        if cached is not None:
+            return cached
 
         period_start = datetime.now() - timedelta(days=7)
         period_start = period_start.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -219,7 +620,7 @@ class ESGReportGenerator:
                 company_data = data_mgr.fetch_company_data(company_name)
 
                 # 评分
-                esg_report = self.scorer.score_esg(company_name, company_data.dict())
+                esg_report = self.scorer.score_esg(company_name, company_data.model_dump(), prefer_fast_mode=True)
 
                 # 创建公司分析
                 analysis = CompanyAnalysis(
@@ -227,7 +628,7 @@ class ESGReportGenerator:
                     ticker=company_data.ticker,
                     esg_score=esg_report.overall_score,
                     trend=esg_report.overall_trend,
-                    summary=esg_report.e_scores.summary[:200],  # 简化摘要
+                    summary=self._compose_company_summary(company_name, company_data, esg_report),
                     key_metrics={
                         "e_score": esg_report.e_scores.overall_score,
                         "s_score": esg_report.s_scores.overall_score,
@@ -235,7 +636,7 @@ class ESGReportGenerator:
                     },
                     peer_rank=esg_report.peer_rank,
                 )
-                report.company_analyses.append(analysis)
+                report.company_analyses.append(self._attach_grounding(analysis, report_type="weekly", company_data=company_data))
 
             # 识别低分公司和优秀企业
             low_scores = [a for a in report.company_analyses if a.esg_score < 40]
@@ -256,6 +657,9 @@ class ESGReportGenerator:
 
             # 生成执行摘要
             report.executive_summary = self._generate_summary(report)
+            self._finalize_grounding_summary(report)
+            self._apply_grounding_data_sources(report)
+            self._store_cached_report(report, companies)
 
             logger.info("[ReportGenerator] Weekly report generated successfully")
             return report
@@ -276,6 +680,9 @@ class ESGReportGenerator:
         - 监管合规检查
         """
         logger.info("[ReportGenerator] Generating monthly report")
+        cached = self._load_cached_report("monthly", portfolio)
+        if cached is not None:
+            return cached
 
         period_start = datetime.now() - timedelta(days=30)
         period_start = period_start.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -307,14 +714,14 @@ class ESGReportGenerator:
             # 评分所有投资组合中的公司
             for company_name in portfolio:
                 company_data = data_mgr.fetch_company_data(company_name)
-                esg_report = self.scorer.score_esg(company_name, company_data.dict())
+                esg_report = self.scorer.score_esg(company_name, company_data.model_dump(), prefer_fast_mode=True)
 
                 analysis = CompanyAnalysis(
                     company_name=company_name,
                     ticker=company_data.ticker,
                     esg_score=esg_report.overall_score,
                     trend=esg_report.overall_trend,
-                    summary=f"{esg_report.overall_score:.1f}/100",
+                    summary=self._compose_company_summary(company_name, company_data, esg_report),
                     key_metrics={
                         "e_score": esg_report.e_scores.overall_score,
                         "s_score": esg_report.s_scores.overall_score,
@@ -323,7 +730,7 @@ class ESGReportGenerator:
                     },
                     peer_rank=esg_report.peer_rank,
                 )
-                all_analyses.append(analysis)
+                all_analyses.append(self._attach_grounding(analysis, report_type="monthly", company_data=company_data))
 
             report.company_analyses = sorted(all_analyses, key=lambda x: x.esg_score, reverse=True)
 
@@ -349,6 +756,9 @@ class ESGReportGenerator:
 
             # 生成执行摘要
             report.executive_summary = self._generate_summary(report)
+            self._finalize_grounding_summary(report)
+            self._apply_grounding_data_sources(report)
+            self._store_cached_report(report, portfolio)
 
             logger.info("[ReportGenerator] Monthly report generated successfully")
             return report
@@ -444,7 +854,7 @@ class ESGReportGenerator:
 
             for company_name in companies_to_analyze:
                 company_data = data_mgr.fetch_company_data(company_name)
-                esg_report = self.scorer.score_esg(company_name, company_data.dict())
+                esg_report = self.scorer.score_esg(company_name, company_data.model_dump(), prefer_fast_mode=True)
 
                 comparison["companies"][company_name] = {
                     "overall_score": esg_report.overall_score,

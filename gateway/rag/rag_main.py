@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import threading
 from pathlib import Path
@@ -53,6 +54,39 @@ _FALLBACK_STOPWORDS = {
     "at",
     "an",
 }
+
+
+def _parse_source_dir_tokens(value: str) -> list[str]:
+    if not value:
+        return []
+    return [item.strip().strip('"').strip("'") for item in re.split(r"[;\n,]+", value) if item.strip()]
+
+
+def _resolve_source_dir(token: str) -> Path:
+    candidate = Path(token).expanduser()
+    if not candidate.is_absolute():
+        candidate = (PROJECT_ROOT / candidate).resolve()
+    return candidate
+
+
+def _configured_source_dirs() -> list[Path]:
+    configured = _parse_source_dir_tokens(str(os.getenv("RAG_SOURCE_DIRS", "") or ""))
+    defaults = configured or [str(DATA_DIR)]
+    resolved: list[Path] = []
+    seen: set[str] = set()
+    for token in defaults:
+        path = _resolve_source_dir(token)
+        key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(path)
+    return resolved
+
+
+def _skip_autobuild_on_read() -> bool:
+    value = str(os.getenv("RAG_SKIP_AUTOBUILD_ON_READ", "true") or "true").strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 try:
     from llama_index.core import Settings, SimpleDirectoryReader
@@ -134,7 +168,7 @@ class _FallbackQueryEngine:
         if not selected:
             answer = (
                 "Local fallback RAG is available, but no relevant ESG evidence matched the query. "
-                "Add company documents under data/raw/ or extend the ESG QA corpus under data/rag_training_data/."
+                "Add company documents to the directories configured by RAG_SOURCE_DIRS or extend the ESG QA corpus under data/rag_training_data/."
             )
             return _FallbackResponse(answer, [])
 
@@ -325,6 +359,11 @@ def get_query_engine(force_rebuild: bool = False):
         try:
             client, _ = _get_qdrant_client()
             need_rebuild = force_rebuild or not collection_exists(client)
+            if need_rebuild and not force_rebuild and _skip_autobuild_on_read():
+                _query_engine = _build_fallback_query_engine(
+                    "RAG index is not ready yet. Run scripts/rebuild_rag_index.py for a full Qdrant rebuild."
+                )
+                return _query_engine
 
             if not need_rebuild:
                 try:
@@ -372,20 +411,38 @@ def get_index_and_storage() -> tuple:
 
 
 def _load_documents():
-    if not DATA_DIR.exists():
+    source_dirs = _configured_source_dirs()
+    existing_dirs = [path for path in source_dirs if path.exists()]
+    if not existing_dirs:
+        configured_display = ", ".join(str(path) for path in source_dirs)
         raise FileNotFoundError(
-            f"Data directory not found: {DATA_DIR}\n"
-            "Please put ESG reports (PDF/docx/txt) into data/raw/ first."
+            f"No RAG source directories were found. Checked: {configured_display}\n"
+            "Set RAG_SOURCE_DIRS in .env or put ESG reports into data/raw/."
         )
 
-    docs = SimpleDirectoryReader(
-        DATA_DIR,
-        required_exts=[".pdf", ".docx", ".txt", ".md"],
-        recursive=True,
-    ).load_data()
+    docs = []
+    loaded_from: list[str] = []
+    for source_dir in existing_dirs:
+        batch = SimpleDirectoryReader(
+            source_dir,
+            required_exts=[".pdf", ".docx", ".txt", ".md"],
+            recursive=True,
+        ).load_data()
+        if not batch:
+            continue
+        for doc in batch:
+            metadata = dict(getattr(doc, "metadata", {}) or {})
+            metadata.setdefault("rag_source_dir", str(source_dir))
+            metadata.setdefault("rag_source_type", "external_raw_corpus" if source_dir != DATA_DIR else "project_raw_corpus")
+            doc.metadata = metadata
+        docs.extend(batch)
+        loaded_from.append(str(source_dir))
 
     if not docs:
-        raise ValueError(f"No documents found in {DATA_DIR}")
+        raise ValueError(
+            "No ESG documents were found in the configured RAG sources: "
+            + ", ".join(str(path) for path in existing_dirs)
+        )
 
     original_chars = 0
     cleaned_chars = 0
@@ -401,7 +458,7 @@ def _load_documents():
         doc.set_content(cleaned)
 
     logger.info(
-        f"[RAG] Loaded {len(docs)} document(s) from {DATA_DIR} "
+        f"[RAG] Loaded {len(docs)} document(s) from {', '.join(loaded_from)} "
         f"(cleaned {original_chars:,} -> {cleaned_chars:,} chars)"
     )
     return docs

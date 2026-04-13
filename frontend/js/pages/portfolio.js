@@ -11,6 +11,29 @@ let _langCleanup = null;
 
 const localizeSector = (value) => translateLoose(value || '');
 const lt = (en, zh) => getLang() === 'zh' ? zh : en;
+const PRESET_UNIVERSES = {
+  'S&P 500 Full': ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'JPM', 'UNH'],
+  'S&P 500 ESG': ['PG', 'NEE', 'MSFT', 'AAPL', 'UNH', 'JPM'],
+  'NASDAQ 100': ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META'],
+  'Global ESG Leaders': ['NEE', 'PG', 'MSFT', 'UNH', 'AAPL', 'JPM'],
+  'High Dividend': ['PG', 'NEE', 'JPM', 'UNH'],
+  'Momentum Leaders': ['NVDA', 'AAPL', 'MSFT', 'AMZN'],
+  'Custom Watchlist': ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'GOOGL', 'META', 'NEE'],
+};
+const OBJECTIVE_OPTIONS = [
+  ['maximum_diversification', 'Maximum Diversification', 'Minimize correlation between holdings'],
+  ['risk_parity', 'Risk Parity', 'Equal risk contribution - Recommended'],
+  ['minimum_variance', 'Minimum Variance', 'Lowest possible volatility'],
+  ['maximum_sharpe', 'Maximum Sharpe', 'Best risk-adjusted return'],
+  ['equal_weight', 'Equal Weight', 'Simple 1/N allocation'],
+];
+let _selection = {
+  presetName: 'S&P 500 ESG',
+  objective: 'risk_parity',
+  maxPositionWeight: 0.10,
+  maxSectorConcentration: 0.30,
+  minEsgScore: 60,
+};
 
 export function render(container) {
   _currentContainer = container;
@@ -213,7 +236,7 @@ function buildStep2() {
         <div class="section-title" style="margin-bottom:12px">${translateLoose('Preset Universes')}</div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
           ${universes.map((u,i) => `
-            <div class="model-catalog-card${i===1?' active':''}" data-universe="${u.name}" style="padding:14px;cursor:pointer">
+            <div class="model-catalog-card${_selection.presetName===u.name?' active':''}" data-universe="${u.name}" style="padding:14px;cursor:pointer">
               <div style="font-family:var(--f-display);font-size:10px;font-weight:700;color:var(--text-primary);margin-bottom:8px">${translateLoose(u.name)}</div>
               <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px">
                 <div><div style="font-family:var(--f-display);font-size:12px;font-weight:700">${u.stocks}</div><div class="text-muted text-sm">${translateLoose('stocks')}</div></div>
@@ -255,6 +278,7 @@ function bindStep2(container) {
     card.addEventListener('click', () => {
       container.querySelectorAll('[data-universe]').forEach(c => c.classList.remove('active'));
       card.classList.add('active');
+      _selection.presetName = card.dataset.universe || _selection.presetName;
     });
   });
   if (container._prefillUniverse) {
@@ -294,11 +318,11 @@ function buildStep3() {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div class="form-group">
             <label class="form-label">${lt('Max position weight:', '最大持仓权重：')} <span id="max-pos-val" style="color:var(--green)">10%</span></label>
-            <input type="range" id="max-pos" min="1" max="30" value="10" style="width:100%;accent-color:var(--green)">
+            <input type="range" id="max-pos" min="1" max="30" value="${Math.round(_selection.maxPositionWeight * 100)}" style="width:100%;accent-color:var(--green)">
           </div>
           <div class="form-group">
             <label class="form-label">${lt('Max sector concentration:', '最大行业集中度：')} <span id="max-sec-val" style="color:var(--amber)">30%</span></label>
-            <input type="range" id="max-sec" min="10" max="60" value="30" style="width:100%;accent-color:var(--amber)">
+            <input type="range" id="max-sec" min="10" max="60" value="${Math.round(_selection.maxSectorConcentration * 100)}" style="width:100%;accent-color:var(--amber)">
           </div>
         </div>
       </div>
@@ -319,7 +343,7 @@ function buildStep3() {
         <div class="section-title" style="margin-bottom:12px">${translateLoose('ESG Constraints')}</div>
         <div class="form-group">
           <label class="form-label">${lt('Min portfolio ESG score:', '组合最低 ESG 评分：')} <span id="min-esg-val" style="color:var(--green)">60</span></label>
-          <input type="range" id="min-esg" min="0" max="90" value="60" style="width:100%;accent-color:var(--green)">
+          <input type="range" id="min-esg" min="0" max="90" value="${_selection.minEsgScore}" style="width:100%;accent-color:var(--green)">
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
           ${['Weapons','Tobacco','Gambling','Fossil Fuels','Private Prisons'].map(cat => `
@@ -339,9 +363,34 @@ function buildStep3() {
 function bindStep3(container) {
   container.querySelector('#s3-back')?.addEventListener('click', () => goStep(container, 2));
   container.querySelector('#s3-next')?.addEventListener('click', () => goStep(container, 4));
+  const sliderState = {
+    'max-pos': Math.round(_selection.maxPositionWeight * 100),
+    'max-sec': Math.round(_selection.maxSectorConcentration * 100),
+    'min-esg': _selection.minEsgScore,
+  };
+  Object.entries(sliderState).forEach(([id, value]) => {
+    const input = container.querySelector(`#${id}`);
+    if (input) input.value = String(value);
+  });
   [['max-pos','max-pos-val','%'],['max-sec','max-sec-val','%'],['min-esg','min-esg-val','']].forEach(([id,vid,s]) => {
     const r = container.querySelector(`#${id}`);
-    if (r) r.addEventListener('input', () => { const v = container.querySelector(`#${vid}`); if (v) v.textContent = r.value + s; });
+    const v = container.querySelector(`#${vid}`);
+    if (v && r) v.textContent = r.value + s;
+    if (r) r.addEventListener('input', () => {
+      if (v) v.textContent = r.value + s;
+      if (id === 'max-pos') _selection.maxPositionWeight = Number(r.value) / 100;
+      if (id === 'max-sec') _selection.maxSectorConcentration = Number(r.value) / 100;
+      if (id === 'min-esg') _selection.minEsgScore = Number(r.value) || 0;
+    });
+  });
+  const objectiveIndex = Math.max(0, OBJECTIVE_OPTIONS.findIndex(([value]) => value === _selection.objective));
+  container.querySelectorAll('input[name="opt-method"]').forEach((radio, index) => {
+    radio.checked = index === objectiveIndex;
+    radio.addEventListener('change', () => {
+      if (radio.checked) {
+        _selection.objective = OBJECTIVE_OPTIONS[index]?.[0] || _selection.objective;
+      }
+    });
   });
 }
 
@@ -458,11 +507,29 @@ async function runOptimize(container) {
   if (!btn) return;
   btn.disabled = true; btn.textContent = translateLoose('Optimizing…');
   const universeInput = container.querySelector('#po-universe')?.value || container._prefillUniverse || '';
-  const universe = universeInput ? universeInput.split(/[,\s]+/).filter(Boolean).map(s=>s.toUpperCase()) : [];
+  const presetUniverse = PRESET_UNIVERSES[_selection.presetName] || [];
+  const universe = universeInput ? universeInput.split(/[,\s]+/).filter(Boolean).map(s=>s.toUpperCase()) : presetUniverse;
   try {
-    const res = await api.portfolio.optimize({ universe, capital_base: 1000000 });
+    const objectiveIndex = Math.max(0, OBJECTIVE_OPTIONS.findIndex(([value]) => value === _selection.objective));
+    const objectiveLabel = OBJECTIVE_OPTIONS[objectiveIndex]?.[1] || 'Risk Parity';
+    const res = await api.portfolio.optimize({
+      universe,
+      capital_base: 1000000,
+      research_question: `Preset=${_selection.presetName}; Objective=${objectiveLabel}; MaxPos=${Math.round(_selection.maxPositionWeight * 100)}%; MaxSector=${Math.round(_selection.maxSectorConcentration * 100)}%; MinESG=${_selection.minEsgScore}`,
+      preset_name: _selection.presetName,
+      objective: _selection.objective,
+      max_position_weight: _selection.maxPositionWeight,
+      max_sector_concentration: _selection.maxSectorConcentration,
+      esg_floor: _selection.minEsgScore,
+    });
+    const holdings = res.holdings || res.portfolio?.positions || [];
     _result = res;
-    _build = { expectedReturn: res.expected_return??0.226, vol: res.expected_volatility??0.123, sharpe: res.sharpe_estimate??1.84, holdings: res.holdings||[] };
+    _build = {
+      expectedReturn: res.expected_return ?? res.expected_alpha ?? res.portfolio?.expected_alpha ?? 0.226,
+      vol: res.expected_volatility ?? 0.123,
+      sharpe: res.sharpe_estimate ?? 1.84,
+      holdings,
+    };
   } catch {
     _result = { holdings:[{symbol:'AAPL',weight:0.18,sector:'Technology',esg_score:78},{symbol:'MSFT',weight:0.15,sector:'Technology',esg_score:82},{symbol:'NEE',weight:0.14,sector:'Utilities',esg_score:91},{symbol:'NVDA',weight:0.12,sector:'Technology',esg_score:71},{symbol:'TSLA',weight:0.10,sector:'Consumer Disc',esg_score:68}], expected_return:0.226, expected_volatility:0.123, sharpe_estimate:1.84 };
     _build = { expectedReturn:0.226, vol:0.123, sharpe:1.84, holdings:_result.holdings };
@@ -472,13 +539,30 @@ async function runOptimize(container) {
     showSuggestions(container);
     const canvas = container.querySelector('#frontier-canvas');
     if (canvas) drawFrontier(canvas, null, window.devicePixelRatio||1);
-    toast.success(translateLoose('Optimization complete'), translateLoose(`Sharpe: ${_build.sharpe.toFixed(2)}`));
+    if (_build.holdings?.length) {
+      toast.success(translateLoose('Optimization complete'), translateLoose(`Sharpe: ${_build.sharpe.toFixed(2)}`));
+    } else {
+      toast.warning(
+        translateLoose('No portfolio generated'),
+        translateLoose('Current guardrails rejected every candidate. Try a broader universe or looser constraints.'),
+      );
+    }
   }
 }
 
 function showSuggestions(container) {
   const el = container.querySelector('#port-suggestions');
   if (!el) return;
+  if (!_build.holdings?.length) {
+    el.innerHTML = `
+      <div style="padding:14px;border-radius:10px;border:1px solid rgba(255,179,0,0.25);background:rgba(255,179,0,0.05)">
+        <div style="font-family:var(--f-display);font-size:10px;font-weight:700;color:var(--amber);margin-bottom:8px">${translateLoose('No-trade guardrail')}</div>
+        <div class="text-muted text-sm">${translateLoose('The optimizer did not find a compliant portfolio for the current universe and constraints.')}</div>
+      </div>`;
+    const detailEl = container.querySelector('#opt-detail');
+    if (detailEl) detailEl.style.display = 'none';
+    return;
+  }
   const sug = [
     {label:'Conservative Blend',ret:14.2,sharpe:1.42,vol:8.1,dd:9.3,top:['BND','NEE','VIG'],pri:false},
     {label:'★ Optimal Sharpe',ret:22.6,sharpe:1.84,vol:12.3,dd:14.1,top:['AAPL','MSFT','NEE'],pri:true},
@@ -531,9 +615,11 @@ function updateSummary(container) {
         <div class="ps-holding-bar" style="width:${Math.min((h.weight*100*1.5),100).toFixed(0)}px"></div>
         <span class="ps-holding-pct">${(h.weight*100).toFixed(1)}%</span>
       </div>`).join('');
+  } else if (holdingsEl) {
+    holdingsEl.innerHTML = `<div class="text-muted text-sm">${translateLoose('No compliant holdings yet')}</div>`;
   }
   const execBtn = el('#btn-to-execution');
-  if (execBtn) execBtn.disabled = false;
+  if (execBtn) execBtn.disabled = !(b.holdings?.length);
 }
 
 /* ── Step 5: Review ── */

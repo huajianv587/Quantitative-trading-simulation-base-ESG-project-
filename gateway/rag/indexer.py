@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
@@ -10,8 +11,15 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 
 from gateway.rag.ingestion import _get_qdrant_client, COLLECTION_NAME
 
-# docstore 持久化目录（与项目根目录同级）
-PERSIST_DIR = str(Path(__file__).resolve().parents[2] / "storage" / "docstore")
+def _resolve_docstore_dir() -> str:
+    configured = str(os.getenv("RAG_DOCSTORE_PERSIST_DIR", "") or "").strip()
+    if configured:
+        return str(Path(configured).expanduser())
+    return str(Path(__file__).resolve().parents[2] / "storage" / "docstore")
+
+
+# docstore 持久化目录（默认在项目内，可由 .env 覆盖）
+PERSIST_DIR = _resolve_docstore_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -21,6 +29,14 @@ PERSIST_DIR = str(Path(__file__).resolve().parents[2] / "storage" / "docstore")
 def collection_exists(client: QdrantClient) -> bool:
     existing = [c.name for c in client.get_collections().collections]
     return COLLECTION_NAME in existing
+
+
+def index_ready(client: QdrantClient | None = None) -> bool:
+    try:
+        client = client or _get_qdrant_client()[0]
+        return collection_exists(client) and Path(PERSIST_DIR).exists()
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------

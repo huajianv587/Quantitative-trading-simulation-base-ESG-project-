@@ -10,14 +10,15 @@ export function render(container) {
 
 function buildShell() {
   const lang = getLang();
+  const zhLabel = lang === 'en' ? 'CH' : '中';
   return `
   <div class="auth-split" style="justify-content:center">
     <div class="auth-form-panel" style="max-width:480px;margin:auto">
       <div class="auth-form-wrap">
         <!-- Lang toggle -->
-        <div style="position:absolute;top:20px;right:24px;display:flex;gap:0">
-          <button class="lang-btn${lang==='zh'?' active':''}" data-lang="zh">中</button>
-          <button class="lang-btn${lang==='en'?' active':''}" data-lang="en">EN</button>
+        <div style="position:absolute;top:20px;right:24px;display:flex;gap:0" data-no-autotranslate="true" translate="no">
+          <button class="lang-btn${lang==='zh'?' active':''}" data-lang="zh" data-no-autotranslate="true" translate="no">${zhLabel}</button>
+          <button class="lang-btn${lang==='en'?' active':''}" data-lang="en" data-no-autotranslate="true" translate="no">EN</button>
         </div>
 
         <div style="font-size:28px;margin-bottom:12px">🔑</div>

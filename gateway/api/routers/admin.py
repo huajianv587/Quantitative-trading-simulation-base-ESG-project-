@@ -15,6 +15,7 @@ router = APIRouter()
 
 @router.post("/admin/data-sources/sync")
 def sync_data_sources(req: DataSyncRequest, background_tasks: BackgroundTasks):
+    runtime.ensure_optional_services()
     if not runtime.data_source_manager:
         raise HTTPException(status_code=503, detail="Data Source Manager not ready")
 
@@ -80,6 +81,7 @@ def get_sync_status(job_id: str):
 
 @router.post("/admin/push-rules")
 def create_push_rule(req: CreatePushRuleRequest):
+    runtime.ensure_optional_services(start_scheduler=True)
     if not runtime.report_scheduler or runtime.PushRule is None:
         raise HTTPException(status_code=503, detail="Report Scheduler not ready")
 
@@ -106,6 +108,7 @@ def create_push_rule(req: CreatePushRuleRequest):
 
 @router.get("/admin/push-rules")
 def get_push_rules():
+    runtime.ensure_optional_services(start_scheduler=True)
     if not runtime.report_scheduler:
         return {
             "total": 0,
@@ -127,6 +130,7 @@ def get_push_rules():
 
 @router.put("/admin/push-rules/{rule_id}")
 def update_push_rule(rule_id: str, updates: dict[str, Any]):
+    runtime.ensure_optional_services(start_scheduler=True)
     if not runtime.report_scheduler:
         raise HTTPException(status_code=503, detail="Report Scheduler not ready")
 
@@ -143,6 +147,7 @@ def update_push_rule(rule_id: str, updates: dict[str, Any]):
 
 @router.delete("/admin/push-rules/{rule_id}")
 def delete_push_rule(rule_id: str):
+    runtime.ensure_optional_services(start_scheduler=True)
     if not runtime.report_scheduler:
         raise HTTPException(status_code=503, detail="Report Scheduler not ready")
 

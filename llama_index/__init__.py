@@ -1,40 +1,56 @@
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
-import sys
+import site
 from pathlib import Path
+from pkgutil import extend_path
 
 
-def _load_real_package():
-    current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent.resolve()
-    search_paths: list[str] = []
+_CURRENT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _CURRENT_DIR.parent.resolve()
 
-    for entry in sys.path:
-        resolved = Path(entry or ".").resolve()
-        if resolved == project_root:
+
+def _discover_external_paths() -> list[str]:
+    candidates: list[str] = []
+    search_roots = list(site.getsitepackages())
+    try:
+        user_site = site.getusersitepackages()
+        if user_site:
+            search_roots.append(user_site)
+    except Exception:
+        pass
+
+    for root in search_roots:
+        package_dir = Path(root) / "llama_index"
+        if not package_dir.exists():
             continue
-        search_paths.append(str(resolved))
+        resolved = package_dir.resolve()
+        if resolved == _CURRENT_DIR:
+            continue
+        candidates.append(str(resolved))
 
-    spec = importlib.machinery.PathFinder.find_spec(__name__, search_paths)
-    if spec is None or spec.loader is None or not spec.origin:
-        return None
-
-    origin = Path(spec.origin).resolve()
-    if origin == current_file:
-        return None
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[__name__] = module
-    spec.loader.exec_module(module)
-    return module
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
 
 
-_real_module = _load_real_package()
+_external_paths = _discover_external_paths()
+__path__ = [*_external_paths, *_discover_external_paths(), *extend_path(__path__, __name__)]
 
-if _real_module is not None:
-    globals().update(_real_module.__dict__)
-else:
-    __all__ = ["core", "retrievers", "embeddings"]
+_deduped_path: list[str] = []
+_seen_path: set[str] = set()
+for _item in __path__:
+    _resolved = str(Path(_item).resolve())
+    if _resolved == str(_PROJECT_ROOT):
+        continue
+    if _resolved in _seen_path:
+        continue
+    _seen_path.add(_resolved)
+    _deduped_path.append(_item)
+__path__ = _deduped_path
 
+__all__ = ["core", "retrievers", "embeddings", "vector_stores"]
