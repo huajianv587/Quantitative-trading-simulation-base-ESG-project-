@@ -11,6 +11,16 @@ from gateway.models.schemas import RiskScore, RiskLevel
 from gateway.db.supabase_client import get_client
 
 logger = get_logger(__name__)
+SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+IMPACT_AREA_TO_DIMENSION = {
+    "e": "environmental",
+    "environment": "environmental",
+    "environmental": "environmental",
+    "s": "social",
+    "social": "social",
+    "g": "governance",
+    "governance": "governance",
+}
 
 
 # ── Risk Scoring Prompt ────────────────────────────────────────────────────
@@ -69,6 +79,33 @@ class RiskScorer:
         except json.JSONDecodeError:
             return None
 
+    @staticmethod
+    def _parse_key_metrics(value) -> dict:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                return {"raw_key_metrics": value}
+        return {}
+
+    @staticmethod
+    def _severity_floor(base_level: str, candidate_level: str | None, probability: float | None) -> str:
+        normalized_base = str(base_level or "low").lower()
+        normalized_candidate = str(candidate_level or "").lower()
+        if normalized_candidate not in SEVERITY_ORDER:
+            return normalized_base
+        if float(probability or 0.0) >= 0.55 and SEVERITY_ORDER[normalized_candidate] >= SEVERITY_ORDER.get(normalized_base, 0):
+            return normalized_candidate
+        return normalized_base
+
+    @staticmethod
+    def _dominant_dimension(value: str | None) -> str | None:
+        return IMPACT_AREA_TO_DIMENSION.get(str(value or "").strip().lower())
+
     def score_event(self, event_id: str, event_data: dict) -> dict | None:
         """
         对一个事件进行风险评分。
@@ -87,13 +124,14 @@ class RiskScorer:
         Returns:
             风险评分结果，失败返回 None
         """
+        key_metrics = self._parse_key_metrics(event_data.get("key_metrics", {}))
         messages = [
             {"role": "system", "content": RISK_SCORER_SYSTEM},
             {"role": "user", "content": RISK_SCORER_USER.format(
                 title=event_data.get("title", ""),
                 description=event_data.get("description", ""),
                 event_type=event_data.get("event_type", ""),
-                key_metrics=json.dumps(event_data.get("key_metrics", {}), ensure_ascii=False),
+                key_metrics=json.dumps(key_metrics, ensure_ascii=False),
                 impact_area=event_data.get("impact_area", ""),
                 severity=event_data.get("severity", ""),
             )},
@@ -118,14 +156,67 @@ class RiskScorer:
 
         # 构建评分结果
         try:
+            classifier_level = self._severity_floor(
+                event_data.get("severity", "low"),
+                key_metrics.get("severity_label") or key_metrics.get("controversy_label"),
+                key_metrics.get("severity_probability") or key_metrics.get("controversy_probability"),
+            )
+            calibrated_score = float(score_data.get("score", 50))
+            controversy_probability = float(key_metrics.get("controversy_probability", 0.0) or 0.0)
+            controversy_level = str(key_metrics.get("controversy_label", "")).lower()
+            severity_probability = float(key_metrics.get("severity_probability", 0.0) or 0.0)
+            severity_level = str(key_metrics.get("severity_label", "")).lower()
+            event_type_probability = float(key_metrics.get("event_type_probability", 0.0) or 0.0)
+            impact_area_probability = float(key_metrics.get("impact_area_probability", 0.0) or 0.0)
+            if controversy_level in SEVERITY_ORDER:
+                uplift_map = {"low": 0.0, "medium": 5.0, "high": 12.0, "critical": 20.0}
+                calibrated_score += uplift_map.get(controversy_level, 0.0) * max(0.5, controversy_probability)
+                calibrated_score = min(100.0, calibrated_score)
+            if severity_level in SEVERITY_ORDER:
+                uplift_map = {"low": 0.0, "medium": 4.0, "high": 9.0, "critical": 16.0}
+                calibrated_score += uplift_map.get(severity_level, 0.0) * max(0.4, severity_probability)
+                calibrated_score = min(100.0, calibrated_score)
+            calibrated_level = self._severity_floor(
+                score_data.get("risk_level", "medium"),
+                classifier_level,
+                max(controversy_probability, severity_probability),
+            )
+            affected_dimensions = score_data.get("affected_dimensions", {
+                "environmental": 0, "social": 0, "governance": 0
+            })
+            dominant_dimension = self._dominant_dimension(
+                key_metrics.get("impact_area_label") or event_data.get("impact_area")
+            )
+            if dominant_dimension and impact_area_probability >= 0.5:
+                try:
+                    affected_dimensions[dominant_dimension] = max(
+                        float(affected_dimensions.get(dominant_dimension, 0.0)),
+                        round(55 + impact_area_probability * 35, 2),
+                    )
+                except Exception:
+                    pass
+            reasoning = str(score_data.get("reasoning", ""))
+            if controversy_level in SEVERITY_ORDER:
+                reasoning = (
+                    f"{reasoning} Controversy classifier tagged this event as {controversy_level}"
+                    f" with probability {controversy_probability:.2f}, which was blended into the final risk calibration."
+                ).strip()
+            if severity_level in SEVERITY_ORDER:
+                reasoning = (
+                    f"{reasoning} Severity classifier predicted {severity_level}"
+                    f" with probability {severity_probability:.2f}."
+                ).strip()
+            if key_metrics.get("event_type_label"):
+                reasoning = (
+                    f"{reasoning} Event-type classifier suggested {key_metrics.get('event_type_label')}"
+                    f" ({event_type_probability:.2f}) for downstream routing."
+                ).strip()
             score_result = {
                 "event_id": event_id,
-                "risk_level": score_data.get("risk_level", "medium"),
-                "score": float(score_data.get("score", 50)),
-                "reasoning": score_data.get("reasoning", ""),
-                "affected_dimensions": score_data.get("affected_dimensions", {
-                    "environmental": 0, "social": 0, "governance": 0
-                }),
+                "risk_level": calibrated_level,
+                "score": calibrated_score,
+                "reasoning": reasoning,
+                "affected_dimensions": affected_dimensions,
                 "recommendation": score_data.get("recommendation", ""),
                 "created_at": datetime.now(timezone.utc),
             }

@@ -16,6 +16,18 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+def _product_site_entry() -> Path | None:
+    project_root = Path(__file__).resolve().parents[3]
+    candidates = [
+        project_root / "esg_quant_landing_v2.html",
+        project_root / "site" / "index.html",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _module_status(request: Request) -> dict[str, bool]:
     query_engine = getattr(request.app.state, "query_engine", None)
     return {
@@ -286,10 +298,10 @@ def health_ready(request: Request):
 
 @router.get("/", include_in_schema=False)
 def root():
-    product_site = Path(__file__).resolve().parents[3] / "site" / "index.html"
-    if product_site.exists():
+    product_site = _product_site_entry()
+    if product_site is not None:
         return FileResponse(product_site)
-    return RedirectResponse(url="/app", status_code=307)
+    return RedirectResponse(url="/app/#/dashboard", status_code=307)
 
 
 @router.get("/dashboard/overview")
@@ -377,3 +389,59 @@ def dashboard_overview(request: Request):
             "summary": "将 QueryInterface、ScoreBoard、EventMonitor 和功能矩阵收束成一个高端总览页面，让信息一眼可读、功能一键可达。",
         },
     }
+
+
+@router.get("/market/ohlcv")
+def market_ohlcv(symbol: str = "NVDA", timeframe: str = "1D", limit: int = 120):
+    """
+    Fetch OHLCV candlestick data for a symbol.
+    Uses yfinance as primary source (free, no API key needed).
+    Falls back to synthetic data if yfinance unavailable.
+    """
+    tf_map = {"1D": "1d", "1W": "1wk", "1M": "1mo", "3M": "1d", "1Y": "1d"}
+    periods = {"1D": "6mo", "1W": "1y", "1M": "2y", "3M": "1y", "1Y": "5y"}
+    yf_interval = tf_map.get(timeframe, "1d")
+    yf_period   = periods.get(timeframe, "6mo")
+
+    try:
+        import yfinance as yf  # type: ignore
+        ticker = yf.Ticker(symbol.upper())
+        hist = ticker.history(period=yf_period, interval=yf_interval)
+        if hist.empty:
+            raise ValueError("No data returned")
+        candles = []
+        for ts, row in hist.tail(limit).iterrows():
+            candles.append({
+                "t": ts.strftime("%Y-%m-%d"),
+                "o": round(float(row["Open"]), 4),
+                "h": round(float(row["High"]), 4),
+                "l": round(float(row["Low"]), 4),
+                "c": round(float(row["Close"]), 4),
+                "v": int(row["Volume"]),
+            })
+        return {"symbol": symbol.upper(), "timeframe": timeframe, "source": "yfinance", "candles": candles}
+    except Exception as exc:
+        logger.warning(f"[OHLCV] yfinance failed for {symbol}: {exc}. Using synthetic data.")
+        # Synthetic fallback — realistic price walk
+        import math, random
+        random.seed(hash(symbol) % 10000)
+        base_prices = {"NVDA": 480, "TSLA": 175, "AAPL": 185, "MSFT": 415, "GOOGL": 155,
+                       "AMZN": 195, "META": 520, "AMGN": 270, "NEE": 72, "SPY": 510}
+        price = float(base_prices.get(symbol.upper(), 200))
+        from datetime import date, timedelta
+        start = date.today() - timedelta(days=limit * (7 if timeframe == "1W" else 1))
+        candles = []
+        for i in range(min(limit, 180)):
+            vol = 0.012 + random.random() * 0.008
+            o = price
+            c = price * (1 + (random.random() - 0.48) * vol * 2)
+            h = max(o, c) * (1 + random.random() * vol * 0.5)
+            l = min(o, c) * (1 - random.random() * vol * 0.5)
+            v = int((800 + random.random() * 3000) * 1000)
+            candles.append({
+                "t": (start + timedelta(days=i)).strftime("%Y-%m-%d"),
+                "o": round(o, 2), "h": round(h, 2), "l": round(l, 2),
+                "c": round(c, 2), "v": v,
+            })
+            price = c
+        return {"symbol": symbol.upper(), "timeframe": timeframe, "source": "synthetic", "candles": candles}

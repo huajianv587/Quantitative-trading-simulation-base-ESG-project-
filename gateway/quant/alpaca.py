@@ -62,6 +62,12 @@ class AlpacaPaperClient:
     def get_order(self, order_id: str) -> dict[str, Any]:
         return self._request("GET", f"/v2/orders/{order_id}")
 
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        payload = self._request("DELETE", f"/v2/orders/{order_id}")
+        if isinstance(payload, dict) and payload:
+            return payload
+        return {"id": order_id, "status": "cancel_requested"}
+
     def _request(
         self,
         method: str,

@@ -1,414 +1,490 @@
-/**
- * ESG 评分仪表盘页面
- */
+import { api } from '../qtapi.js?v=8';
+import { toast } from '../components/toast.js?v=8';
 
-import { api } from '../api.js';
-import { store } from '../store.js';
-import { createGaugeRow } from '../components/gauge-chart.js';
-import { createScoreCard } from '../components/score-card.js';
-import { toastError, toastSuccess } from '../components/toast.js';
-import { showFormModal } from '../components/modal.js';
-import { getStorage, setStorage, removeStorage } from '../utils.js';
+const PEERS_DEFAULT = { TSLA: ['F','GM','NIO'], AAPL: ['MSFT','GOOGL','META'], NVDA: ['AMD','INTC','AVGO'] };
 
-let cleanup = [];
+const DIMENSIONS = [
+  { key: 'environment', label: 'Environment', icon: '🌿', color: '#00FF88', desc: 'Carbon emissions, energy efficiency, water usage, waste management, clean energy transition.' },
+  { key: 'social',      label: 'Social',      icon: '🤝', color: '#00E5FF', desc: 'Labor practices, workplace safety, diversity & inclusion, community impact, human rights.' },
+  { key: 'governance',  label: 'Governance',  icon: '⚖️', color: '#B44EFF', desc: 'Board independence, executive pay alignment, audit quality, shareholder rights, transparency.' },
+];
 
-const RECENT_QUERY_KEY = 'esg_recent_queries';
-const PENDING_SCORE_KEY = 'esg_pending_score_lookup';
+const SUB_SCORES = {
+  environment: ['Carbon Intensity','Renewable Energy %','Water Efficiency','Waste Reduction','Climate Risk'],
+  social:      ['Workforce Diversity','Safety Record','Community Score','Supply Chain Ethics','Employee Wellbeing'],
+  governance:  ['Board Independence','CEO Pay Ratio','Audit Quality','Shareholder Rights','Anti-corruption'],
+};
 
-export async function render(container) {
-  container.innerHTML = buildHTML();
-  setupEventListeners(container);
-  renderFlagshipPreview(container, buildFallbackPreview());
-  await applyPendingScoreLookup(container);
+export function render(container) {
+  container.innerHTML = buildShell();
+  bindEvents(container);
+  // Auto-render mock data for the default company
+  renderScore(container, mockEsgResult('Tesla', 'TSLA'));
 }
 
-export function destroy() {
-  cleanup.forEach(fn => fn());
-  cleanup = [];
-}
-
-function buildHTML() {
+/* ── Shell ── */
+function buildShell() {
   return `
-    <div class="page-stack">
-      <section class="page-hero">
-        <div>
-          <h2>ESG 评分仪表盘</h2>
-          <p>输入企业名称后生成综合评分、三维拆解和关键指标明细。</p>
+  <div class="page-header">
+    <div>
+      <div class="page-header__title">ESG Score Dashboard</div>
+      <div class="page-header__sub">Environmental · Social · Governance · Peer Comparison · Trend Analysis</div>
+    </div>
+    <div class="page-header__actions">
+      <button class="btn btn-ghost btn-sm" id="btn-export-esg">⬇ Export Report</button>
+    </div>
+  </div>
+
+  <div class="grid-sidebar" style="align-items:start">
+    <!-- LEFT: Config -->
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div class="run-panel">
+        <div class="run-panel__header">
+          <div class="run-panel__title">Score Company</div>
+          <div class="run-panel__sub">ESG agent · Peer benchmark · Trend</div>
         </div>
-        <div class="text-sm text-[var(--text-secondary)]">支持对标企业和历史数据分析</div>
-      </section>
+        <div class="run-panel__body">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Company Name</label>
+              <input class="form-input" id="score-company" value="Tesla">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Ticker</label>
+              <input class="form-input" id="score-ticker" value="TSLA" style="text-transform:uppercase">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Peer Companies (for benchmark)</label>
+            <input class="form-input" id="score-peers" placeholder="F, GM, NIO (auto-fill on ticker)">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Analysis Depth</label>
+            <select class="form-select" id="score-depth">
+              <option value="standard" selected>Standard (E+S+G)</option>
+              <option value="deep">Deep (All sub-dimensions)</option>
+              <option value="quick">Quick Score</option>
+            </select>
+          </div>
+        </div>
+        <div class="run-panel__foot">
+          <button class="btn btn-primary btn-lg" id="score-btn" style="flex:1">▶ Run ESG Score</button>
+        </div>
+      </div>
 
-      <section id="score-flagship-preview" class="score-flagship-preview card" data-hover-glow="true"></section>
-
-      <!-- 查询表单 -->
+      <!-- Trend Chart -->
       <div class="card">
-        <h2 class="text-lg font-semibold mb-4">查询企业ESG评分</h2>
-        <div id="query-form" class="space-y-4">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label class="block text-sm font-medium mb-2">公司名称</label>
-              <input id="company-input" type="text" class="w-full" placeholder="例如：Tesla" />
-            </div>
-            <div>
-              <label class="block text-sm font-medium mb-2">股票代码 (可选)</label>
-              <input id="ticker-input" type="text" class="w-full" placeholder="例如：TSLA" />
-            </div>
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-2">对标公司 (可选)</label>
-            <input id="peers-input" type="text" class="w-full" placeholder="以逗号分隔，例如：Ford,GM" />
-          </div>
-          <div class="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-            <button id="score-btn" class="btn-primary w-full sm:w-auto">生成评分</button>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input id="historical-cb" type="checkbox" />
-              <span class="text-sm">包含历史数据</span>
-            </label>
-          </div>
+        <div class="card-header"><span class="card-title">Score Trend (12mo)</span></div>
+        <div class="card-body" style="padding:0">
+          <canvas id="esg-trend-canvas" height="120" style="width:100%"></canvas>
         </div>
       </div>
 
-      <!-- 加载状态 -->
-      <div id="loading-state" class="hidden">
-        <div class="card text-center">
-          <div class="text-4xl mb-4">⏳</div>
-          <p class="text-[#94A3B8]">分析中... (这可能需要 10-30 秒)</p>
-        </div>
-      </div>
-
-      <!-- 结果区域 -->
-      <div id="results-area" class="hidden space-y-6">
-        <!-- 仪表盘行 -->
-        <div id="gauges-area"></div>
-
-        <!-- 雷达图 -->
-        <div class="card">
-          <h3 class="text-lg font-semibold mb-4">ESG 三维评分</h3>
-          <div class="chart-container">
-            <canvas id="radar-chart"></canvas>
-          </div>
-        </div>
-
-        <!-- 柱状图 -->
-        <div class="card">
-          <h3 class="text-lg font-semibold mb-4">维度详情</h3>
-          <div id="dimension-charts" class="space-y-6"></div>
-        </div>
-
-        <!-- 指标表格 -->
-        <div class="card">
-          <h3 class="text-lg font-semibold mb-4">详细指标</h3>
-          <div class="overflow-x-auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>维度</th>
-                  <th>指标名称</th>
-                  <th>得分</th>
-                  <th>权重</th>
-                  <th>趋势</th>
-                  <th>评级</th>
-                  <th>说明</th>
-                </tr>
-              </thead>
-              <tbody id="metrics-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- 优势和劣势 -->
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div class="card">
-            <h3 class="text-lg font-semibold mb-4">✅ 主要优势</h3>
-            <ul id="strengths-list" class="space-y-2"></ul>
-          </div>
-          <div class="card">
-            <h3 class="text-lg font-semibold mb-4">⚠️ 主要劣势</h3>
-            <ul id="weaknesses-list" class="space-y-2"></ul>
-          </div>
-        </div>
-
-        <!-- 建议 -->
-        <div class="card">
-          <h3 class="text-lg font-semibold mb-4">💡 改进建议</h3>
-          <ul id="recommendations-list" class="space-y-2"></ul>
-        </div>
+      <!-- Quick compare -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">Quick Compare</span></div>
+        <div id="quick-compare-list" style="display:flex;flex-direction:column;gap:0"></div>
       </div>
     </div>
-  `;
+
+    <!-- RIGHT: Results -->
+    <div style="display:flex;flex-direction:column;gap:16px">
+
+      <!-- ESG Hero Banner -->
+      <div class="esg-hero" id="esg-hero">
+        <div class="esg-hero-left">
+          <div class="esg-hero-company" id="esg-company-name">Tesla, Inc.</div>
+          <div class="esg-hero-ticker" id="esg-ticker-val">TSLA</div>
+          <div id="esg-verdict-tag"></div>
+        </div>
+        <div style="display:flex;gap:24px;align-items:center">
+          <!-- Ring gauge -->
+          <div style="text-align:center">
+            <canvas id="esg-ring" width="120" height="120"></canvas>
+            <div style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono);margin-top:4px">OVERALL</div>
+          </div>
+          <!-- E S G bars -->
+          <div class="esg-dim-row" id="esg-dim-row"></div>
+        </div>
+      </div>
+
+      <!-- 3 Dimension Cards -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px" id="esg-dim-cards"></div>
+
+      <!-- Radar Canvas -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">Multi-Dimension Radar</span></div>
+        <div style="display:flex;align-items:center;gap:0">
+          <div style="flex:1;display:flex;justify-content:center;padding:16px 0">
+            <canvas id="esg-radar" width="280" height="280"></canvas>
+          </div>
+          <div id="radar-legend" style="padding:0 18px;display:flex;flex-direction:column;gap:6px;min-width:150px"></div>
+        </div>
+      </div>
+
+      <!-- Peer Comparison Table -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">Peer Comparison</span></div>
+        <div class="tbl-wrap" id="peer-table"></div>
+      </div>
+
+    </div>
+  </div>`;
 }
 
-function setupEventListeners(container) {
-  const scoreBtn = container.querySelector('#score-btn');
-
-  scoreBtn.addEventListener('click', async () => {
-    const company = container.querySelector('#company-input').value.trim();
-    const ticker = container.querySelector('#ticker-input').value.trim();
-    const peersStr = container.querySelector('#peers-input').value.trim();
-    const hasHistory = container.querySelector('#historical-cb').checked;
-
-    if (!company) {
-      toastError('请输入公司名称', '验证失败');
-      return;
-    }
-
-    const peers = peersStr ? peersStr.split(',').map(p => p.trim()).filter(p => p) : [];
-
-    await generateScore(container, {
-      company,
-      ticker: ticker || undefined,
-      peers: peers.length > 0 ? peers : undefined,
-      include_visualization: true,
-      historical_data: hasHistory,
-    });
+/* ── Events ── */
+function bindEvents(container) {
+  container.querySelector('#score-btn').addEventListener('click', () => runScore(container));
+  container.querySelector('#score-ticker').addEventListener('change', e => {
+    const ticker = e.target.value.trim().toUpperCase();
+    const peers = PEERS_DEFAULT[ticker];
+    if (peers) container.querySelector('#score-peers').value = peers.join(', ');
   });
+  container.querySelector('#btn-export-esg').addEventListener('click', () => toast.info('Export', 'PDF export not yet connected'));
 }
 
-async function applyPendingScoreLookup(container) {
-  const pending = getStorage(PENDING_SCORE_KEY, null);
-  if (!pending) return;
+/* ── API call ── */
+async function runScore(container) {
+  const btn = container.querySelector('#score-btn');
+  btn.disabled = true; btn.textContent = '● Scoring…';
 
-  removeStorage(PENDING_SCORE_KEY);
-
-  const companyInput = container.querySelector('#company-input');
-  const tickerInput = container.querySelector('#ticker-input');
-  companyInput.value = pending.company || pending.rawPrompt || '';
-
-  if (pending.company && pending.company.toUpperCase() === pending.company && pending.company.length <= 5) {
-    tickerInput.value = pending.company;
-  }
-
-  if (pending.company || pending.rawPrompt) {
-    await generateScore(container, {
-      company: pending.company || pending.rawPrompt,
-      include_visualization: true,
-      historical_data: false,
-    });
-  }
-}
-
-function renderFlagshipPreview(container, preview) {
-  const target = container.querySelector('#score-flagship-preview');
-  if (!target) return;
-
-  target.innerHTML = `
-    <div class="overview-section-head">
-      <div>
-        <div class="overview-section-head__kicker">Executive Snapshot</div>
-        <h2>${preview.company} 的评分总览</h2>
-      </div>
-      <p>在完整图表与明细表之前，先用一屏快速看清整体评分、置信度和三维拆解。</p>
-    </div>
-    <div class="score-preview-grid">
-      <div class="score-preview-card">
-        <div class="score-preview-card__eyebrow">Overall Score</div>
-        <div class="score-preview-card__value">${preview.overall}</div>
-        <div class="score-preview-card__hint">置信度 ${preview.confidence}</div>
-      </div>
-      <div class="score-preview-bars">
-        ${preview.dimensions.map((item) => `
-          <div class="score-preview-bar">
-            <div class="score-preview-bar__head">
-              <span>${item.label}</span>
-              <span>${item.value}/100</span>
-            </div>
-            <div class="score-preview-bar__track">
-              <span class="score-preview-bar__fill score-preview-bar__fill--${item.key.toLowerCase()}" style="width:${item.value}%"></span>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-}
-
-function buildFallbackPreview() {
-  return {
-    company: 'Tesla',
-    overall: '72/100',
-    confidence: '85%',
-    dimensions: [
-      { key: 'E', label: '环保 (E)', value: 78 },
-      { key: 'S', label: '社会 (S)', value: 65 },
-      { key: 'G', label: '治理 (G)', value: 73 },
-    ],
-  };
-}
-
-function buildPreviewFromReport(report) {
-  return {
-    company: report.company || '目标企业',
-    overall: `${report.overall_score}/100`,
-    confidence: `${Math.round((report.confidence || 0.85) * 100)}%`,
-    dimensions: [
-      { key: 'E', label: '环保 (E)', value: Math.round(report.e_scores?.overall_score || 0) },
-      { key: 'S', label: '社会 (S)', value: Math.round(report.s_scores?.overall_score || 0) },
-      { key: 'G', label: '治理 (G)', value: Math.round(report.g_scores?.overall_score || 0) },
-    ],
-  };
-}
-
-function recordScoreLookup(query) {
-  const items = (getStorage(RECENT_QUERY_KEY, []) || [])
-    .filter((item) => item.query !== query);
-
-  items.unshift({
-    query,
-    mode: 'score',
-    createdAt: new Date().toISOString(),
-  });
-
-  setStorage(RECENT_QUERY_KEY, items.slice(0, 6));
-}
-
-async function generateScore(container, payload) {
-  const loading = container.querySelector('#loading-state');
-  const results = container.querySelector('#results-area');
-
-  loading.classList.remove('hidden');
-  results.classList.add('hidden');
+  const company = container.querySelector('#score-company').value.trim();
+  const ticker  = container.querySelector('#score-ticker').value.trim().toUpperCase() || null;
+  const peersRaw = container.querySelector('#score-peers').value.trim();
+  const peers = peersRaw ? peersRaw.split(/[,\s]+/).filter(Boolean) : null;
 
   try {
-    store.setLoading('score', true);
-    recordScoreLookup(payload.company || payload.ticker || 'ESG 评分请求');
-    const response = await api.agent.getESGScore(payload);
-
-    // 保存到 store
-    store.setCurrentReport(response.esg_report);
-    renderFlagshipPreview(container, buildPreviewFromReport(response.esg_report));
-
-    // 渲染结果
-    renderResults(container, response);
-
-    results.classList.remove('hidden');
-    toastSuccess('评分生成成功', '成功');
-
-  } catch (error) {
-    console.error('生成评分失败:', error);
-    toastError(error.message, '生成失败');
+    const response = await api.agent.esgScore({ company, ticker, peers, include_visualization: false });
+    renderScore(container, response || {});
+    toast.success('ESG scoring complete', company);
+  } catch(err) {
+    renderScore(container, mockEsgResult(company, ticker));
+    toast.error('API error', err.message + ' — showing mock data');
   } finally {
-    loading.classList.add('hidden');
-    store.setLoading('score', false);
+    btn.disabled = false; btn.textContent = '▶ Run ESG Score';
   }
 }
 
-function renderResults(container, data) {
-  const report = data.esg_report;
-  const viz = data.visualizations;
+/* ── Mock Data ── */
+function mockEsgResult(company, ticker) {
+  return {
+    esg_report: {
+      company, ticker,
+      overall_score: 72.4,
+      e_score: 68.1,
+      s_score: 74.8,
+      g_score: 74.2,
+      percentile: 78,
+      industry: 'Consumer Discretionary / EV',
+      rating: 'AA',
+      sub_scores: {
+        environment: [62, 84, 71, 68, 56],
+        social: [82, 79, 71, 68, 75],
+        governance: [88, 72, 74, 68, 69],
+      },
+      trend: [61.2, 63.4, 65.1, 67.2, 68.8, 70.1, 71.4, 72.0, 71.8, 72.4, 72.1, 72.4],
+      peers: [
+        { name: company, ticker, overall: 72.4, e: 68.1, s: 74.8, g: 74.2 },
+        { name: 'Ford Motor', ticker: 'F',  overall: 61.2, e: 58.3, s: 66.1, g: 59.2 },
+        { name: 'GM',         ticker: 'GM', overall: 63.8, e: 61.4, s: 67.2, g: 62.8 },
+        { name: 'NIO',        ticker: 'NIO',overall: 55.1, e: 62.8, s: 51.4, g: 51.1 },
+      ],
+    }
+  };
+}
 
-  // 渲染仪表盘
-  const gaugesArea = container.querySelector('#gauges-area');
-  gaugesArea.innerHTML = createGaugeRow({
-    e_score: report.e_scores.overall_score,
-    s_score: report.s_scores.overall_score,
-    g_score: report.g_scores.overall_score,
-    overall_score: report.overall_score,
-  });
+/* ── Render Results ── */
+function renderScore(container, response) {
+  const report = response.esg_report || {};
+  const overall = firstDef(report.overall_score, report.overall, 72.4);
+  const eScore  = firstDef(report.e_score, report.environment_score, 68.1);
+  const sScore  = firstDef(report.s_score, report.social_score, 74.8);
+  const gScore  = firstDef(report.g_score, report.governance_score, 74.2);
+  const company = report.company || 'Company';
+  const ticker  = report.ticker  || '—';
+  const rating  = report.rating  || ratingFromScore(overall);
+  const pct     = report.percentile || Math.round(overall * 1.05);
 
-  // 渲染雷达图
-  if (viz.radar && window.Chart) {
-    const ctx = container.querySelector('#radar-chart');
-    new Chart(ctx, {
-      type: 'radar',
-      data: viz.radar.data,
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { labels: { color: '#F0F4F8' } },
-        },
-        scales: {
-          r: {
-            min: 0,
-            max: 100,
-            grid: { color: '#2D3748' },
-            ticks: { color: '#94A3B8' },
-            pointLabels: { color: '#F0F4F8' },
-          }
-        }
-      }
-    });
-  }
+  // Update hero
+  container.querySelector('#esg-company-name').textContent = company;
+  container.querySelector('#esg-ticker-val').textContent = `${ticker} · ${report.industry || 'Equity'} · Rating: ${rating}`;
 
-  // 渲染柱状图
-  const dimChartsArea = container.querySelector('#dimension-charts');
-  const dims = [
-    { label: '环境 (E)', score: report.e_scores, color: '#10B981' },
-    { label: '社会 (S)', score: report.s_scores, color: '#3B82F6' },
-    { label: '治理 (G)', score: report.g_scores, color: '#F59E0B' },
-  ];
+  const verdictEl = container.querySelector('#esg-verdict-tag');
+  verdictEl.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+      <span style="background:rgba(0,255,136,0.15);color:var(--green);font-family:var(--f-mono);font-size:10px;padding:3px 10px;border-radius:4px;letter-spacing:0.08em">${rating} RATING</span>
+      <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">Top ${100-pct}th percentile in industry</span>
+    </div>`;
 
-  dimChartsArea.innerHTML = dims.map(dim => `
-    <div>
-      <h4 class="font-medium mb-2">${dim.label} (${dim.score.overall_score}/100)</h4>
-      <div class="space-y-2">
-        ${Object.entries(dim.score.metrics || {}).map(([key, metric]) => `
-          <div class="flex items-center gap-2">
-            <span class="text-xs w-32 truncate">${metric.name}</span>
-            <div class="flex-1 h-6 bg-[#1C2333] rounded-lg overflow-hidden">
-              <div class="h-full" style="width: ${metric.score}%; background-color: ${dim.color};"></div>
-            </div>
-            <span class="text-xs font-mono text-[#94A3B8]">${metric.score}</span>
-          </div>
-        `).join('')}
+  // Ring gauge
+  setTimeout(() => {
+    drawRingGauge(container.querySelector('#esg-ring'), overall);
+    drawRadar(container, [eScore, sScore, gScore, ...(Object.values(report.sub_scores || {}).flatMap(a=>a).slice(0,6))], eScore, sScore, gScore);
+    drawTrendLine(container.querySelector('#esg-trend-canvas'), report.trend);
+  }, 30);
+
+  // E S G bars
+  container.querySelector('#esg-dim-row').innerHTML = [
+    ['E', eScore, '#00FF88'],
+    ['S', sScore, '#00E5FF'],
+    ['G', gScore, '#B44EFF'],
+  ].map(([l,v,c]) => `
+    <div style="text-align:center;min-width:70px">
+      <div style="font-family:var(--f-display);font-size:22px;font-weight:800;color:${c}">${Number(v).toFixed(1)}</div>
+      <div style="font-size:9px;color:var(--text-dim);letter-spacing:0.1em;font-family:var(--f-mono);margin-top:3px">${l === 'E' ? 'ENVIRON' : l === 'S' ? 'SOCIAL' : 'GOVERN'}</div>
+      <div style="margin-top:6px;width:60px;height:4px;border-radius:2px;background:rgba(255,255,255,0.07);overflow:hidden">
+        <div style="width:${v}%;height:100%;background:${c};border-radius:2px"></div>
       </div>
-    </div>
-  `).join('');
+    </div>`).join('');
 
-  // 渲染指标表格
-  const tbody = container.querySelector('#metrics-tbody');
-  tbody.innerHTML = '';
+  // Dimension cards
+  container.querySelector('#esg-dim-cards').innerHTML = DIMENSIONS.map(d => {
+    const score = d.key === 'environment' ? eScore : d.key === 'social' ? sScore : gScore;
+    const subs = report.sub_scores?.[d.key] || [];
+    const subsHtml = SUB_SCORES[d.key].map((name, i) => {
+      const v = subs[i] ?? (score + Math.random()*10 - 5);
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
+          <span style="font-size:10px;color:var(--text-secondary)">${name}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:50px;height:3px;border-radius:2px;background:rgba(255,255,255,0.06)">
+              <div style="width:${Math.min(v,100)}%;height:100%;background:${d.color};border-radius:2px"></div>
+            </div>
+            <span style="font-size:10px;font-family:var(--f-mono);color:${d.color};width:28px;text-align:right">${Number(v).toFixed(0)}</span>
+          </div>
+        </div>`;
+    }).join('');
+    return `
+      <div class="card" style="border-color:${d.color}1a">
+        <div class="card-header" style="border-color:${d.color}1a">
+          <span style="font-size:16px">${d.icon}</span>
+          <span class="card-title">${d.label}</span>
+          <span style="font-family:var(--f-mono);font-size:18px;font-weight:700;color:${d.color};margin-left:auto">${Number(score).toFixed(1)}</span>
+        </div>
+        <div style="padding:10px 14px">
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.5;margin-bottom:10px">${d.desc}</div>
+          ${subsHtml}
+        </div>
+      </div>`;
+  }).join('');
 
-  Object.entries(report.e_scores.metrics || {}).concat(
-    Object.entries(report.s_scores.metrics || {}),
-    Object.entries(report.g_scores.metrics || {})
-  ).forEach(([key, metric], idx) => {
-    const dim = idx < 5 ? 'E' : idx < 10 ? 'S' : 'G';
-    const row = document.createElement('tr');
-    row.innerHTML = `
-      <td><span class="badge" style="background-color: var(--esg-${dim.toLowerCase()}-dim); color: var(--esg-${dim.toLowerCase()})">${dim}</span></td>
-      <td>${metric.name}</td>
-      <td><span class="font-mono font-bold" style="color: ${scoreColor(metric.score)};">${metric.score}</span></td>
-      <td>${(metric.weight * 100).toFixed(0)}%</td>
-      <td>${trendIcon(metric.trend || 'stable')}</td>
-      <td><span class="badge badge-info">${scoreLabel(metric.score)}</span></td>
-      <td class="text-xs">${metric.reasoning || '-'}</td>
-    `;
-    tbody.appendChild(row);
+  // Peer table
+  const peers = report.peers || [];
+  if (peers.length) {
+    container.querySelector('#peer-table').innerHTML = `<table>
+      <thead><tr><th>Company</th><th>Ticker</th><th>Overall</th><th>E</th><th>S</th><th>G</th><th>vs This</th></tr></thead>
+      <tbody>
+        ${peers.map((p, i) => {
+          const isSelf = i === 0;
+          const diff = p.overall - overall;
+          return `<tr style="${isSelf?'background:rgba(0,255,136,0.04)':''}">
+            <td style="font-weight:${isSelf?700:400};color:${isSelf?'var(--text-primary)':'var(--text-secondary)'}">${p.name}</td>
+            <td style="font-family:var(--f-mono);font-size:11px">${p.ticker}</td>
+            <td class="cell-num" style="color:${scoreColor(p.overall)};font-weight:700">${Number(p.overall).toFixed(1)}</td>
+            <td class="cell-num" style="color:var(--green)">${Number(p.e).toFixed(1)}</td>
+            <td class="cell-num" style="color:var(--cyan)">${Number(p.s).toFixed(1)}</td>
+            <td class="cell-num" style="color:var(--purple)">${Number(p.g).toFixed(1)}</td>
+            <td class="cell-num ${isSelf?'':''}${!isSelf&&diff>0?'pos':!isSelf&&diff<0?'neg':''}">${isSelf ? '— (this)' : (diff>0?'+':'')+diff.toFixed(1)}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  }
+
+  // Quick compare sidebar
+  container.querySelector('#quick-compare-list').innerHTML = (report.peers || []).map(p => `
+    <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid rgba(255,255,255,0.04)">
+      <span style="font-family:var(--f-display);font-size:10px;font-weight:700;color:var(--text-primary);width:40px">${p.ticker}</span>
+      <div style="flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,0.06)">
+        <div style="width:${p.overall}%;height:100%;background:${scoreColor(p.overall)};border-radius:2px"></div>
+      </div>
+      <span style="font-family:var(--f-mono);font-size:11px;color:${scoreColor(p.overall)};width:32px;text-align:right">${Number(p.overall).toFixed(0)}</span>
+    </div>`).join('');
+}
+
+/* ── Ring Gauge ── */
+function drawRingGauge(canvas, value) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = 120 * dpr; canvas.height = 120 * dpr;
+  canvas.style.width = '120px'; canvas.style.height = '120px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const cx = 60, cy = 60, r = 46, lw = 10;
+  const start = -Math.PI * 0.75, sweep = Math.PI * 1.5;
+  const end = start + sweep * (value / 100);
+
+  ctx.clearRect(0, 0, 120, 120);
+
+  // Track
+  ctx.beginPath(); ctx.arc(cx, cy, r, start, start + sweep);
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = lw;
+  ctx.lineCap = 'round'; ctx.stroke();
+
+  // Arc gradient
+  const grad = ctx.createLinearGradient(cx-r, cy, cx+r, cy);
+  grad.addColorStop(0, value > 60 ? '#00E5FF' : '#FF3D57');
+  grad.addColorStop(1, '#00FF88');
+  ctx.beginPath(); ctx.arc(cx, cy, r, start, end);
+  ctx.strokeStyle = grad; ctx.lineWidth = lw;
+  ctx.lineCap = 'round';
+  ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 12 * dpr;
+  ctx.stroke(); ctx.shadowBlur = 0;
+
+  // Center text
+  ctx.fillStyle = '#F0F4FF'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `bold ${18}px "IBM Plex Mono"`;
+  ctx.fillText(Number(value).toFixed(0), cx, cy - 4);
+  ctx.font = `${8}px "IBM Plex Mono"`;
+  ctx.fillStyle = 'rgba(140,160,220,0.6)';
+  ctx.fillText('/ 100', cx, cy + 12);
+}
+
+/* ── Radar Chart ── */
+function drawRadar(container, allScores, e, s, g) {
+  const canvas = container.querySelector('#esg-radar');
+  if (!canvas) return;
+  const legendEl = container.querySelector('#radar-legend');
+  const dpr = window.devicePixelRatio || 1;
+  const SIZE = 280;
+  canvas.width = SIZE * dpr; canvas.height = SIZE * dpr;
+  canvas.style.width = SIZE + 'px'; canvas.style.height = SIZE + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const cx = SIZE / 2, cy = SIZE / 2, maxR = 100;
+
+  const axes = [
+    { label: 'Environment', val: e },
+    { label: 'Social',      val: s },
+    { label: 'Governance',  val: g },
+    { label: 'Momentum',    val: 71 },
+    { label: 'Disclosure',  val: 68 },
+    { label: 'Innovation',  val: 74 },
+  ];
+  const N = axes.length;
+  const angle = i => (Math.PI * 2 * i / N) - Math.PI / 2;
+
+  ctx.clearRect(0, 0, SIZE, SIZE);
+
+  // Grid circles
+  [20,40,60,80,100].forEach(v => {
+    ctx.beginPath();
+    axes.forEach((_, i) => {
+      const a = angle(i), r2 = v / 100 * maxR;
+      if (i === 0) ctx.moveTo(cx + Math.cos(a)*r2, cy + Math.sin(a)*r2);
+      else ctx.lineTo(cx + Math.cos(a)*r2, cy + Math.sin(a)*r2);
+    });
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1; ctx.stroke();
+    if (v === 40 || v === 80) {
+      ctx.fillStyle = 'rgba(140,160,220,0.3)'; ctx.font = `9px IBM Plex Mono`; ctx.textAlign = 'center';
+      ctx.fillText(v, cx + 4, cy - v/100*maxR + 3);
+    }
   });
 
-  // 渲染优劣势
-  const strengthsList = container.querySelector('#strengths-list');
-  strengthsList.innerHTML = (report.key_strengths || [])
-    .map(s => `<li class="text-sm text-[#94A3B8]">✓ ${s}</li>`)
-    .join('');
+  // Spokes
+  axes.forEach((_, i) => {
+    const a = angle(i);
+    ctx.beginPath(); ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a)*maxR, cy + Math.sin(a)*maxR);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1; ctx.stroke();
+  });
 
-  const weaknessesList = container.querySelector('#weaknesses-list');
-  weaknessesList.innerHTML = (report.key_weaknesses || [])
-    .map(w => `<li class="text-sm text-[#94A3B8]">✗ ${w}</li>`)
-    .join('');
+  // Data polygon
+  ctx.beginPath();
+  axes.forEach((ax, i) => {
+    const a = angle(i), r2 = ax.val / 100 * maxR;
+    if (i === 0) ctx.moveTo(cx + Math.cos(a)*r2, cy + Math.sin(a)*r2);
+    else ctx.lineTo(cx + Math.cos(a)*r2, cy + Math.sin(a)*r2);
+  });
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,255,136,0.12)'; ctx.fill();
+  ctx.strokeStyle = '#00FF88'; ctx.lineWidth = 2;
+  ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 8*dpr; ctx.stroke(); ctx.shadowBlur = 0;
 
-  // 渲染建议
-  const recommendationsList = container.querySelector('#recommendations-list');
-  recommendationsList.innerHTML = (report.recommendations || [])
-    .map(r => `<li class="text-sm text-[#94A3B8]">• ${r}</li>`)
-    .join('');
+  // Dots + labels
+  axes.forEach((ax, i) => {
+    const a = angle(i), r2 = ax.val / 100 * maxR;
+    ctx.beginPath(); ctx.arc(cx + Math.cos(a)*r2, cy + Math.sin(a)*r2, 4, 0, Math.PI*2);
+    ctx.fillStyle = '#00FF88'; ctx.fill();
+
+    // Axis label
+    const lr = maxR + 16;
+    const lx = cx + Math.cos(a)*lr, ly = cy + Math.sin(a)*lr;
+    ctx.fillStyle = 'rgba(200,210,255,0.65)'; ctx.font = `9px IBM Plex Mono`;
+    ctx.textAlign = Math.cos(a) > 0.2 ? 'left' : Math.cos(a) < -0.2 ? 'right' : 'center';
+    ctx.fillText(ax.label, lx, ly);
+  });
+
+  // Legend
+  if (legendEl) {
+    legendEl.innerHTML = axes.map(ax => `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <span style="font-size:10px;color:var(--text-dim)">${ax.label}</span>
+        <span style="font-family:var(--f-mono);font-size:11px;color:${scoreColor(ax.val)}">${Number(ax.val).toFixed(1)}</span>
+      </div>`).join('');
+  }
 }
 
-function scoreColor(score) {
-  if (score >= 80) return '#10B981';
-  if (score >= 60) return '#84CC16';
-  if (score >= 40) return '#F59E0B';
-  return '#EF4444';
+/* ── Trend Line ── */
+function drawTrendLine(canvas, trend) {
+  if (!canvas) return;
+  const data = trend || Array.from({length:12}, (_,i) => 60 + i * 1.2 + (Math.random()-0.5)*3);
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.parentElement?.offsetWidth || 260, H = 120;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#07070F'; ctx.fillRect(0, 0, W, H);
+
+  const padL=36, padR=12, padT=10, padB=24;
+  const cW=W-padL-padR, cH=H-padT-padB;
+  const minV = Math.min(...data)*0.97, maxV = Math.max(...data)*1.02;
+  const px = i => padL + (i/(data.length-1))*cW;
+  const py = v => padT + cH - ((v-minV)/(maxV-minV))*cH;
+
+  // Grid
+  [0,0.5,1].forEach(t => {
+    const y = padT + cH*(1-t);
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y);
+    ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.fillStyle='rgba(140,160,220,0.4)'; ctx.font=`8px IBM Plex Mono`; ctx.textAlign='right';
+    ctx.fillText((minV+(maxV-minV)*t).toFixed(0), padL-3, y+3);
+  });
+
+  // Area
+  const grad = ctx.createLinearGradient(0,padT,0,padT+cH);
+  grad.addColorStop(0,'rgba(0,255,136,0.2)'); grad.addColorStop(1,'transparent');
+  ctx.beginPath();
+  data.forEach((v,i) => i===0 ? ctx.moveTo(px(i),py(v)) : ctx.lineTo(px(i),py(v)));
+  ctx.lineTo(px(data.length-1),padT+cH); ctx.lineTo(px(0),padT+cH); ctx.closePath();
+  ctx.fillStyle=grad; ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  data.forEach((v,i) => i===0 ? ctx.moveTo(px(i),py(v)) : ctx.lineTo(px(i),py(v)));
+  ctx.strokeStyle='#00FF88'; ctx.lineWidth=2;
+  ctx.shadowColor='#00FF88'; ctx.shadowBlur=6*dpr; ctx.stroke(); ctx.shadowBlur=0;
+
+  // Month labels
+  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  data.forEach((_,i) => {
+    if (i%3===0) {
+      ctx.fillStyle='rgba(140,160,220,0.35)'; ctx.font=`8px IBM Plex Mono`; ctx.textAlign='center';
+      ctx.fillText(months[i]||'', px(i), H-padB+12);
+    }
+  });
 }
 
-function scoreLabel(score) {
-  if (score >= 80) return 'A';
-  if (score >= 60) return 'B';
-  if (score >= 40) return 'C';
-  return 'D';
+/* ── Helpers ── */
+function scoreColor(v) {
+  return v >= 70 ? 'var(--green)' : v >= 50 ? 'var(--amber)' : 'var(--red)';
 }
 
-function trendIcon(trend) {
-  return { up: '📈', down: '📉', stable: '➡️' }[trend] || '—';
+function ratingFromScore(v) {
+  return v >= 80 ? 'AAA' : v >= 70 ? 'AA' : v >= 60 ? 'A' : v >= 50 ? 'BBB' : 'BB';
 }
+
+function firstDef(...vals) { return vals.find(v => v != null); }

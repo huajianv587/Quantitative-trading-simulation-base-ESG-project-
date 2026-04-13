@@ -37,3 +37,20 @@ env/
 *.log
 *.tmp
 *.tmp.jsonl
+node_modules/
+playwright-report/
+test-results/
+
+# Training data — do not push
+AAAtest/
+data/
+delivery/
+outputs_2_to_7/
+training/p0_assets/
+training/p1_assets/
+training/p2_assets/
+training/cloud_assets/
+training/full_training_run_manifest.json
+frontend_v1_backup/
+.pytest_cache/
+model-serving/checkpoint/*/

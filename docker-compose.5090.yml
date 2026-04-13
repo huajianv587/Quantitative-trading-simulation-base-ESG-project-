@@ -1,0 +1,120 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: esg-quant-api-5090
+    env_file:
+      - .env
+    environment:
+      PORT: 8000
+      APP_MODE: hybrid
+      LLM_BACKEND_MODE: remote
+      LOCAL_API_URL: http://api:8000
+      QDRANT_URL: http://qdrant:6333
+      REMOTE_LLM_URL: http://remote-llm:8010
+      P1_SEQUENCE_ENABLED: "true"
+      EVENT_CLASSIFIER_ENABLED: "true"
+      EVENT_CLASSIFIER_TARGET: controversy_label
+      P2_BANDIT_ENABLED: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./model-serving/checkpoint:/app/model-serving/checkpoint
+      - ./data:/app/data
+      - app_storage:/app/storage
+    depends_on:
+      qdrant:
+        condition: service_started
+      remote-llm:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+
+  quant-scheduler:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: esg-quant-scheduler-5090
+    env_file:
+      - .env
+    environment:
+      APP_MODE: hybrid
+      LLM_BACKEND_MODE: remote
+      LOCAL_API_URL: http://api:8000
+      QDRANT_URL: http://qdrant:6333
+      REMOTE_LLM_URL: http://remote-llm:8010
+      P1_SEQUENCE_ENABLED: "true"
+      EVENT_CLASSIFIER_ENABLED: "true"
+      EVENT_CLASSIFIER_TARGET: controversy_label
+      P2_BANDIT_ENABLED: "true"
+      SCHEDULER_STATE_PATH: /app/storage/quant/scheduler/runtime_state.json
+      SCHEDULER_HEARTBEAT_PATH: /app/storage/quant/scheduler/heartbeat.json
+      SCHEDULER_LOCK_PATH: /app/storage/quant/scheduler/worker.lock
+    command: ["python", "scripts/quant_signal_scheduler.py", "--poll-seconds", "20"]
+    volumes:
+      - ./model-serving/checkpoint:/app/model-serving/checkpoint
+      - ./data:/app/data
+      - app_storage:/app/storage
+    depends_on:
+      api:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      remote-llm:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, pathlib, sys, time; p=pathlib.Path('/app/storage/quant/scheduler/heartbeat.json'); data=json.loads(p.read_text()) if p.exists() else {}; ts=data.get('updated_at') or data.get('generated_at'); sys.exit(0 if ts else 1)"]
+      interval: 45s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
+
+  remote-llm:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: esg-quant-remote-llm-5090
+    env_file:
+      - .env
+    environment:
+      REMOTE_LLM_HOST: 0.0.0.0
+      REMOTE_LLM_PORT: 8010
+      REMOTE_LLM_BASE_MODEL: ${REMOTE_LLM_BASE_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+      REMOTE_LLM_ADAPTER_PATH: /app/model-serving/checkpoint
+      HF_HOME: /root/.cache/huggingface
+      SENTENCE_TRANSFORMERS_HOME: /root/.cache/huggingface
+    command: ["python", "model-serving/remote_llm_server.py"]
+    ports:
+      - "8010:8010"
+    volumes:
+      - ./model-serving/checkpoint:/app/model-serving/checkpoint
+      - hf_cache:/root/.cache/huggingface
+    gpus: all
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8010/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    container_name: esg-quant-qdrant-5090
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  app_storage:
+  hf_cache:

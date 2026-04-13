@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -9,6 +11,19 @@ from gateway.config import settings
 from gateway.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _ensure_writable_dir(preferred: Path, fallback_name: str) -> Path:
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        probe = preferred / ".write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return preferred
+    except OSError:
+        fallback = Path(tempfile.gettempdir()) / fallback_name
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
 
 class R2ArtifactStore:
@@ -169,8 +184,10 @@ class SupabaseStorageArtifactStore:
 class QuantStorageGateway:
     def __init__(self, get_client: Callable[[], Any] | None = None) -> None:
         self._get_client = get_client
-        self.base_dir = Path(__file__).resolve().parents[2] / "storage" / "quant"
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.base_dir = _ensure_writable_dir(
+            Path(__file__).resolve().parents[2] / "storage" / "quant",
+            "quant-esg-artifacts",
+        )
         self.r2_store = R2ArtifactStore()
         self.supabase_storage_store = SupabaseStorageArtifactStore(get_client=get_client)
 
@@ -215,8 +232,7 @@ class QuantStorageGateway:
         record_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        directory = self.base_dir / record_type
-        directory.mkdir(parents=True, exist_ok=True)
+        directory = _ensure_writable_dir(self.base_dir / record_type, f"quant-esg-artifacts/{record_type}")
 
         local_path = directory / f"{record_id}.json"
         local_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -259,6 +275,30 @@ class QuantStorageGateway:
                 logger.warning(f"Failed to read {path}: {exc}")
         return rows
 
+    def append_audit_event(
+        self,
+        *,
+        category: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        audit_dir = _ensure_writable_dir(self.base_dir / "audit", "quant-esg-artifacts/audit")
+        day_key = datetime.now(timezone.utc).strftime("%Y%m%d")
+        local_path = audit_dir / f"audit-{day_key}.jsonl"
+        event = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "category": category,
+            "action": action,
+            "payload": payload,
+        }
+        with local_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+        return {
+            "local_path": str(local_path),
+            "event": event,
+        }
+
     def _mirror_to_supabase(
         self,
         record_type: str,
@@ -278,7 +318,7 @@ class QuantStorageGateway:
         try:
             client.table("quant_run_registry").insert(
                 {
-                    "run_id": record_id,
+                    "run_id": f"{record_type}:{record_id}",
                     "run_type": record_type,
                     "payload": payload,
                     "artifact_uri": artifact_uri,

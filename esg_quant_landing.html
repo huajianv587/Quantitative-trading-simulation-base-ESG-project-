@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESG Quant IO — Research to Execution</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --void: #05050F;
+      --void2: #080818;
+      --green: #00FF88;
+      --gold: #F5A623;
+      --white: #EFEFEF;
+      --dim: #7A7A90;
+      --red: #FF4D6D;
+      --border: rgba(255,255,255,0.065);
+    }
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--void);
+      color: var(--white);
+      font-family: 'Syne', sans-serif;
+      cursor: none;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── CURSOR ────────────────────────────────────────────── */
+    #c-dot {
+      position: fixed; width: 7px; height: 7px;
+      background: var(--green); border-radius: 50%;
+      pointer-events: none; z-index: 10000;
+      transform: translate(-50%,-50%); will-change: left,top;
+    }
+    #c-ring {
+      position: fixed; width: 30px; height: 30px;
+      border: 1.5px solid rgba(0,255,136,0.55); border-radius: 50%;
+      pointer-events: none; z-index: 9999;
+      transform: translate(-50%,-50%); will-change: left,top;
+      transition: width 0.2s, height 0.2s, border-color 0.2s;
+    }
+
+    /* ── TICKER ────────────────────────────────────────────── */
+    #ticker {
+      height: 30px; overflow: hidden;
+      background: rgba(0,255,136,0.04);
+      border-bottom: 1px solid rgba(0,255,136,0.14);
+      display: flex; align-items: center; position: relative; z-index: 200;
+    }
+    .tkr-track {
+      display: flex; gap: 52px; align-items: center;
+      animation: tkr 30s linear infinite; white-space: nowrap;
+    }
+    .t-item { display: flex; align-items: center; gap: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
+    .t-sym { color: var(--white); font-weight: 500; letter-spacing: 0.3px; }
+    .t-esg { color: var(--green); }
+    .t-up { color: var(--green); } .t-dn { color: var(--red); } .t-fl { color: var(--dim); }
+    .t-sep { color: rgba(255,255,255,0.12); }
+    @keyframes tkr { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+    /* ── NAV ───────────────────────────────────────────────── */
+    nav {
+      position: fixed; top: 30px; left: 0; right: 0; height: 62px; padding: 0 52px;
+      display: flex; align-items: center; justify-content: space-between;
+      z-index: 150; border-bottom: 1px solid transparent;
+      transition: background 0.3s, border-color 0.3s, backdrop-filter 0.3s;
+    }
+    nav.glass {
+      background: rgba(5,5,15,0.82);
+      backdrop-filter: blur(24px) saturate(160%);
+      -webkit-backdrop-filter: blur(24px);
+      border-color: var(--border);
+    }
+    .logo { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+    .logo-sq {
+      width: 35px; height: 35px;
+      background: rgba(0,255,136,0.11); border: 1px solid rgba(0,255,136,0.28);
+      border-radius: 7px; display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 13px; color: var(--green); letter-spacing: 0.5px;
+    }
+    .logo-info { display: flex; flex-direction: column; }
+    .logo-name { font-weight: 700; font-size: 14px; color: var(--white); line-height: 1; }
+    .logo-tag { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: var(--dim); letter-spacing: 2px; text-transform: uppercase; margin-top: 3px; }
+    .nav-ul { display: flex; align-items: center; gap: 32px; list-style: none; }
+    .nav-ul a { font-size: 13px; color: var(--dim); text-decoration: none; transition: color 0.2s; }
+    .nav-ul a:hover { color: var(--white); }
+    .btn-nav {
+      font-family: 'Syne', sans-serif; font-weight: 700; font-size: 12.5px;
+      color: var(--void); background: var(--green); border: none;
+      padding: 9px 20px; border-radius: 7px; cursor: none;
+      position: relative; overflow: hidden; transition: box-shadow 0.25s, transform 0.15s;
+    }
+    .btn-nav::after {
+      content: ''; position: absolute; top: 0; left: -120%; width: 60%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.32), transparent);
+      transform: skewX(-18deg); transition: left 0.45s;
+    }
+    .btn-nav:hover::after { left: 160%; }
+    .btn-nav:hover { box-shadow: 0 0 22px rgba(0,255,136,0.5); }
+    .btn-nav:active { transform: scale(0.965); }
+
+    /* ── HERO ──────────────────────────────────────────────── */
+    #hero {
+      position: relative; height: 100vh; min-height: 720px;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden; padding-top: 92px;
+    }
+    #hero-cv { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; }
+    .hero-veil {
+      position: absolute; inset: 0; z-index: 1;
+      background: radial-gradient(ellipse 90% 65% at 50% 50%, rgba(5,5,15,0.28) 0%, rgba(5,5,15,0.8) 60%, var(--void) 100%);
+    }
+    .hero-body { position: relative; z-index: 2; text-align: center; max-width: 860px; padding: 0 24px; }
+    .hero-eye {
+      font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+      letter-spacing: 3.5px; text-transform: uppercase; color: var(--green);
+      margin-bottom: 30px; opacity: 0; animation: fu 0.65s ease forwards 0.25s;
+    }
+    .hero-h1 {
+      font-family: 'Syne', sans-serif; font-weight: 800;
+      font-size: clamp(50px, 6.4vw, 92px);
+      line-height: 0.95; letter-spacing: -3px; color: var(--white); margin-bottom: 26px;
+    }
+    .hl { display: block; overflow: hidden; }
+    .hw {
+      display: inline-block; opacity: 0; transform: translateY(105%);
+      transition: opacity 0.72s cubic-bezier(0.16,1,0.3,1), transform 0.72s cubic-bezier(0.16,1,0.3,1);
+    }
+    .hw.go { opacity: 1; transform: none; }
+    .hw:nth-child(1) { transition-delay: 0.28s; }
+    .hw:nth-child(2) { transition-delay: 0.44s; }
+    .hw:nth-child(3) { transition-delay: 0.58s; }
+    .hw.acc { color: var(--green); }
+    .hero-sub {
+      font-size: clamp(14px, 1.2vw, 17px); color: rgba(239,239,239,0.46);
+      line-height: 1.78; max-width: 570px; margin: 0 auto 42px;
+      opacity: 0; animation: fu 0.65s ease forwards 0.95s;
+    }
+    .hero-ctas {
+      display: flex; align-items: center; justify-content: center; gap: 14px;
+      margin-bottom: 64px; opacity: 0; animation: fu 0.65s ease forwards 1.15s;
+    }
+    .btn-p {
+      font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13.5px; letter-spacing: 0.6px;
+      color: var(--void); background: var(--green); border: none;
+      padding: 14px 34px; border-radius: 9px; cursor: none;
+      position: relative; overflow: hidden; transition: box-shadow 0.25s, transform 0.15s;
+    }
+    .btn-p::after {
+      content: ''; position: absolute; top: 0; left: -120%; width: 60%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.32), transparent);
+      transform: skewX(-18deg); transition: left 0.45s;
+    }
+    .btn-p:hover::after { left: 160%; }
+    .btn-p:hover { box-shadow: 0 0 36px rgba(0,255,136,0.55), 0 0 72px rgba(0,255,136,0.18); transform: translateY(-2px); }
+    .btn-p:active { transform: scale(0.964) !important; }
+    .btn-g {
+      font-family: 'Syne', sans-serif; font-weight: 600; font-size: 13.5px; letter-spacing: 0.4px;
+      color: rgba(239,239,239,0.75); background: transparent;
+      border: 1px solid rgba(255,255,255,0.18); padding: 14px 34px;
+      border-radius: 9px; cursor: none; transition: border-color 0.2s, background 0.2s;
+    }
+    .btn-g:hover { border-color: rgba(255,255,255,0.42); background: rgba(255,255,255,0.04); }
+    .btn-g:active { transform: scale(0.964); }
+    .hero-stats {
+      display: flex; justify-content: center; gap: 64px;
+      opacity: 0; animation: fu 0.65s ease forwards 1.35s;
+    }
+    .stat { text-align: center; }
+    .stat-n {
+      font-family: 'IBM Plex Mono', monospace; font-size: 26px; font-weight: 500;
+      color: var(--white); display: block; letter-spacing: -0.5px;
+    }
+    .stat-n .g { color: var(--green); }
+    .stat-l { font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 1.8px; text-transform: uppercase; color: var(--dim); margin-top: 5px; }
+
+    /* Teaser */
+    .teaser {
+      position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+      width: min(780px, 76%); height: 178px;
+      border-radius: 14px 14px 0 0; overflow: hidden; z-index: 2;
+      opacity: 0; animation: fu 0.8s ease forwards 1.65s;
+    }
+    .teaser-bar {
+      position: absolute; top: 0; left: 0; right: 0; height: 34px; z-index: 3;
+      background: rgba(6,6,20,0.95); border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex; align-items: center; gap: 7px; padding: 0 18px;
+    }
+    .td { width: 8px; height: 8px; border-radius: 50%; }
+    .td-r { background: #FF5F56; } .td-y { background: #FFBD2E; } .td-g2 { background: #27C93F; }
+    .teaser-lbl { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--dim); margin-left: 10px; }
+    .teaser-glass {
+      position: absolute; inset: 0; z-index: 2;
+      border: 1px solid rgba(0,255,136,0.14); border-bottom: none; border-radius: 14px 14px 0 0;
+      background: rgba(5,5,15,0.22); backdrop-filter: blur(2px);
+    }
+    #teaser-cv { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; }
+
+    /* ── TRUST BAR ─────────────────────────────────────────── */
+    #trust {
+      border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.018); padding: 18px 64px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .trust-l { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
+    .trust-lbl { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--dim); white-space: nowrap; }
+    .insts { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+    .inst {
+      font-family: 'Syne', sans-serif; font-weight: 700; font-size: 11.5px;
+      letter-spacing: 1.2px; text-transform: uppercase; color: rgba(239,239,239,0.28);
+      padding: 4px 12px; border: 1px solid rgba(255,255,255,0.07); border-radius: 4px;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .inst:hover { color: rgba(239,239,239,0.65); border-color: rgba(255,255,255,0.18); }
+    .live-b { display: flex; align-items: center; gap: 10px; }
+    .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); position: relative; flex-shrink: 0; }
+    .pulse::after {
+      content: ''; position: absolute; inset: -5px; border-radius: 50%;
+      border: 1px solid var(--green); animation: pls 1.8s ease-out infinite;
+    }
+    @keyframes pls { 0% { transform: scale(0.4); opacity: 1; } 100% { transform: scale(2.2); opacity: 0; } }
+    .live-txt { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--dim); }
+
+    /* ── PRODUCT ───────────────────────────────────────────── */
+    #product { padding: 128px 64px; }
+    .s-eye {
+      font-family: 'IBM Plex Mono', monospace; font-size: 9.5px;
+      letter-spacing: 3.5px; text-transform: uppercase; color: var(--green);
+      margin-bottom: 16px; opacity: 0; transform: translateY(18px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .s-eye.vis { opacity: 1; transform: none; }
+    .s-head {
+      font-family: 'Syne', sans-serif; font-weight: 800;
+      font-size: clamp(34px, 3.8vw, 56px); line-height: 1.06; letter-spacing: -1.5px;
+      color: var(--white); margin-bottom: 60px;
+      clip-path: inset(0 0 102% 0); transition: clip-path 0.88s cubic-bezier(0.16,1,0.3,1);
+    }
+    .s-head.vis { clip-path: inset(0 0 0% 0); }
+
+    /* Dashboard shell */
+    .db-shell {
+      max-width: 1180px; margin: 0 auto;
+      background: var(--void2); border: 1px solid rgba(0,255,136,0.11);
+      border-radius: 16px; overflow: hidden;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.3), 0 0 80px rgba(0,255,136,0.05), 0 48px 96px rgba(0,0,0,0.55);
+    }
+    .db-tbar {
+      height: 38px; background: rgba(4,4,14,0.95);
+      border-bottom: 1px solid rgba(255,255,255,0.055);
+      display: flex; align-items: center; gap: 8px; padding: 0 20px;
+    }
+    .db-lbl { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--dim); margin-left: 14px; }
+    .db-body { display: grid; grid-template-columns: 172px 1fr 228px; height: 490px; }
+
+    /* Sidebar */
+    .db-side {
+      border-right: 1px solid rgba(255,255,255,0.055); padding: 14px 0;
+      background: rgba(255,255,255,0.01); display: flex; flex-direction: column;
+    }
+    .db-sec { font-family: 'IBM Plex Mono', monospace; font-size: 7.5px; letter-spacing: 2px; text-transform: uppercase; color: rgba(122,122,144,0.4); padding: 14px 18px 6px; }
+    .db-nav {
+      padding: 9px 18px; font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+      color: var(--dim); display: flex; align-items: center; gap: 10px;
+      cursor: default; border-left: 2px solid transparent; transition: all 0.15s;
+    }
+    .db-nav:hover, .db-nav.on { background: rgba(0,255,136,0.06); color: var(--green); border-left-color: var(--green); }
+    .db-nav .ic { font-size: 11px; opacity: 0.7; width: 14px; text-align: center; }
+    .db-foot { margin-top: auto; padding: 14px 18px; border-top: 1px solid rgba(255,255,255,0.04); }
+    .db-fl { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: rgba(122,122,144,0.4); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 7px; }
+    .db-bar-bg { height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden; }
+    .db-bar-f { height: 100%; width: 68%; background: var(--green); border-radius: 2px; }
+    .db-bt { font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: rgba(122,122,144,0.4); margin-top: 5px; }
+
+    /* Center */
+    .db-center { padding: 22px 24px; display: flex; flex-direction: column; }
+    .db-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+    .db-ht { font-size: 15px; font-weight: 700; color: var(--white); }
+    .db-hs { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: var(--dim); margin-top: 3px; }
+    .db-hr { text-align: right; }
+    .db-big { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 500; color: var(--green); }
+    .db-bl { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: var(--dim); }
+    #db-cv { flex: 1; width: 100%; min-height: 0; }
+
+    /* Signal panel */
+    .db-right {
+      border-left: 1px solid rgba(255,255,255,0.055); padding: 20px 16px;
+      overflow: hidden; display: flex; flex-direction: column;
+    }
+    .sig-h { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 14px; }
+    .sig-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,0.035); }
+    .sig-a { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 500; color: var(--white); }
+    .sig-e { font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: var(--dim); margin-top: 2px; }
+    .sig-d { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; padding: 2px 7px; border-radius: 4px; font-weight: 500; }
+    .sig-d.lg { color: var(--green); background: rgba(0,255,136,0.1); }
+    .sig-d.sh { color: var(--red); background: rgba(255,77,109,0.1); }
+    .sig-c { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+    .sig-bar { width: 54px; height: 2.5px; background: rgba(255,255,255,0.07); border-radius: 2px; overflow: hidden; }
+    .sig-fill { height: 100%; border-radius: 2px; }
+    .sig-pct { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: var(--dim); }
+    .sig-live { display: flex; align-items: center; gap: 5px; padding: 10px 0; margin-top: 4px; }
+    .sig-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); animation: blk 1.4s infinite; }
+    @keyframes blk { 0%,100% { opacity: 1; } 50% { opacity: 0.18; } }
+    .sig-lt { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: var(--dim); }
+
+    /* Pills */
+    .pills { display: flex; justify-content: center; gap: 14px; margin-top: 44px; flex-wrap: wrap; }
+    .pill {
+      font-family: 'IBM Plex Mono', monospace; font-size: 12.5px;
+      color: var(--dim); background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.09);
+      padding: 11px 22px; border-radius: 100px; cursor: none;
+      display: flex; align-items: center; gap: 10px;
+      transition: color 0.22s, border-color 0.22s, background 0.22s, box-shadow 0.22s;
+    }
+    .pill:hover {
+      color: var(--green); border-color: rgba(0,255,136,0.55);
+      background: rgba(0,255,136,0.055); box-shadow: 0 0 18px rgba(0,255,136,0.1);
+    }
+    .pill-i { font-size: 15px; }
+
+    /* ── METRICS ───────────────────────────────────────────── */
+    #metrics { padding: 128px 64px; position: relative; overflow: hidden; }
+    .grid-bg {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.024) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.024) 1px, transparent 1px);
+      background-size: 58px 58px;
+    }
+    .scanline {
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(0,255,136,0.22), transparent);
+      animation: scan 5s linear infinite; z-index: 1;
+    }
+    @keyframes scan { from { top: 0; } to { top: 100%; } }
+    .m-inner { position: relative; z-index: 2; }
+    .m-row {
+      display: grid; grid-template-columns: repeat(4,1fr);
+      border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-top: 56px;
+    }
+    .m-card {
+      padding: 44px 28px; background: rgba(255,255,255,0.018);
+      border-right: 1px solid var(--border); position: relative; overflow: hidden;
+    }
+    .m-card:last-child { border-right: none; }
+    .m-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--green), transparent);
+      opacity: 0; transition: opacity 0.3s;
+    }
+    .m-card:hover::before { opacity: 1; }
+    .m-num {
+      font-family: 'IBM Plex Mono', monospace; font-size: clamp(32px, 3.2vw, 50px);
+      font-weight: 500; display: block; margin-bottom: 10px; letter-spacing: -1px;
+    }
+    .m-num.g { color: var(--green); } .m-num.r { color: var(--red); } .m-num.w { color: var(--white); }
+    .m-lbl { font-family: 'Syne', sans-serif; font-size: 13.5px; color: var(--dim); }
+    .m-sub { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: rgba(122,122,144,0.4); margin-top: 5px; letter-spacing: 1px; text-transform: uppercase; }
+
+    /* ── CTA CLOSE ─────────────────────────────────────────── */
+    #cta {
+      position: relative; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    #cta-cv { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; }
+    .cta-vig {
+      position: absolute; inset: 0; z-index: 1;
+      background: radial-gradient(ellipse 55% 55% at 50% 50%, rgba(5,5,15,0.1) 0%, rgba(5,5,15,0.92) 76%, var(--void) 100%);
+    }
+    .cta-in { position: relative; z-index: 2; text-align: center; padding: 0 24px; }
+    .cta-h {
+      font-family: 'Syne', sans-serif; font-weight: 800;
+      font-size: clamp(38px, 5vw, 72px); letter-spacing: -2.5px; color: var(--white); margin-bottom: 18px;
+      clip-path: inset(0 0 102% 0); transition: clip-path 0.88s cubic-bezier(0.16,1,0.3,1);
+    }
+    .cta-h.vis { clip-path: inset(0 0 0% 0); }
+    .cta-sub {
+      font-size: 17px; color: rgba(239,239,239,0.44); margin-bottom: 48px;
+      opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease 0.3s, transform 0.6s ease 0.3s;
+    }
+    .cta-sub.vis { opacity: 1; transform: none; }
+    .btn-mega {
+      font-family: 'Syne', sans-serif; font-weight: 800; font-size: 14.5px;
+      letter-spacing: 1.2px; text-transform: uppercase;
+      color: var(--void); background: var(--green); border: none;
+      padding: 20px 52px; border-radius: 12px; cursor: none;
+      position: relative; overflow: hidden;
+      opacity: 0; transform: translateY(18px);
+      transition: opacity 0.6s ease 0.5s, transform 0.6s ease 0.5s, box-shadow 0.25s;
+    }
+    .btn-mega::after {
+      content: ''; position: absolute; top: 0; left: -130%; width: 60%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+      transform: skewX(-18deg); transition: left 0.5s;
+    }
+    .btn-mega:hover::after { left: 160%; }
+    .btn-mega:hover { box-shadow: 0 0 60px rgba(0,255,136,0.65), 0 0 120px rgba(0,255,136,0.22); }
+    .btn-mega:active { transform: scale(0.964) !important; }
+    .btn-mega.vis { opacity: 1; transform: none; }
+    .tsigs {
+      display: flex; justify-content: center; gap: 36px; margin-top: 30px;
+      flex-wrap: wrap; opacity: 0; transform: translateY(14px);
+      transition: opacity 0.6s ease 0.72s, transform 0.6s ease 0.72s;
+    }
+    .tsigs.vis { opacity: 1; transform: none; }
+    .tsig { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--dim); display: flex; align-items: center; gap: 7px; }
+    .tsig .ck { color: var(--green); }
+
+    /* ── FOOTER ────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border); padding: 28px 64px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .foot-c { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(122,122,144,0.38); }
+    .foot-links { display: flex; gap: 22px; }
+    .foot-links a { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(122,122,144,0.38); text-decoration: none; transition: color 0.2s; }
+    .foot-links a:hover { color: var(--dim); }
+
+    @keyframes fu { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+
+    @media (max-width: 900px) {
+      nav { padding: 0 20px; }
+      .nav-ul li:not(:last-child) { display: none; }
+      #trust { flex-direction: column; gap: 16px; padding: 18px 20px; align-items: flex-start; }
+      #product { padding: 80px 20px; }
+      .db-body { grid-template-columns: 1fr; height: auto; }
+      .db-side, .db-right { display: none; }
+      #db-cv { height: 260px; }
+      .m-row { grid-template-columns: 1fr 1fr; }
+      .m-card { border-right: none; border-bottom: 1px solid var(--border); }
+      .m-card:nth-child(odd) { border-right: 1px solid var(--border); }
+      #metrics { padding: 80px 20px; }
+      footer { flex-direction: column; gap: 14px; text-align: center; padding: 24px 20px; }
+      .hero-stats { gap: 32px; }
+      .tsigs { flex-direction: column; gap: 14px; align-items: center; }
+    }
+    @media (max-width: 520px) {
+      .teaser { display: none; }
+      .m-row { grid-template-columns: 1fr; }
+      .m-card:nth-child(odd) { border-right: none; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="c-dot"></div>
+<div id="c-ring"></div>
+
+<!-- TICKER STRIP -->
+<div id="ticker"><div class="tkr-track" id="tkr"></div></div>
+
+<!-- NAV -->
+<nav id="nav">
+  <a class="logo" href="#">
+    <div class="logo-sq">EQ</div>
+    <div class="logo-info">
+      <span class="logo-name">ESG Quant IO</span>
+      <span class="logo-tag">Research to Execution</span>
+    </div>
+  </a>
+  <ul class="nav-ul">
+    <li><a href="#product">平台能力</a></li>
+    <li><a href="#trust">架构层</a></li>
+    <li><a href="#metrics">交付路径</a></li>
+    <li><button class="btn-nav">进入控制台</button></li>
+  </ul>
+</nav>
+
+<!-- ═══ SECTION 1: HERO ══════════════════════════════════════ -->
+<section id="hero">
+  <canvas id="hero-cv"></canvas>
+  <div class="hero-veil"></div>
+
+  <div class="hero-body">
+    <p class="hero-eye">INDUSTRIAL ESG QUANT PLATFORM</p>
+
+    <h1 class="hero-h1">
+      <span class="hl">
+        <span class="hw">Research.</span>&thinsp;<span class="hw">Validate.</span>
+      </span>
+      <span class="hl">
+        <span class="hw acc">Execute.</span>
+      </span>
+    </h1>
+
+    <p class="hero-sub">
+      Institutional-grade quant strategies. ESG-native. AI-accelerated.<br>
+      Built for the next generation of systematic investors.
+    </p>
+
+    <div class="hero-ctas">
+      <button class="btn-p">ENTER PLATFORM &nbsp;→</button>
+      <button class="btn-g">VIEW LIVE DEMO</button>
+    </div>
+
+    <div class="hero-stats">
+      <div class="stat">
+        <span class="stat-n"><span class="ce" data-to="2847" data-dec="0">0</span></span>
+        <div class="stat-l">Active Strategies</div>
+      </div>
+      <div class="stat">
+        <span class="stat-n">$<span class="ce" data-to="4.2" data-dec="1">0</span><span class="g">B+</span></span>
+        <div class="stat-l">Backtested Volume</div>
+      </div>
+      <div class="stat">
+        <span class="stat-n"><span class="ce" data-to="94.2" data-dec="1">0</span><span class="g">%</span></span>
+        <div class="stat-l">Signal Accuracy</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dashboard teaser -->
+  <div class="teaser">
+    <div class="teaser-bar">
+      <div class="td td-r"></div>
+      <div class="td td-y"></div>
+      <div class="td td-g2"></div>
+      <span class="teaser-lbl">esg-quant.terminal — Portfolio Overview — LIVE</span>
+    </div>
+    <div class="teaser-glass"></div>
+    <canvas id="teaser-cv"></canvas>
+  </div>
+</section>
+
+<!-- ═══ SECTION 2: TRUST BAR ════════════════════════════════ -->
+<div id="trust">
+  <div class="trust-l">
+    <span class="trust-lbl">Trusted by researchers at</span>
+    <div class="insts">
+      <span class="inst">NTU</span>
+      <span class="inst">NUS</span>
+      <span class="inst">Two Sigma</span>
+      <span class="inst">Citadel</span>
+      <span class="inst">BlackRock</span>
+    </div>
+  </div>
+  <div class="live-b">
+    <div class="pulse"></div>
+    <span class="live-txt">SGX &nbsp;·&nbsp; NYSE &nbsp;·&nbsp; NASDAQ &nbsp;— LIVE</span>
+  </div>
+</div>
+
+<!-- ═══ SECTION 3: PRODUCT ══════════════════════════════════ -->
+<section id="product">
+  <p class="s-eye" data-obs>PRODUCT SURFACE</p>
+  <h2 class="s-head" data-obs>Your entire quant<br>workflow. One terminal.</h2>
+
+  <div class="db-shell">
+    <div class="db-tbar">
+      <div class="td td-r"></div>
+      <div class="td td-y"></div>
+      <div class="td td-g2"></div>
+      <span class="db-lbl">ESG Quant IO &nbsp;·&nbsp; Portfolio Lab &nbsp;·&nbsp; Paper Trading Mode</span>
+    </div>
+
+    <div class="db-body">
+      <!-- Sidebar -->
+      <div class="db-side">
+        <div class="db-sec">Overview</div>
+        <div class="db-nav on"><span class="ic">◈</span> Portfolio</div>
+        <div class="db-nav"><span class="ic">⟁</span> Signals</div>
+        <div class="db-sec">Research</div>
+        <div class="db-nav"><span class="ic">⬡</span> Alpha Lab</div>
+        <div class="db-nav"><span class="ic">◷</span> Backtest</div>
+        <div class="db-nav"><span class="ic">⬚</span> ESG Scores</div>
+        <div class="db-sec">Execution</div>
+        <div class="db-nav"><span class="ic">⟳</span> Orders</div>
+        <div class="db-nav"><span class="ic">◌</span> Reports</div>
+        <div class="db-foot">
+          <div class="db-fl">Capital Deployed</div>
+          <div class="db-bar-bg"><div class="db-bar-f"></div></div>
+          <div class="db-bt">68% &nbsp;·&nbsp; $68,420 / $100,000</div>
+        </div>
+      </div>
+
+      <!-- Center chart -->
+      <div class="db-center">
+        <div class="db-hdr">
+          <div>
+            <div class="db-ht">ESG-Momentum Strategy</div>
+            <div class="db-hs">Equity Curve &nbsp;·&nbsp; YTD &nbsp;·&nbsp; Paper Live</div>
+          </div>
+          <div class="db-hr">
+            <div class="db-big">+34.2%</div>
+            <div class="db-bl">Annual Return</div>
+          </div>
+        </div>
+        <canvas id="db-cv"></canvas>
+      </div>
+
+      <!-- Signal panel -->
+      <div class="db-right">
+        <div class="sig-h">Live Signals</div>
+        <div id="sig-rows"></div>
+        <div class="sig-live" style="margin-top:8px">
+          <div class="sig-dot"></div>
+          <span class="sig-lt">5 signals active &nbsp;·&nbsp; refreshing</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pills">
+    <div class="pill"><span class="pill-i">⚡</span> AI Signal Generation</div>
+    <div class="pill"><span class="pill-i">🧬</span> ESG Factor Engine</div>
+    <div class="pill"><span class="pill-i">📊</span> Backtest Center</div>
+    <div class="pill"><span class="pill-i">🤖</span> RAG Copilot</div>
+  </div>
+</section>
+
+<!-- ═══ SECTION 4: METRICS ══════════════════════════════════ -->
+<section id="metrics">
+  <div class="grid-bg"></div>
+  <div class="scanline"></div>
+  <div class="m-inner">
+    <p class="s-eye" data-obs>PERFORMANCE DATA</p>
+    <h2 class="s-head" data-obs>Numbers that matter.</h2>
+
+    <div class="m-row">
+      <div class="m-card" data-metric>
+        <span class="m-num g"><span class="mc" data-to="2.41" data-dec="2" data-suf="×">0×</span></span>
+        <div class="m-lbl">Average Sharpe Ratio</div>
+        <div class="m-sub">vs 1.1× market avg</div>
+      </div>
+      <div class="m-card" data-metric>
+        <span class="m-num r"><span class="mc" data-pre="-" data-to="8.4" data-dec="1" data-suf="%">-0%</span></span>
+        <div class="m-lbl">Max Drawdown</div>
+        <div class="m-sub">risk-managed · ESG filtered</div>
+      </div>
+      <div class="m-card" data-metric>
+        <span class="m-num g"><span class="mc" data-pre="+" data-to="34.2" data-dec="1" data-suf="%">+0%</span></span>
+        <div class="m-lbl">Avg Annual Return</div>
+        <div class="m-sub">backtested 2019–2024</div>
+      </div>
+      <div class="m-card" data-metric>
+        <span class="m-num w"><span class="mc" data-to="500" data-dec="0" data-suf="+">0+</span></span>
+        <div class="m-lbl">Instruments Covered</div>
+        <div class="m-sub">equities · ETFs · futures</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ SECTION 5: CTA CLOSE ════════════════════════════════ -->
+<section id="cta">
+  <canvas id="cta-cv"></canvas>
+  <div class="cta-vig"></div>
+  <div class="cta-in">
+    <h2 class="cta-h" data-obs>Ready to trade smarter?</h2>
+    <p class="cta-sub" data-obs>Join 2,800+ quant researchers already on the platform.</p>
+    <button class="btn-mega" data-obs>START FREE &mdash; NO CARD REQUIRED</button>
+    <div class="tsigs" data-obs>
+      <span class="tsig"><span class="ck">✓</span> Free tier forever</span>
+      <span class="tsig"><span class="ck">✓</span> No API key needed to start</span>
+      <span class="tsig"><span class="ck">✓</span> ESG data included</span>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <span class="foot-c">© 2025 ESG Quant IO. Research to Execution.</span>
+  <div class="foot-links">
+    <a href="#">Privacy</a>
+    <a href="#">Terms</a>
+    <a href="#">Docs</a>
+    <a href="#">Status</a>
+  </div>
+</footer>
+
+<script>
+/* ═══════════════════════════════════════════════════════
+   CURSOR
+═══════════════════════════════════════════════════════ */
+const cDot = document.getElementById('c-dot');
+const cRing = document.getElementById('c-ring');
+let mx = 0, my = 0, rx = 0, ry = 0;
+
+document.addEventListener('mousemove', e => {
+  mx = e.clientX; my = e.clientY;
+  cDot.style.left = mx + 'px';
+  cDot.style.top  = my + 'px';
+});
+
+(function lp() {
+  rx += (mx - rx) * 0.1;
+  ry += (my - ry) * 0.1;
+  cRing.style.left = rx + 'px';
+  cRing.style.top  = ry + 'px';
+  requestAnimationFrame(lp);
+})();
+
+document.querySelectorAll('button, a, .pill, .inst').forEach(el => {
+  el.addEventListener('mouseenter', () => {
+    cRing.style.width = '44px'; cRing.style.height = '44px';
+    cRing.style.borderColor = 'var(--green)';
+  });
+  el.addEventListener('mouseleave', () => {
+    cRing.style.width = '30px'; cRing.style.height = '30px';
+    cRing.style.borderColor = 'rgba(0,255,136,0.55)';
+  });
+});
+
+/* ═══════════════════════════════════════════════════════
+   TICKER
+═══════════════════════════════════════════════════════ */
+const TDATA = [
+  { s:'TSLA', esg:82, p:'248.50', d:'↑' },
+  { s:'NVDA', esg:71, p:'875.20', d:'↑' },
+  { s:'AAPL', esg:89, p:'182.40', d:'↑' },
+  { s:'MSFT', esg:93, p:'415.30', d:'→' },
+  { s:'AMZN', esg:67, p:'190.80', d:'↓' },
+  { s:'GOOGL', esg:78, p:'175.50', d:'↑' },
+  { s:'JPM',  esg:61, p:'204.90', d:'↑' },
+  { s:'V',    esg:74, p:'275.60', d:'↑' },
+  { s:'XOM',  esg:29, p:'118.40', d:'↓' },
+  { s:'NFLX', esg:63, p:'634.10', d:'↑' },
+];
+document.getElementById('tkr').innerHTML = [...TDATA, ...TDATA].map(t =>
+  `<span class="t-item">` +
+  `<span class="t-sym">${t.s}</span>` +
+  `<span class="t-sep">·</span>` +
+  `<span class="t-esg">ESG ${t.esg}</span>` +
+  `<span class="t-sep">·</span>` +
+  `<span class="${t.d==='↑'?'t-up':t.d==='↓'?'t-dn':'t-fl'}">${t.p} ${t.d}</span>` +
+  `</span>`
+).join('');
+
+/* ═══════════════════════════════════════════════════════
+   NAV GLASS
+═══════════════════════════════════════════════════════ */
+window.addEventListener('scroll', () => {
+  document.getElementById('nav').classList.toggle('glass', scrollY > 60);
+}, { passive: true });
+
+/* ═══════════════════════════════════════════════════════
+   HEADLINE ANIMATE
+═══════════════════════════════════════════════════════ */
+setTimeout(() => {
+  document.querySelectorAll('.hw').forEach(w => w.classList.add('go'));
+}, 120);
+
+/* ═══════════════════════════════════════════════════════
+   CANDLE ENGINE
+═══════════════════════════════════════════════════════ */
+const CW = 11, CG = 5, CS = CW + CG;
+
+function mkC(last) {
+  const bias = 0.54;
+  const chg  = (Math.random() - (1 - bias)) * 3.8;
+  const o = last, c = last + chg;
+  const hi = Math.max(o, c) + Math.random() * 1.8;
+  const lo = Math.min(o, c) - Math.random() * 1.8;
+  return { o, c, hi, lo, g: c >= o };
+}
+
+function initCandles(W, seed) {
+  let p = seed || 100, arr = [];
+  const n = Math.ceil(W / CS) + 22;
+  for (let i = 0; i < n; i++) {
+    const k = mkC(p); p = k.c; arr.push(k);
+  }
+  return { arr, last: p };
+}
+
+function drawCandles(ctx, W, H, arr, off, alpha) {
+  const ps  = arr.flatMap(k => [k.hi, k.lo]);
+  const lo  = Math.min(...ps), hi = Math.max(...ps), rng = hi - lo || 1;
+  const top = H * 0.12, ch = H * 0.76;
+  const sy  = p => top + ch - ((p - lo) / rng) * ch;
+
+  arr.forEach((k, i) => {
+    const x = i * CS - off;
+    if (x < -CW || x > W + CW) return;
+    const col = k.g ? '#00FF88' : '#FF4D6D';
+    const gl  = k.g ? 'rgba(0,255,136,0.28)' : 'rgba(255,77,109,0.22)';
+
+    ctx.save();
+    ctx.shadowBlur = 9; ctx.shadowColor = gl;
+
+    // Wick
+    ctx.globalAlpha = alpha * 0.68;
+    ctx.strokeStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + CW/2, sy(k.hi));
+    ctx.lineTo(x + CW/2, sy(k.lo));
+    ctx.stroke();
+
+    // Body
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = col;
+    const bt = Math.min(sy(k.o), sy(k.c));
+    const bh = Math.abs(sy(k.c) - sy(k.o)) || 1;
+    ctx.fillRect(x, bt, CW, bh);
+    ctx.restore();
+  });
+}
+
+/* ── Hero Canvas ────────────────────────────────────── */
+const heroCv  = document.getElementById('hero-cv');
+const heroCtx = heroCv.getContext('2d');
+let hS;
+
+function resizeHero() {
+  heroCv.width  = window.innerWidth;
+  heroCv.height = heroCv.offsetHeight || window.innerHeight;
+  const r = initCandles(heroCv.width, hS && hS.last);
+  hS = { ...r, off: 0 };
+}
+resizeHero();
+
+(function animHero() {
+  hS.off += 0.28;
+  if (hS.off >= CS) {
+    hS.off -= CS; hS.arr.shift();
+    const k = mkC(hS.last); hS.last = k.c; hS.arr.push(k);
+  }
+  heroCtx.clearRect(0, 0, heroCv.width, heroCv.height);
+  drawCandles(heroCtx, heroCv.width, heroCv.height, hS.arr, hS.off, 0.48);
+  requestAnimationFrame(animHero);
+})();
+
+/* ── Teaser Canvas ──────────────────────────────────── */
+const tCv  = document.getElementById('teaser-cv');
+const tCtx = tCv.getContext('2d');
+
+function drawTeaser() {
+  tCv.width  = tCv.offsetWidth;
+  tCv.height = tCv.offsetHeight;
+  const W = tCv.width, H = tCv.height;
+  if (!W || !H) return;
+
+  tCtx.fillStyle = '#06060F';
+  tCtx.fillRect(0, 0, W, H);
+
+  // Equity curve
+  const pts = [];
+  let v = H * 0.68;
+  for (let x = 0; x <= W; x += 2) {
+    v += (Math.random() - 0.43) * 2.8;
+    v  = Math.max(H * 0.15, Math.min(H * 0.9, v));
+    pts.push([x, v]);
+  }
+
+  const g = tCtx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, 'rgba(0,255,136,0.18)');
+  g.addColorStop(1, 'rgba(0,255,136,0)');
+  tCtx.beginPath();
+  tCtx.moveTo(0, H);
+  pts.forEach(p => tCtx.lineTo(p[0], p[1]));
+  tCtx.lineTo(W, H);
+  tCtx.fillStyle = g; tCtx.fill();
+
+  tCtx.beginPath();
+  pts.forEach((p, i) => i === 0 ? tCtx.moveTo(p[0], p[1]) : tCtx.lineTo(p[0], p[1]));
+  tCtx.strokeStyle = 'rgba(0,255,136,0.72)';
+  tCtx.lineWidth = 1.5;
+  tCtx.shadowBlur = 6; tCtx.shadowColor = 'rgba(0,255,136,0.4)';
+  tCtx.stroke(); tCtx.shadowBlur = 0;
+
+  // Labels
+  tCtx.font = '10px IBM Plex Mono';
+  tCtx.fillStyle = 'rgba(0,255,136,0.52)';
+  tCtx.fillText('+34.2%  YTD', W - 96, 50);
+  tCtx.fillStyle = 'rgba(239,239,239,0.22)';
+  tCtx.fillText('NAV  $134,208', 18, 50);
+}
+setTimeout(drawTeaser, 220);
+
+/* ═══════════════════════════════════════════════════════
+   DASHBOARD EQUITY CHART
+═══════════════════════════════════════════════════════ */
+const dbCv  = document.getElementById('db-cv');
+const dbCtx = dbCv.getContext('2d');
+let dbDone  = false;
+
+function drawDashChart() {
+  if (dbDone) return;
+  dbCv.width  = dbCv.offsetWidth;
+  dbCv.height = dbCv.offsetHeight;
+  const W = dbCv.width, H = dbCv.height;
+  if (!W || !H) { dbDone = false; return; }
+  dbDone = true;
+
+  function grid() {
+    dbCtx.strokeStyle = 'rgba(255,255,255,0.04)';
+    dbCtx.lineWidth = 1;
+    for (let i = 1; i < 5; i++) {
+      dbCtx.beginPath(); dbCtx.moveTo(0, H/5*i); dbCtx.lineTo(W, H/5*i); dbCtx.stroke();
+    }
+    const ms = ['Jan','Mar','May','Jul','Sep','Nov'];
+    dbCtx.font = '9px IBM Plex Mono'; dbCtx.fillStyle = 'rgba(122,122,144,0.44)';
+    ms.forEach((m, i) => dbCtx.fillText(m, (W / (ms.length-1)) * i, H - 4));
+  }
+
+  const pts = [];
+  let v = H * 0.72;
+  for (let x = 0; x <= W; x += 1.6) {
+    v += (Math.random() - 0.42) * 2.5;
+    v  = Math.max(H * 0.08, Math.min(H * 0.92, v));
+    pts.push([x, v]);
+  }
+
+  let prog = 0;
+  function fr() {
+    dbCtx.clearRect(0, 0, W, H);
+    grid();
+    const dr = pts.slice(0, Math.min(pts.length, Math.floor(prog)));
+    if (dr.length < 2) { prog += 14; if (prog < pts.length) requestAnimationFrame(fr); return; }
+
+    const g = dbCtx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, 'rgba(0,255,136,0.14)');
+    g.addColorStop(1, 'rgba(0,255,136,0)');
+    dbCtx.beginPath();
+    dbCtx.moveTo(dr[0][0], H);
+    dr.forEach(p => dbCtx.lineTo(p[0], p[1]));
+    dbCtx.lineTo(dr.at(-1)[0], H);
+    dbCtx.fillStyle = g; dbCtx.fill();
+
+    dbCtx.beginPath();
+    dr.forEach((p, i) => i === 0 ? dbCtx.moveTo(p[0], p[1]) : dbCtx.lineTo(p[0], p[1]));
+    dbCtx.strokeStyle = '#00FF88'; dbCtx.lineWidth = 1.6;
+    dbCtx.shadowBlur = 7; dbCtx.shadowColor = 'rgba(0,255,136,0.4)';
+    dbCtx.stroke(); dbCtx.shadowBlur = 0;
+
+    // Live dot at tip
+    const l = dr.at(-1);
+    dbCtx.beginPath(); dbCtx.arc(l[0], l[1], 3.5, 0, Math.PI * 2);
+    dbCtx.fillStyle = '#00FF88';
+    dbCtx.shadowBlur = 12; dbCtx.shadowColor = '#00FF88';
+    dbCtx.fill(); dbCtx.shadowBlur = 0;
+
+    prog += 14;
+    if (prog < pts.length) requestAnimationFrame(fr);
+  }
+  fr();
+}
+
+/* ═══════════════════════════════════════════════════════
+   SIGNAL ROWS
+═══════════════════════════════════════════════════════ */
+const SIGS = [
+  { a:'TSLA', d:'LONG',  cf:92, e:82 },
+  { a:'AAPL', d:'LONG',  cf:87, e:89 },
+  { a:'XOM',  d:'SHORT', cf:79, e:31 },
+  { a:'NVDA', d:'LONG',  cf:94, e:71 },
+  { a:'BP',   d:'SHORT', cf:68, e:28 },
+];
+document.getElementById('sig-rows').innerHTML = SIGS.map(s =>
+  `<div class="sig-row">` +
+  `<div><div class="sig-a">${s.a}</div><div class="sig-e">ESG ${s.e}</div></div>` +
+  `<div class="sig-d ${s.d==='LONG'?'lg':'sh'}">${s.d}</div>` +
+  `<div class="sig-c">` +
+  `<div class="sig-bar"><div class="sig-fill" style="width:${s.cf}%;background:${s.d==='LONG'?'var(--green)':'var(--red)'}"></div></div>` +
+  `<span class="sig-pct">${s.cf}%</span>` +
+  `</div></div>`
+).join('');
+
+/* ═══════════════════════════════════════════════════════
+   CTA CANVAS
+═══════════════════════════════════════════════════════ */
+const ctaCv  = document.getElementById('cta-cv');
+const ctaCtx = ctaCv.getContext('2d');
+let ctaS, ctaRunning = false;
+
+function resizeCta() {
+  ctaCv.width  = ctaCv.offsetWidth || window.innerWidth;
+  ctaCv.height = ctaCv.offsetHeight || window.innerHeight;
+}
+
+function startCta() {
+  if (ctaRunning) return;
+  ctaRunning = true;
+  resizeCta();
+  const r = initCandles(ctaCv.width);
+  ctaS = { ...r, off: 0 };
+
+  (function animCta() {
+    ctaS.off += 0.28;
+    if (ctaS.off >= CS) {
+      ctaS.off -= CS; ctaS.arr.shift();
+      const k = mkC(ctaS.last); ctaS.last = k.c; ctaS.arr.push(k);
+    }
+    ctaCtx.clearRect(0, 0, ctaCv.width, ctaCv.height);
+    drawCandles(ctaCtx, ctaCv.width, ctaCv.height, ctaS.arr, ctaS.off, 0.42);
+    if (ctaRunning) requestAnimationFrame(animCta);
+  })();
+}
+
+/* ═══════════════════════════════════════════════════════
+   COUNTER ANIMATION
+═══════════════════════════════════════════════════════ */
+function runCounter(el, to, dec, pre, suf, dur) {
+  pre = pre || ''; suf = suf || ''; dur = dur || 1900;
+  const t0 = performance.now();
+  (function tick(now) {
+    const p = Math.min((now - t0) / dur, 1);
+    const e = 1 - Math.pow(1 - p, 3);
+    const v = to * e;
+    el.textContent = pre + (dec > 0 ? v.toFixed(dec) : Math.floor(v).toLocaleString()) + suf;
+    if (p < 1) requestAnimationFrame(tick);
+  })(performance.now());
+}
+
+// Hero counters start after animations settle
+setTimeout(() => {
+  document.querySelectorAll('.ce').forEach(el => {
+    runCounter(el, parseFloat(el.dataset.to), parseInt(el.dataset.dec));
+  });
+}, 1500);
+
+/* ═══════════════════════════════════════════════════════
+   INTERSECTION OBSERVER
+═══════════════════════════════════════════════════════ */
+const obs = new IntersectionObserver(entries => {
+  entries.forEach(({ target, isIntersecting }) => {
+    if (!isIntersecting) return;
+
+    if (target.hasAttribute('data-obs')) {
+      target.classList.add('vis');
+    }
+
+    if (target.hasAttribute('data-metric')) {
+      const mc = target.querySelector('.mc');
+      if (mc && !mc._done) {
+        mc._done = true;
+        runCounter(
+          mc,
+          parseFloat(mc.dataset.to),
+          parseInt(mc.dataset.dec || '0'),
+          mc.dataset.pre || '',
+          mc.dataset.suf || ''
+        );
+      }
+    }
+
+    if (target.id === 'product') {
+      setTimeout(drawDashChart, 360);
+    }
+
+    if (target.id === 'cta') {
+      startCta();
+    }
+  });
+}, { threshold: 0.18 });
+
+document.querySelectorAll('[data-obs], [data-metric], #product, #cta')
+  .forEach(el => obs.observe(el));
+
+/* ═══════════════════════════════════════════════════════
+   RESIZE
+═══════════════════════════════════════════════════════ */
+window.addEventListener('resize', () => {
+  resizeHero();
+  drawTeaser();
+  resizeCta();
+}, { passive: true });
+</script>
+</body>
+</html>

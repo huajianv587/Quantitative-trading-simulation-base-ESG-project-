@@ -73,13 +73,43 @@ def tail_log(path: Path, limit: int = 120) -> str:
     return "\n".join(path.read_text(encoding="utf-8", errors="ignore").splitlines()[-limit:])
 
 
-def request_json(method: str, url: str, *, timeout: int, body: dict | None = None) -> tuple[int, dict | str]:
-    response = requests.request(method, url, json=body, timeout=timeout)
+def api_key_for_path(path: str) -> str:
+    normalized = str(path or "")
+    if normalized.startswith("/ops"):
+        return os.getenv("OPS_API_KEY") or os.getenv("ADMIN_API_KEY") or ""
+    if normalized.startswith("/admin"):
+        return os.getenv("ADMIN_API_KEY") or os.getenv("OPS_API_KEY") or ""
+    if normalized.startswith("/api/v1/quant/execution") or normalized.startswith("/api/v1/quant/validation"):
+        return os.getenv("EXECUTION_API_KEY") or os.getenv("ADMIN_API_KEY") or os.getenv("OPS_API_KEY") or ""
+    return ""
+
+
+def request_json(method: str, url: str, *, timeout: int, body: dict | None = None, path: str = "") -> tuple[int, dict | str]:
+    headers = {}
+    api_key = api_key_for_path(path)
+    if api_key:
+        headers["x-api-key"] = api_key
+        headers["Authorization"] = f"Bearer {api_key}"
+    response = requests.request(method, url, json=body, timeout=timeout, headers=headers)
     try:
         payload = response.json()
     except Exception:
         payload = response.text
     return response.status_code, payload
+
+
+def select_execution_universe(research_payload: dict | str) -> list[str]:
+    if not isinstance(research_payload, dict):
+        return []
+    signals = research_payload.get("signals") or []
+    ranked = [
+        item for item in signals
+        if isinstance(item, dict)
+        and str(item.get("action", "")).lower() == "long"
+        and float(item.get("expected_return", 0.0) or 0.0) > 0
+    ]
+    ranked.sort(key=lambda item: (-float(item.get("expected_return", 0.0) or 0.0), -float(item.get("confidence", 0.0) or 0.0)))
+    return [str(item.get("symbol", "")).upper() for item in ranked[:3] if item.get("symbol")]
 
 
 def main() -> int:
@@ -89,6 +119,7 @@ def main() -> int:
     parser.add_argument("--startup-timeout", type=int, default=120)
     parser.add_argument("--request-timeout", type=int, default=180)
     parser.add_argument("--submit-orders", action="store_true")
+    parser.add_argument("--allow-duplicates", action="store_true")
     parser.add_argument("--max-orders", type=int, default=1)
     parser.add_argument("--per-order-notional", type=float, default=1.00)
     parser.add_argument("--app-mode", default=os.getenv("APP_MODE", "local"))
@@ -149,44 +180,60 @@ def main() -> int:
             f"{base_url}/api/v1/quant/research/run",
             timeout=args.request_timeout,
             body={
-                "universe": ["AAPL", "MSFT", "TSLA"],
+                "universe": [],
                 "benchmark": "SPY",
                 "research_question": "Generate a concise ESG quant shortlist for paper trading.",
                 "capital_base": 1000000,
                 "horizon_days": 10,
             },
+            path="/api/v1/quant/research/run",
         )
+        execution_universe = select_execution_universe(research_payload)
         account_status, account_payload = request_json(
             "GET",
             f"{base_url}/api/v1/quant/execution/account",
             timeout=args.request_timeout,
+            path="/api/v1/quant/execution/account",
         )
         execution_status, execution_payload = request_json(
             "POST",
             f"{base_url}/api/v1/quant/execution/paper",
             timeout=args.request_timeout,
             body={
-                "universe": ["AAPL", "MSFT", "TSLA"],
+                "universe": execution_universe,
                 "benchmark": "SPY",
                 "capital_base": 1000000,
                 "mode": "paper",
                 "submit_orders": args.submit_orders,
+                "allow_duplicates": args.allow_duplicates,
                 "max_orders": args.max_orders,
                 "per_order_notional": args.per_order_notional,
                 "order_type": "market",
                 "time_in_force": "day",
             },
+            path="/api/v1/quant/execution/paper",
         )
         orders_status, orders_payload = request_json(
             "GET",
             f"{base_url}/api/v1/quant/execution/orders?status=all&limit=10",
             timeout=args.request_timeout,
+            path="/api/v1/quant/execution/orders",
         )
         positions_status, positions_payload = request_json(
             "GET",
             f"{base_url}/api/v1/quant/execution/positions",
             timeout=args.request_timeout,
+            path="/api/v1/quant/execution/positions",
         )
+        journal_sync_status = None
+        journal_sync_payload = None
+        if args.submit_orders and isinstance(execution_payload, dict) and execution_payload.get("execution_id"):
+            journal_sync_status, journal_sync_payload = request_json(
+                "POST",
+                f"{base_url}/api/v1/quant/execution/journal/{execution_payload['execution_id']}/sync?broker=alpaca",
+                timeout=args.request_timeout,
+                path="/api/v1/quant/execution/journal/sync",
+            )
 
         api_ok = all(status == 200 for status in [research_status, account_status, execution_status, orders_status, positions_status])
         broker_submit_ok = True
@@ -195,6 +242,9 @@ def main() -> int:
                 isinstance(execution_payload, dict)
                 and execution_payload.get("submitted") is True
                 and execution_payload.get("broker_status") == "submitted"
+                and journal_sync_status in {None, 200}
+                and isinstance(journal_sync_payload, (dict, type(None)))
+                and (journal_sync_payload is None or journal_sync_payload.get("state_machine", {}).get("state") != "routing_exception")
             )
         ok = api_ok and broker_submit_ok
         emit_json(
@@ -205,12 +255,15 @@ def main() -> int:
                 "submit_orders": args.submit_orders,
                 "python_executable": python_exe,
                 "health": health_payload,
+                "execution_universe": execution_universe,
                 "research_status": research_status,
                 "account_status": account_status,
                 "execution_status": execution_status,
                 "orders_status": orders_status,
                 "positions_status": positions_status,
+                "journal_sync_status": journal_sync_status,
                 "execution_payload": execution_payload,
+                "journal_sync_payload": journal_sync_payload,
                 "account_payload": account_payload,
                 "orders_payload": orders_payload,
                 "positions_payload": positions_payload,

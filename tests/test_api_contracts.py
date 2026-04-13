@@ -1,6 +1,10 @@
 from fastapi.testclient import TestClient
 
 import gateway.main as main_module
+from gateway.config import settings
+
+
+ADMIN_HEADERS = {"x-api-key": settings.ADMIN_API_KEY}
 
 
 class _FakeResult:
@@ -184,6 +188,7 @@ def test_report_generation_accepts_async_alias(monkeypatch):
 
     response = client.post(
         "/admin/reports/generate",
+        headers=ADMIN_HEADERS,
         json={"report_type": "daily", "companies": ["Tesla"], "async": False},
     )
 
@@ -200,6 +205,7 @@ def test_report_generation_rejects_invalid_async_type(monkeypatch):
 
     response = client.post(
         "/admin/reports/generate",
+        headers=ADMIN_HEADERS,
         json={"report_type": "yearly", "companies": ["Tesla"], "async": True},
     )
 
@@ -230,7 +236,7 @@ def test_latest_report_route_returns_flattened_payload(monkeypatch):
     monkeypatch.setattr(main_module.runtime, "get_client", lambda: fake_db)
     client = TestClient(main_module.app)
 
-    response = client.get("/admin/reports/latest", params={"report_type": "daily"})
+    response = client.get("/admin/reports/latest", params={"report_type": "daily"}, headers=ADMIN_HEADERS)
 
     assert response.status_code == 200
     data = response.json()
@@ -257,13 +263,14 @@ def test_sync_status_tracks_background_result(monkeypatch):
 
     response = client.post(
         "/admin/data-sources/sync",
+        headers=ADMIN_HEADERS,
         json={"companies": ["Tesla", "BadCo"], "force_refresh": True},
     )
 
     assert response.status_code == 200
     job_id = response.json()["job_id"]
 
-    status_response = client.get(f"/admin/data-sources/sync/{job_id}")
+    status_response = client.get(f"/admin/data-sources/sync/{job_id}", headers=ADMIN_HEADERS)
     assert status_response.status_code == 200
     payload = status_response.json()
     assert payload["status"] == "completed_with_errors"
@@ -284,6 +291,7 @@ def test_push_rule_test_endpoint_accepts_json_body(monkeypatch):
 
     response = client.post(
         "/admin/push-rules/rule-1/test",
+        headers=ADMIN_HEADERS,
         json={"test_user_id": "u-1", "mock_report": {"overall_score": 35}},
     )
 

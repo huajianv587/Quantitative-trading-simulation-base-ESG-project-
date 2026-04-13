@@ -1,6 +1,33 @@
-/**
- * Toast 通知系统
- */
+/* Quant Terminal — Toast  */
+
+const ICONS = {
+  success: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  error:   `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  warning: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg>`,
+  info:    `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/></svg>`,
+};
+
+export const toast = {
+  success: (title, msg='', dur=4000) => _show('success', title, msg, dur),
+  error:   (title, msg='', dur=5000) => _show('error',   title, msg, dur),
+  warning: (title, msg='', dur=4500) => _show('warning', title, msg, dur),
+  info:    (title, msg='', dur=3500) => _show('info',    title, msg, dur),
+};
+
+function _show(type, title, msg, dur) {
+  const c = document.getElementById('toast-container');
+  if (!c) return;
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<div class="toast-icon">${ICONS[type]}</div>
+    <div class="toast-body"><div class="toast-title">${_esc(title)}</div>${msg?`<div class="toast-msg">${_esc(msg)}</div>`:''}</div>`;
+  c.appendChild(el);
+  setTimeout(() => el.remove(), dur);
+}
+
+function _esc(s) {
+  const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML;
+}
 
 const RECENT_TOASTS = new Map();
 const TOAST_DEDUPE_MS = 4000;
@@ -122,8 +149,5 @@ function escapeHtml(text) {
  * 监听全局 API 错误
  */
 export function initErrorListener() {
-  window.addEventListener('api:error', (event) => {
-    const { message } = event.detail;
-    toastError(message, '接口错误');
-  });
+  window.addEventListener('api:error', (e) => toast.error('API Error', e.detail?.message));
 }

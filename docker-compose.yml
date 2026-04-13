@@ -1,86 +1,66 @@
 services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: esg-qdrant
-    ports:
-      - "6333:6333"
-    volumes:
-      - qdrant_storage:/qdrant/storage
-    networks:
-      - esg-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/6333"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  app:
+  api:
     build:
       context: .
       dockerfile: gateway/Dockerfile
-    container_name: esg-rag-app
-    gpus: all
+    container_name: esg-quant-api
     env_file:
       - .env
+    environment:
+      PORT: 8000
+      LOCAL_API_URL: http://api:8000
+      QDRANT_URL: http://qdrant:6333
     ports:
       - "8000:8000"
-    environment:
-      - PYTHONUNBUFFERED=1
-      - PORT=8000
-      - HF_HOME=/root/.cache/huggingface
-      - SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_API_KEY=${SUPABASE_API_KEY:-}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
-      - QDRANT_URL=http://qdrant:6333
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
-      - ./gateway:/app/gateway
-      - ./data:/app/data
-      - ./frontend:/app/frontend
-      - ./configs:/app/configs
-      - ./storage:/app/storage
-      - hf_cache:/root/.cache/huggingface
+      - app_storage:/app/storage
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
+    restart: unless-stopped
+
+  quant-scheduler:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: esg-quant-scheduler
+    env_file:
+      - .env
+    environment:
+      LOCAL_API_URL: http://api:8000
+      QDRANT_URL: http://qdrant:6333
+      SCHEDULER_STATE_PATH: /app/storage/quant/scheduler/runtime_state.json
+      SCHEDULER_HEARTBEAT_PATH: /app/storage/quant/scheduler/heartbeat.json
+      SCHEDULER_LOCK_PATH: /app/storage/quant/scheduler/worker.lock
+    command: ["python", "scripts/quant_signal_scheduler.py", "--poll-seconds", "20"]
+    volumes:
+      - app_storage:/app/storage
+    depends_on:
+      qdrant:
+        condition: service_started
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, os, sys; from pathlib import Path; from datetime import datetime, timezone; p = Path(os.getenv('SCHEDULER_HEARTBEAT_PATH', '/app/storage/quant/scheduler/heartbeat.json')); payload = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}; ts = datetime.fromisoformat(payload.get('updated_at', '1970-01-01T00:00:00+00:00')); sys.exit(0 if (datetime.now(timezone.utc) - ts).total_seconds() < 300 else 1)"
+        ]
       interval: 30s
       timeout: 10s
+      start_period: 40s
       retries: 3
-      start_period: 60s
-    networks:
-      - esg-network
-    restart: unless-stopped
 
-  nginx:
-    image: nginx:latest
-    container_name: esg-rag-nginx
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    container_name: esg-quant-qdrant
     ports:
-      - "80:80"
-      - "443:443"
+      - "6333:6333"
     volumes:
-      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
-    networks:
-      - esg-network
-    depends_on:
-      app:
-        condition: service_healthy
+      - qdrant_data:/qdrant/storage
     restart: unless-stopped
-
-networks:
-  esg-network:
-    driver: bridge
 
 volumes:
-  qdrant_storage:
-  hf_cache:
+  qdrant_data:
+  app_storage:

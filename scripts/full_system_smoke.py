@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -69,8 +70,24 @@ def tail_log(path: Path, limit: int = 120) -> str:
     return "\n".join(path.read_text(encoding="utf-8", errors="ignore").splitlines()[-limit:])
 
 
+def api_key_for_path(path: str) -> str:
+    normalized = str(path or "")
+    if normalized.startswith("/ops"):
+        return os.getenv("OPS_API_KEY") or os.getenv("ADMIN_API_KEY") or ""
+    if normalized.startswith("/admin"):
+        return os.getenv("ADMIN_API_KEY") or os.getenv("OPS_API_KEY") or ""
+    if normalized.startswith("/api/v1/quant/execution") or normalized.startswith("/api/v1/quant/validation"):
+        return os.getenv("EXECUTION_API_KEY") or os.getenv("ADMIN_API_KEY") or os.getenv("OPS_API_KEY") or ""
+    return ""
+
+
 def request_json(method: str, url: str, *, timeout: int, body: dict | None = None) -> tuple[int, dict | str]:
-    response = requests.request(method, url, json=body, timeout=timeout)
+    headers = {}
+    api_key = api_key_for_path(urlparse(url).path)
+    if api_key:
+        headers["x-api-key"] = api_key
+        headers["Authorization"] = f"Bearer {api_key}"
+    response = requests.request(method, url, json=body, timeout=timeout, headers=headers)
     try:
         payload = response.json()
     except Exception:
@@ -220,6 +237,38 @@ def main() -> int:
         )
         mark(results, "quant_portfolio", status, payload)
 
+        status, payload = request_json("GET", f"{base_url}/api/v1/quant/p1/status", timeout=args.request_timeout)
+        mark(results, "quant_p1_status", status, payload)
+
+        status, payload = request_json(
+            "POST",
+            f"{base_url}/api/v1/quant/p1/stack/run",
+            timeout=args.request_timeout,
+            body={
+                "universe": ["AAPL", "MSFT", "TSLA"],
+                "benchmark": "SPY",
+                "capital_base": 500000,
+                "research_question": "Run the P1 alpha + risk stack.",
+            },
+        )
+        mark(results, "quant_p1_stack", status, payload)
+
+        status, payload = request_json("GET", f"{base_url}/api/v1/quant/p2/status", timeout=args.request_timeout)
+        mark(results, "quant_p2_status", status, payload)
+
+        status, payload = request_json(
+            "POST",
+            f"{base_url}/api/v1/quant/p2/decision/run",
+            timeout=args.request_timeout,
+            body={
+                "universe": ["AAPL", "MSFT", "TSLA", "NEE", "PG"],
+                "benchmark": "SPY",
+                "capital_base": 500000,
+                "research_question": "Run the P2 graph + strategy selector stack.",
+            },
+        )
+        mark(results, "quant_p2_decision", status, payload)
+
         status, payload = request_json(
             "POST",
             f"{base_url}/api/v1/quant/backtests/run",
@@ -259,15 +308,57 @@ def main() -> int:
             },
         )
         mark(results, "quant_execution_plan", status, payload)
+        execution_id = payload.get("execution_id") if isinstance(payload, dict) else None
 
         status, payload = request_json("GET", f"{base_url}/api/v1/quant/execution/account", timeout=args.request_timeout)
         mark(results, "quant_execution_account", status, payload)
+
+        status, payload = request_json("GET", f"{base_url}/api/v1/quant/execution/brokers", timeout=args.request_timeout)
+        mark(results, "quant_execution_brokers", status, payload)
 
         status, payload = request_json("GET", f"{base_url}/api/v1/quant/execution/orders?status=all&limit=10", timeout=args.request_timeout)
         mark(results, "quant_execution_orders", status, payload)
 
         status, payload = request_json("GET", f"{base_url}/api/v1/quant/execution/positions", timeout=args.request_timeout)
         mark(results, "quant_execution_positions", status, payload)
+
+        status, payload = request_json(
+            "POST",
+            f"{base_url}/api/v1/quant/validation/run",
+            timeout=args.request_timeout,
+            body={
+                "strategy_name": "ESG Multi-Factor Long-Only",
+                "universe": ["AAPL", "MSFT", "TSLA"],
+                "benchmark": "SPY",
+                "capital_base": 500000,
+                "in_sample_days": 180,
+                "out_of_sample_days": 45,
+                "walk_forward_windows": 2,
+            },
+        )
+        mark(results, "quant_validation", status, payload)
+
+        if execution_id:
+            status, payload = request_json("GET", f"{base_url}/api/v1/quant/execution/journal/{execution_id}", timeout=args.request_timeout)
+            mark(results, "quant_execution_journal", status, payload)
+
+        status, payload = request_json("GET", f"{base_url}/ops/runtime", timeout=args.request_timeout)
+        mark(results, "ops_runtime", status, payload)
+
+        status, payload = request_json("GET", f"{base_url}/ops/metrics", timeout=args.request_timeout)
+        mark(results, "ops_metrics", status, payload)
+
+        status, payload = request_json("GET", f"{base_url}/ops/healthcheck", timeout=args.request_timeout)
+        mark(results, "ops_healthcheck", status, payload)
+
+        status, payload = request_json("GET", f"{base_url}/ops/alerts", timeout=args.request_timeout)
+        mark(results, "ops_alerts", status, payload)
+
+        status, payload = request_json("GET", f"{base_url}/ops/models", timeout=args.request_timeout)
+        mark(results, "ops_models", status, payload)
+
+        status, payload = request_json("GET", f"{base_url}/ops/audit/search?limit=5", timeout=args.request_timeout)
+        mark(results, "ops_audit_search", status, payload)
 
         status, payload = request_json("GET", f"{base_url}/api/v1/quant/experiments", timeout=args.request_timeout)
         mark(results, "quant_experiments", status, payload)

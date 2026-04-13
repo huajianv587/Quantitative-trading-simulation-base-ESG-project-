@@ -6,12 +6,23 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
+from gateway.scheduler.event_classifier_runtime import get_event_classifier_runtime
 from gateway.utils.llm_client import chat
 from gateway.utils.logger import get_logger
 from gateway.models.schemas import ExtractedEvent, ESGEventType, RiskLevel
 from gateway.db.supabase_client import get_client
 
 logger = get_logger(__name__)
+SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+IMPACT_AREA_MAP = {
+    "environment": "E",
+    "environmental": "E",
+    "e": "E",
+    "social": "S",
+    "s": "S",
+    "governance": "G",
+    "g": "G",
+}
 
 
 # ── Extraction Prompt ──────────────────────────────────────────────────────
@@ -49,6 +60,7 @@ class EventExtractor:
     def __init__(self):
         self.db = get_client()
         self.max_retries = 2
+        self.classifier = get_event_classifier_runtime()
 
     def _parse_extraction_json(self, raw: str) -> dict | None:
         """解析 LLM 的 JSON 输出，容错处理 markdown 代码块"""
@@ -61,6 +73,21 @@ class EventExtractor:
             return json.loads(text)
         except json.JSONDecodeError:
             return None
+
+    @staticmethod
+    def _merge_severity(base: str, classifier_label: str | None, classifier_probability: float | None) -> str:
+        normalized_base = str(base or "low").lower()
+        normalized_label = str(classifier_label or "").lower()
+        if normalized_label not in SEVERITY_ORDER:
+            return normalized_base
+        probability = float(classifier_probability or 0.0)
+        if probability >= 0.55 and SEVERITY_ORDER[normalized_label] >= SEVERITY_ORDER.get(normalized_base, 0):
+            return normalized_label
+        return normalized_base
+
+    @staticmethod
+    def _normalize_impact_area(value: str | None, fallback: str = "E") -> str:
+        return IMPACT_AREA_MAP.get(str(value or "").strip().lower(), fallback)
 
     def extract_event(self, event_id: str, raw_content: str, source: str, company: str) -> Optional[ExtractedEvent]:
         """
@@ -100,6 +127,70 @@ class EventExtractor:
             logger.error(f"[Extractor] Failed to extract event {event_id}")
             return None
 
+        key_metrics = extracted_data.get("key_metrics", {}) or {}
+        if not isinstance(key_metrics, dict):
+            key_metrics = {"raw_key_metrics": str(key_metrics)}
+        classifier_payload = self.classifier.classify(
+            "\n".join(
+                part
+                for part in [
+                    str(extracted_data.get("title", "")),
+                    str(extracted_data.get("description", "")),
+                    str(raw_content or "")[:1200],
+                ]
+                if part
+            )
+        )
+        classifier_tasks = dict((classifier_payload or {}).get("tasks", {}))
+        if classifier_payload:
+            key_metrics.update(
+                {
+                    "controversy_label": classifier_payload["label"],
+                    "controversy_probability": classifier_payload["probability"],
+                    "controversy_model_name": classifier_payload["model_name"],
+                    "controversy_scores": classifier_payload["scores"],
+                }
+            )
+        severity_task = classifier_tasks.get("severity")
+        impact_area_task = classifier_tasks.get("impact_area")
+        event_type_task = classifier_tasks.get("event_type")
+        if severity_task:
+            key_metrics.update(
+                {
+                    "severity_label": severity_task["label"],
+                    "severity_probability": severity_task["probability"],
+                    "severity_scores": severity_task["scores"],
+                }
+            )
+        if impact_area_task:
+            key_metrics.update(
+                {
+                    "impact_area_label": impact_area_task["label"],
+                    "impact_area_probability": impact_area_task["probability"],
+                    "impact_area_scores": impact_area_task["scores"],
+                }
+            )
+        if event_type_task:
+            key_metrics.update(
+                {
+                    "event_type_label": event_type_task["label"],
+                    "event_type_probability": event_type_task["probability"],
+                    "event_type_scores": event_type_task["scores"],
+                }
+            )
+        severity = self._merge_severity(
+            extracted_data.get("severity", "low"),
+            (severity_task or {}).get("label") or key_metrics.get("controversy_label"),
+            (severity_task or {}).get("probability") or key_metrics.get("controversy_probability"),
+        )
+        impact_area = self._normalize_impact_area(
+            (impact_area_task or {}).get("label"),
+            fallback=self._normalize_impact_area(extracted_data.get("impact_area", "E")),
+        )
+        event_type = str(extracted_data.get("event_type", "other") or "other")
+        if event_type_task and float(event_type_task.get("probability") or 0.0) >= 0.52:
+            event_type = str(event_type_task.get("label") or event_type)
+
         # 构建结构化事件对象
         try:
             extracted_event = ExtractedEvent(
@@ -107,10 +198,10 @@ class EventExtractor:
                 title=extracted_data.get("title", ""),
                 description=extracted_data.get("description", ""),
                 company=company,
-                event_type=extracted_data.get("event_type", "other"),
-                key_metrics=extracted_data.get("key_metrics", {}),
-                impact_area=extracted_data.get("impact_area", "E"),
-                severity=extracted_data.get("severity", "low"),
+                event_type=event_type,
+                key_metrics=key_metrics,
+                impact_area=impact_area,
+                severity=severity,
                 created_at=datetime.now(timezone.utc),
             )
 

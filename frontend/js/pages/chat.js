@@ -1,382 +1,358 @@
-/**
- * ESG Chat 页面
- * 用户与 AI 进行对话，分析企业 ESG 表现
- */
+import { api } from '../qtapi.js?v=8';
+import { toast } from '../components/toast.js?v=8';
 
-import { api } from '../api.js';
-import { store } from '../store.js';
-import { createScoreCard } from '../components/score-card.js';
-import { toastError } from '../components/toast.js';
-import { getStorage, setStorage, removeStorage, formatDate } from '../utils.js';
-
-let isLoading = false;
-let cleanup = [];
-let pageRoot = null;
-let messagesContainer = null;
-let inputEl = null;
-let sendBtnEl = null;
-
-const RECENT_QUERY_KEY = 'esg_recent_queries';
-const PENDING_PROMPT_KEY = 'esg_pending_prompt';
-const PENDING_PROMPT_AUTOSEND_KEY = 'esg_pending_prompt_autosend';
-const HOT_QUESTIONS = [
-  '特斯拉的环保政策评分是多少？',
-  '苹果与微软的社会责任表现如何对比？',
-  '最近 ESG 相关风险事件有哪些？',
-  '微软最新的多样性报告释放了什么信号？',
+const SESSIONS = [
+  { id: 'session-001', title: 'NVDA ESG Deep-Dive', preview: 'Why is NVDA ranked #1…', ts: '10:24 AM', msgs: 6 },
+  { id: 'session-002', title: 'Tech Sector Momentum', preview: 'Compare MSFT vs AAPL…', ts: 'Yesterday', msgs: 4 },
+  { id: 'session-003', title: 'Portfolio Risk Review', preview: 'What factors explain…', ts: 'Yesterday', msgs: 9 },
+  { id: 'session-004', title: 'ESG Scoring Changes', preview: 'How did governance…', ts: 'Mon', msgs: 3 },
 ];
 
-export async function render(container) {
-  pageRoot = container;
-  container.innerHTML = buildHTML();
-  setupEventListeners(container);
-  renderQueryCockpit(container);
-  await loadMessages();
-  applyPendingPrompt();
+const QUICK_PROMPTS = [
+  'Why is NVDA ranked highly in the current ESG stack?',
+  'Compare ESG scores for MSFT vs AAPL vs GOOGL',
+  'What factors are driving today\'s top alpha signals?',
+  'Explain the current regime classification and its impact',
+  'Which sectors have the best ESG momentum right now?',
+  'What is the overfit risk of the current strategy?',
+];
+
+const CONTEXT_ITEMS = [
+  { label: 'Active Portfolio', value: 'ESG Multi-Factor', color: 'var(--green)' },
+  { label: 'Regime', value: 'Bull Market', color: 'var(--amber)' },
+  { label: 'P1 Signals', value: '24 active', color: 'var(--cyan)' },
+  { label: 'Top Signal', value: 'NVDA +2.14σ', color: 'var(--green)' },
+  { label: 'Universe', value: 'S&P 500 ESG', color: 'var(--text-secondary)' },
+  { label: 'Last Update', value: '2 min ago', color: 'var(--text-dim)' },
+];
+
+let _messages = [];
+let _activeSession = 'session-001';
+let _streaming = false;
+
+export function render(container) {
+  container.innerHTML = buildShell();
+  bindEvents(container);
+  loadWelcomeMessages();
+  renderMessages(container);
 }
 
 export function destroy() {
-  cleanup.forEach(fn => fn());
-  cleanup = [];
-  pageRoot = null;
-  messagesContainer = null;
-  inputEl = null;
-  sendBtnEl = null;
-  isLoading = false;
+  _messages = [];
+  _streaming = false;
 }
 
-// ============================================
-// HTML 构建
-// ============================================
-
-function buildHTML() {
+/* ── Shell ── */
+function buildShell() {
   return `
-    <div class="page-stack h-full">
-      <section class="page-hero">
-        <div>
-          <h2>ESG 智能对话</h2>
-          <p>围绕企业环境、社会与治理表现发问，快速得到分析、结论与评分摘要。</p>
-        </div>
-        <div class="text-sm text-[var(--text-secondary)]">支持连续提问与会话历史恢复</div>
-      </section>
-
-      <section class="query-interface-panel card" data-hover-glow="true">
-        <div class="overview-section-head">
-          <div>
-            <div class="overview-section-head__kicker">Query Cockpit</div>
-            <h2>输入问题，或从最近搜索继续</h2>
-          </div>
-          <p>把热门问题、复用查询和当前输入区合成一个更像智能工作台的对话入口。</p>
-        </div>
-
-        <div class="chat-query-grid">
-          <div class="chat-query-feature">
-            <div class="query-chip-group__title">热门问题</div>
-            <div id="chat-hot-questions" class="query-chip-list"></div>
-          </div>
-
-          <div class="chat-query-history">
-            <div class="query-history-panel__eyebrow">Recent Search</div>
-            <div id="chat-recent-queries" class="query-history-list"></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 聊天区域 -->
-      <div data-hover-glow="true" class="chat-stage flex-1 overflow-y-auto bg-[#0b1220] rounded-[22px] border border-[var(--bg-border)] p-5 lg:p-6 min-h-[520px]">
-        <div id="messages-container" class="space-y-4 flex flex-col">
-          <!-- 消息由 JS 动态插入 -->
-        </div>
-      </div>
-
-      <!-- 输入区域 -->
-      <div data-hover-glow="true" class="chat-composer bg-[var(--bg-surface)] border border-[var(--bg-border)] rounded-[22px] p-4">
-        <div id="input-area" class="flex flex-col gap-3 md:flex-row">
-          <textarea
-            id="chat-input"
-            class="flex-1 min-h-[108px] bg-[#1C2333] border border-[var(--bg-border)] rounded-2xl p-4 text-[#F0F4F8] resize-none focus:outline-none"
-            placeholder="输入问题...（例如：分析特斯拉的ESG表现）"
-            rows="4"
-          ></textarea>
-          <button
-            id="send-btn"
-            class="btn-primary px-6 py-3 w-full md:w-auto self-stretch md:self-end min-w-[92px]"
-          >
-            发送
-          </button>
-        </div>
-        <div id="send-hint" class="text-xs text-[#64748B] mt-2">
-          按 Shift+Enter 换行，Enter 发送
-        </div>
-      </div>
-
+  <div class="page-header" style="margin-bottom:0">
+    <div>
+      <div class="page-header__title">Research Chat</div>
+      <div class="page-header__sub">ESG Alpha Agent · Multi-turn Analysis · Context-Aware Reasoning</div>
     </div>
-  `;
-}
+    <div class="page-header__actions">
+      <button class="btn btn-ghost btn-sm" id="btn-new-session">+ New Session</button>
+    </div>
+  </div>
 
-// ============================================
-// 事件监听
-// ============================================
-
-function setupEventListeners(container) {
-  inputEl = container.querySelector('#chat-input');
-  sendBtnEl = container.querySelector('#send-btn');
-  messagesContainer = container.querySelector('#messages-container');
-  const hotQuestionsEl = container.querySelector('#chat-hot-questions');
-  const recentQueriesEl = container.querySelector('#chat-recent-queries');
-
-  // 发送按钮
-  sendBtnEl.addEventListener('click', () => sendMessage());
-
-  // 回车发送 (Shift+Enter 换行)
-  inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  });
-
-  // 监听 store 消息变化
-  const onStoreChange = (e) => {
-    if (e.detail.key === 'chatMessages') {
-      renderMessages(messagesContainer);
-    }
-  };
-
-  store.addEventListener('change', onStoreChange);
-  cleanup.push(() => store.removeEventListener('change', onStoreChange));
-
-  const onPromptClick = (e) => {
-    const button = e.target.closest('[data-prompt]');
-    if (!button) return;
-    inputEl.value = button.dataset.prompt || '';
-    inputEl.focus();
-  };
-
-  const onRecentClick = (e) => {
-    const button = e.target.closest('[data-recent-query]');
-    if (!button) return;
-    inputEl.value = button.dataset.recentQuery || '';
-    inputEl.focus();
-  };
-
-  hotQuestionsEl.addEventListener('click', onPromptClick);
-  recentQueriesEl.addEventListener('click', onRecentClick);
-  cleanup.push(() => hotQuestionsEl.removeEventListener('click', onPromptClick));
-  cleanup.push(() => recentQueriesEl.removeEventListener('click', onRecentClick));
-}
-
-function renderQueryCockpit(container) {
-  const hotQuestionsEl = container.querySelector('#chat-hot-questions');
-  const recentQueriesEl = container.querySelector('#chat-recent-queries');
-
-  hotQuestionsEl.innerHTML = HOT_QUESTIONS.map((question) => `
-    <button class="query-chip" type="button" data-prompt="${escapeHtml(question)}">
-      ${escapeHtml(question)}
-    </button>
-  `).join('');
-
-  renderRecentQueries(recentQueriesEl);
-}
-
-function renderRecentQueries(target) {
-  if (!target) return;
-  const items = getStorage(RECENT_QUERY_KEY, []);
-
-  if (!items.length) {
-    target.innerHTML = `
-      <div class="query-history-empty">
-        这里会显示你最近发起过的 ESG 对话和评分请求。
+  <div class="chat-layout">
+    <!-- LEFT: Sessions sidebar -->
+    <div class="chat-sidebar">
+      <div class="chat-sidebar-label">SESSIONS</div>
+      <div class="session-list" id="session-list">
+        ${SESSIONS.map(s => `
+          <div class="session-item${s.id === _activeSession ? ' active' : ''}" data-sid="${s.id}">
+            <div class="session-item-top">
+              <span class="session-item-title">${s.title}</span>
+              <span class="session-item-ts">${s.ts}</span>
+            </div>
+            <div class="session-item-preview">${s.preview}</div>
+            <span class="session-item-badge">${s.msgs}</span>
+          </div>`).join('')}
       </div>
-    `;
-    return;
-  }
 
-  target.innerHTML = items.map((item) => `
-    <button class="query-history-item" type="button" data-recent-query="${escapeHtml(item.query)}">
-      <div class="query-history-item__icon">${item.mode === 'score' ? '★' : '✓'}</div>
-      <div class="query-history-item__body">
-        <div class="query-history-item__title">${escapeHtml(item.query)}</div>
-        <div class="query-history-item__meta">
-          <span>${item.mode === 'score' ? '评分看板' : 'ESG 对话'}</span>
-          <span>${escapeHtml(formatDate(item.createdAt, 'YYYY-MM-DD HH:mm'))}</span>
-        </div>
+      <!-- Context Panel -->
+      <div class="chat-sidebar-label" style="margin-top:18px">LIVE CONTEXT</div>
+      <div style="display:flex;flex-direction:column;gap:0;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;overflow:hidden">
+        ${CONTEXT_ITEMS.map(c => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-bottom:1px solid rgba(255,255,255,0.03)">
+            <span style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono);letter-spacing:0.06em">${c.label}</span>
+            <span style="font-size:10px;font-family:var(--f-mono);color:${c.color}">${c.value}</span>
+          </div>`).join('')}
       </div>
-    </button>
-  `).join('');
-}
 
-function applyPendingPrompt() {
-  const pendingPrompt = getStorage(PENDING_PROMPT_KEY, '');
-  const shouldAutoSend = getStorage(PENDING_PROMPT_AUTOSEND_KEY, false);
+      <!-- Quick Prompts -->
+      <div class="chat-sidebar-label" style="margin-top:18px">QUICK PROMPTS</div>
+      <div id="quick-prompts" style="display:flex;flex-direction:column;gap:4px">
+        ${QUICK_PROMPTS.map(p => `
+          <button class="quick-prompt-btn" data-prompt="${p.replace(/"/g,'&quot;')}">${p}</button>
+        `).join('')}
+      </div>
+    </div>
 
-  if (!pendingPrompt || !inputEl) return;
-
-  inputEl.value = pendingPrompt;
-  removeStorage(PENDING_PROMPT_KEY);
-  removeStorage(PENDING_PROMPT_AUTOSEND_KEY);
-
-  if (shouldAutoSend) {
-    window.setTimeout(() => {
-      sendMessage();
-    }, 120);
-  } else {
-    inputEl.focus();
-  }
-}
-
-// ============================================
-// 消息加载和渲染
-// ============================================
-
-async function loadMessages() {
-  const container = messagesContainer;
-  const messages = store.get('chatMessages') || [];
-
-  if (messages.length === 0) {
-    container.innerHTML = `
-      <div class="flex items-center justify-center h-full text-center">
+    <!-- CENTER: Chat -->
+    <div class="chat-main">
+      <!-- Session header -->
+      <div class="chat-session-header">
         <div>
-          <div class="text-4xl mb-4">💬</div>
-          <p class="text-[#94A3B8]">开始对话，分析企业ESG表现</p>
-          <p class="text-xs text-[#64748B] mt-2">例如：分析苹果的环境政策、特斯拉的社会责任...</p>
+          <div style="font-family:var(--f-display);font-size:13px;font-weight:700;color:var(--text-primary)">ESG Alpha Research Agent</div>
+          <div style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">Session: <span id="active-session-id">${_activeSession}</span> · Context-aware · Multi-turn</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="live-dot"></div>
+          <span style="font-size:10px;color:var(--green);font-family:var(--f-mono)">ONLINE</span>
+          <button class="btn btn-ghost btn-sm" id="btn-clear-chat">Clear</button>
         </div>
       </div>
-    `;
-  } else {
-    renderMessages(container);
-  }
+
+      <!-- Viewport -->
+      <div class="chat-viewport" id="chat-body"></div>
+
+      <!-- Input -->
+      <div class="chat-input-bar">
+        <textarea class="chat-textarea" id="chat-question" rows="3"
+          placeholder="Ask about a stock, factor, sector, regime, or signal rationale… (Ctrl+Enter to send)"></textarea>
+        <div class="chat-input-actions">
+          <div style="display:flex;gap:6px;align-items:center">
+            <input class="form-input" id="chat-session" value="${window.__ESG_USER_ID__ || 'user_123'}"
+              style="width:130px;height:26px;font-size:10px" placeholder="Session ID">
+            <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">Ctrl+↵ to send</span>
+          </div>
+          <button class="btn btn-primary" id="send-btn" style="min-width:90px">▶ Send</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
-function renderMessages(container) {
-  const messages = store.get('chatMessages') || [];
-
-  container.innerHTML = '';
-
-  messages.forEach((msg) => {
-    const msgEl = document.createElement('div');
-    msgEl.className = `flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`;
-
-    const contentEl = document.createElement('div');
-    contentEl.className = `chat-bubble chat-bubble-${msg.role}`;
-
-    contentEl.innerHTML = msg.content;
-
-    msgEl.appendChild(contentEl);
-    container.appendChild(msgEl);
-
-    // 如果有 ESG 分数，在下方显示评分卡片
-    if (msg.esg_scores) {
-      const scoreEl = document.createElement('div');
-      scoreEl.className = 'flex justify-start';
-      scoreEl.innerHTML = createScoreCard(msg.esg_scores);
-      container.appendChild(scoreEl);
+function loadWelcomeMessages() {
+  _messages = [
+    {
+      role: 'assistant', ts: new Date(Date.now() - 120000).toISOString(),
+      content: 'Hello! I\'m your ESG Alpha Research Agent. I have access to your current portfolio, live P1/P2 model signals, ESG scores, and market regime data.\n\nYou can ask me about:\n• **Specific stocks** — ESG scores, factor exposures, signal rationale\n• **Portfolio analysis** — Risk attribution, factor breakdown\n• **Market regime** — Current state, impact on strategy\n• **Strategy insights** — Why certain trades are ranked highly\n\nWhat would you like to explore?',
+      meta: null, isWelcome: true,
     }
-
-    // 添加动画类
-    msgEl.classList.add(`message-${msg.role}`);
-  });
-
-  // 滚动到底部
-  container.parentElement.scrollTop = container.parentElement.scrollHeight;
+  ];
 }
 
-// ============================================
-// 发送消息
-// ============================================
-
-async function sendMessage() {
-  if (isLoading) return;
-
-  const input = inputEl;
-  const question = input.value.trim();
-
-  if (!question) {
-    toastError('请输入问题', '输入为空');
-    return;
-  }
-
-  recordRecentQuery(question);
-  renderRecentQueries(pageRoot?.querySelector('#chat-recent-queries'));
-
-  // 添加用户消息
-  store.addMessage({
-    role: 'user',
-    content: question,
+/* ── Events ── */
+function bindEvents(container) {
+  container.querySelector('#send-btn').addEventListener('click', () => sendQuestion(container));
+  container.querySelector('#btn-clear-chat').addEventListener('click', () => {
+    loadWelcomeMessages();
+    renderMessages(container);
+  });
+  container.querySelector('#btn-new-session').addEventListener('click', () => {
+    _activeSession = 'session-new-' + Date.now();
+    container.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+    loadWelcomeMessages();
+    renderMessages(container);
+    toast.info('New session started');
+  });
+  container.querySelector('#chat-question').addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      sendQuestion(container);
+    }
   });
 
-  input.value = '';
-  input.focus();
+  // Session list
+  container.querySelector('#session-list').addEventListener('click', e => {
+    const item = e.target.closest('.session-item');
+    if (!item) return;
+    _activeSession = item.dataset.sid;
+    container.querySelectorAll('.session-item').forEach(el => el.classList.toggle('active', el.dataset.sid === _activeSession));
+    container.querySelector('#active-session-id').textContent = _activeSession;
+    loadWelcomeMessages();
+    renderMessages(container);
+  });
 
-  // 显示思考指示
-  showThinking();
+  // Quick prompts
+  container.querySelector('#quick-prompts').addEventListener('click', e => {
+    const btn = e.target.closest('.quick-prompt-btn');
+    if (!btn) return;
+    container.querySelector('#chat-question').value = btn.dataset.prompt;
+    container.querySelector('#chat-question').focus();
+  });
+}
 
-  isLoading = true;
-  sendBtnEl.disabled = true;
-  sendBtnEl.textContent = '思考中...';
+/* ── Send ── */
+async function sendQuestion(container) {
+  if (_streaming) return;
+  const questionEl = container.querySelector('#chat-question');
+  const sessionEl  = container.querySelector('#chat-session');
+  const sendBtn    = container.querySelector('#send-btn');
+  const question   = questionEl.value.trim();
+  if (!question) { toast.warning('Enter a question first'); return; }
+
+  const sessionId = sessionEl.value.trim() || _activeSession;
+  _messages.push({ role: 'user', content: question, ts: new Date().toISOString() });
+  questionEl.value = '';
+  renderMessages(container);
+  scrollChat(container);
+
+  _streaming = true;
+  sendBtn.disabled = true; sendBtn.textContent = '● Thinking…';
+
+  // Add a streaming placeholder
+  const streamId = 'stream-' + Date.now();
+  _messages.push({ role: 'assistant', content: '', ts: new Date().toISOString(), streamId });
+  renderMessages(container);
+  scrollChat(container);
 
   try {
-    const sessionId = store.get('currentSession')?.id;
-    const result = await api.agent.analyze(question, sessionId);
-
-    // 添加 AI 回复
-    store.addMessage({
-      role: 'assistant',
-      content: result.answer,
-      esg_scores: result.esg_scores,
-    });
-
-    // 如果有置信度，可以显示
-    if (result.confidence < 0.7) {
-      toastError(
-        `置信度较低 (${(result.confidence * 100).toFixed(0)}%)，结果可能不准确`,
-        '置信度警告'
-      );
+    const response = await api.agent.analyze({ question, session_id: sessionId });
+    const answer = response.answer || response.analysis_summary || 'No answer returned.';
+    // Replace streaming placeholder
+    const idx = _messages.findIndex(m => m.streamId === streamId);
+    if (idx >= 0) {
+      _messages[idx] = {
+        role: 'assistant', content: answer,
+        meta: response.esg_scores || response.metadata || null,
+        sources: response.sources || response.citations || null,
+        ts: new Date().toISOString(),
+      };
     }
-
-  } catch (error) {
-    console.error('发送消息失败:', error);
-    store.addMessage({
-      role: 'assistant',
-      content: `❌ 错误: ${error.message}`,
-    });
+    renderMessages(container);
+    scrollChat(container);
+  } catch(err) {
+    const idx = _messages.findIndex(m => m.streamId === streamId);
+    if (idx >= 0) {
+      _messages[idx] = {
+        role: 'assistant',
+        content: mockAgentResponse(question),
+        ts: new Date().toISOString(),
+        isMock: true,
+      };
+    }
+    renderMessages(container);
+    scrollChat(container);
+    toast.error('API error', err.message + ' — showing mock response');
   } finally {
-    isLoading = false;
-    sendBtnEl.disabled = false;
-    sendBtnEl.textContent = '发送';
+    _streaming = false;
+    sendBtn.disabled = false; sendBtn.textContent = '▶ Send';
   }
 }
 
-function recordRecentQuery(query) {
-  const items = (getStorage(RECENT_QUERY_KEY, []) || [])
-    .filter((item) => item.query !== query);
-
-  items.unshift({
-    query,
-    mode: 'chat',
-    createdAt: new Date().toISOString(),
-  });
-
-  setStorage(RECENT_QUERY_KEY, items.slice(0, 6));
+function mockAgentResponse(question) {
+  const q = question.toLowerCase();
+  if (q.includes('nvda') || q.includes('nvidia')) {
+    return `**NVDA — ESG Alpha Analysis**\n\nNVIDIA ranks #1 in our current ESG Multi-Factor stack for several reasons:\n\n**ESG Scores (as of latest update):**\n• Environmental: 78/100 — Renewable energy commitment, chip efficiency leadership\n• Social: 82/100 — Workforce diversity, community investment\n• Governance: 85/100 — Board independence, executive compensation alignment\n\n**Factor Exposures:**\n• Quality: +2.14σ (top decile)\n• Momentum: +1.87σ (12-month)\n• ESG Composite: +1.92σ\n\n**Signal Rationale:**\nThe Alpha Ranker assigned NVDA a composite score of 0.87 (max 1.0). Key drivers: accelerating AI infrastructure demand intersects with ESG efficiency narrative. Data center power efficiency metrics improved 31% YoY, boosting Environmental score.\n\n**Risk Flags:**\n⚠ Valuation (P/E 45x) creates mean-reversion risk at current levels\n⚠ Geopolitical exposure (Taiwan supply chain) flagged by GNN model`;
+  }
+  if (q.includes('regime') || q.includes('market')) {
+    return `**Current Market Regime Analysis**\n\nThe Regime Detector (HMM 4-state) is currently classifying markets as **Bull Market** with 87% confidence.\n\n**Regime Characteristics:**\n• Trend: Upward, SPY +18.4% YTD\n• Volatility: VIX at 14.2 (Low regime)\n• Breadth: 72% of S&P 500 above 200MA\n\n**Strategy Implications:**\n• Momentum factor tilt increased: +40% weight\n• Position sizing: 1.2x normal (risk-on)\n• ESG Growth stocks outperforming ESG Value by 340bps\n\n**Transition Risk:**\n The model assigns 12% probability of regime shift to High-Vol within 30 days, based on options market signals and macro indicators.`;
+  }
+  if (q.includes('sector') || q.includes('esg momentum')) {
+    return `**Sector ESG Momentum Rankings**\n\n| Sector | ESG Score | 3M Change | Alpha Score |\n|--------|-----------|-----------|-------------|\n| Technology | 76.2 | +3.1 | 0.84 |\n| Healthcare | 71.8 | +2.4 | 0.76 |\n| Industrials | 68.4 | +1.8 | 0.71 |\n| Consumer Disc | 65.1 | +0.9 | 0.64 |\n| Energy | 42.3 | -1.2 | 0.38 |\n\n**Leaders:** Technology sector leads on Environmental and Governance sub-scores. Clean energy transition investments boosted Industrials.\n\n**Laggards:** Traditional Energy sector continues to underperform on ESG metrics despite some improvement in emissions reporting.`;
+  }
+  return `**Research Analysis**\n\nBased on the current state of the ESG Multi-Factor portfolio and P1 Alpha Stack:\n\n**Key Findings:**\n• The Alpha Ranker has identified 24 active signals across 12 sectors\n• Top-decile ESG stocks are outperforming the benchmark by 280bps YTD\n• The Regime Detector classifies current conditions as **Bull Market** (87% confidence)\n\n**Recommendation:**\nContinue with current positioning. Monitor the ESG score update cycle (next: 5 days) for any material changes to top holdings.\n\n*This is a mock response. Connect the API for live analysis.*`;
 }
 
-function showThinking() {
-  const container = messagesContainer;
-  const msgEl = document.createElement('div');
-  msgEl.className = 'flex justify-start';
-  msgEl.innerHTML = `
-    <div class="chat-bubble chat-bubble-assistant">
-      <span class="thinking-dot"></span>
-      <span class="thinking-dot"></span>
-      <span class="thinking-dot"></span>
+/* ── Render ── */
+function renderMessages(container) {
+  const body = container.querySelector('#chat-body');
+  if (!body) return;
+
+  if (!_messages.length) {
+    body.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state__icon">🤖</div>
+        <div class="empty-state__title">Start a conversation</div>
+        <div class="empty-state__text">Ask about stocks, signals, sectors, or strategy rationale.</div>
+      </div>`;
+    return;
+  }
+
+  body.innerHTML = _messages.map(msg => buildMessage(msg)).join('');
+}
+
+function buildMessage(msg) {
+  const isUser = msg.role === 'user';
+  const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const isStreaming = !!msg.streamId && !msg.content;
+
+  // Format markdown-lite (bold, tables, bullets)
+  const formatted = formatContent(msg.content);
+
+  const metaHtml = msg.meta && Object.keys(msg.meta).length ? `
+    <div class="chat-msg-meta">
+      ${Object.entries(msg.meta).slice(0,6).map(([k,v]) => `
+        <div class="chat-meta-chip"><span>${k}</span><strong>${v}</strong></div>`).join('')}
+    </div>` : '';
+
+  const sourcesHtml = msg.sources?.length ? `
+    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+      ${msg.sources.slice(0,3).map(s => `
+        <span style="font-size:9px;padding:2px 7px;border-radius:3px;background:rgba(0,229,255,0.08);color:var(--cyan);font-family:var(--f-mono)">${s}</span>
+      `).join('')}
+    </div>` : '';
+
+  const mockBadge = msg.isMock ? `<span style="font-size:8px;color:var(--amber);font-family:var(--f-mono);margin-left:8px">MOCK</span>` : '';
+  const welcomeBadge = msg.isWelcome ? `<span style="font-size:8px;color:var(--green);font-family:var(--f-mono);margin-left:8px;letter-spacing:0.08em">WELCOME</span>` : '';
+
+  if (isUser) {
+    return `
+    <div class="chat-msg chat-msg--user">
+      <div class="chat-msg-bubble chat-msg-bubble--user">
+        <div class="chat-msg-content">${formatted}</div>
+        <div class="chat-msg-time">${time}</div>
+      </div>
+      <div class="chat-msg-avatar chat-msg-avatar--user">YOU</div>
+    </div>`;
+  }
+
+  return `
+  <div class="chat-msg chat-msg--agent">
+    <div class="chat-msg-avatar chat-msg-avatar--agent">AI</div>
+    <div class="chat-msg-bubble chat-msg-bubble--agent">
+      <div class="chat-msg-header">
+        <span style="font-size:9px;font-family:var(--f-display);letter-spacing:0.12em;color:var(--green)">ESG ALPHA AGENT</span>
+        ${mockBadge}${welcomeBadge}
+        <span class="chat-msg-time">${time}</span>
+      </div>
+      ${isStreaming ? `
+        <div class="chat-typing">
+          <span></span><span></span><span></span>
+        </div>` : `
+        <div class="chat-msg-content">${formatted}</div>
+        ${metaHtml}
+        ${sourcesHtml}`}
     </div>
-  `;
-  container.appendChild(msgEl);
-  container.parentElement.scrollTop = container.parentElement.scrollHeight;
+  </div>`;
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+function formatContent(text) {
+  if (!text) return '';
+  // Escape HTML
+  let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Bold **text**
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--text-primary)">$1</strong>');
+  // Tables (| col | col |)
+  if (s.includes('|')) {
+    const lines = s.split('\n');
+    let inTable = false;
+    s = lines.map(line => {
+      if (line.trim().startsWith('|')) {
+        if (line.includes('---')) return inTable ? '' : '';
+        if (!inTable) { inTable = true; return '<div class="chat-table-wrap"><table class="chat-table"><tbody><tr>' + line.split('|').filter(Boolean).map(c=>`<td>${c.trim()}</td>`).join('') + '</tr>'; }
+        return '<tr>' + line.split('|').filter(Boolean).map(c=>`<td>${c.trim()}</td>`).join('') + '</tr>';
+      }
+      if (inTable) { inTable = false; return '</tbody></table></div>' + line; }
+      return line;
+    }).join('\n');
+    if (inTable) s += '</tbody></table></div>';
+  }
+  // Bullet points
+  s = s.replace(/^[•·]\s(.+)$/gm, '<div class="chat-bullet"><span class="chat-bullet-dot"></span><span>$1</span></div>');
+  s = s.replace(/^⚠\s(.+)$/gm, '<div class="chat-bullet warn"><span>⚠</span><span>$1</span></div>');
+  // Headers **H:**
+  s = s.replace(/^\*\*(.+)\*\*$/gm, '<div class="chat-section-header">$1</div>');
+  // Newlines
+  s = s.replace(/\n\n/g, '</p><p class="chat-para">').replace(/\n/g, '<br>');
+  return `<p class="chat-para">${s}</p>`;
+}
+
+function scrollChat(container) {
+  const body = container.querySelector('#chat-body');
+  if (body) requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
 }

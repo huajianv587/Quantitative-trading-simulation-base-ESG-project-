@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESG Quant IO — 研究到执行，一套闭环</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:     #05050F;
+      --green:  #00FF88;
+      --gold:   #F5A623;
+      --white:  #F0F4FF;
+      --dim:    rgba(255,255,255,0.4);
+      --border: rgba(0,255,136,0.1);
+      --red:    #FF3C3C;
+    }
+
+    html {
+      scroll-snap-type: y mandatory;
+      overflow-y: scroll;
+      background: var(--bg);
+      height: 100%;
+    }
+
+    body {
+      font-family: 'Syne', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: var(--bg);
+      color: var(--white);
+      cursor: none;
+      height: 100%;
+    }
+
+    /* ── Scrollbar ─────────────────── */
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.3); border-radius: 2px; }
+
+    /* ── Custom Cursor ─────────────── */
+    #cur-dot {
+      position: fixed; width: 6px; height: 6px;
+      background: var(--green); border-radius: 50%;
+      pointer-events: none; z-index: 9999;
+      transform: translate(-50%,-50%);
+      transition: width .18s, height .18s;
+      will-change: left, top;
+    }
+    #cur-ring {
+      position: fixed; width: 30px; height: 30px;
+      border: 1.5px solid rgba(0,255,136,.55); border-radius: 50%;
+      pointer-events: none; z-index: 9998;
+      transform: translate(-50%,-50%);
+      transition: width .28s, height .28s, border-color .25s;
+      will-change: left, top;
+    }
+    body.hov #cur-dot { width: 8px; height: 8px; }
+    body.hov #cur-ring { width: 52px; height: 52px; border-color: var(--green); }
+
+    /* ── NAV ───────────────────────── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 22px 52px;
+      transition: background .35s, border-bottom .35s, backdrop-filter .35s;
+    }
+    nav.scrolled {
+      background: rgba(5,5,15,.86);
+      backdrop-filter: blur(24px) saturate(160%);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-logo { display: flex; align-items: center; gap: 12px; }
+    .nav-badge {
+      width: 36px; height: 36px; background: #1a2e1a;
+      border: 1px solid rgba(0,255,136,.28); border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'IBM Plex Mono', monospace; font-weight: 500;
+      font-size: 14px; color: var(--green); flex-shrink: 0;
+    }
+    .nav-brand { display: flex; flex-direction: column; }
+    .nav-name  { font-weight: 700; font-size: 15px; color: var(--white); line-height: 1; }
+    .nav-sub   { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: rgba(0,255,136,.45); letter-spacing: .16em; margin-top: 3px; }
+    .nav-links { display: flex; align-items: center; gap: 32px; }
+    .nav-links a {
+      font-size: 13px; color: rgba(255,255,255,.58);
+      text-decoration: none; letter-spacing: .03em;
+      transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--white); }
+    .nav-cta {
+      background: var(--green) !important; color: #000 !important;
+      font-weight: 700 !important; padding: 9px 22px !important;
+      border-radius: 6px; font-size: 13px !important;
+      text-decoration: none !important;
+      transition: box-shadow .22s, transform .18s !important;
+    }
+    .nav-cta:hover { box-shadow: 0 0 28px rgba(0,255,136,.42) !important; transform: translateY(-1px); }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 1 — HERO
+    ═══════════════════════════════════════════════════════ */
+    #s-hero {
+      scroll-snap-align: start;
+      height: 100vh; position: relative; overflow: hidden;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center;
+    }
+    #hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .3; }
+
+    .hero-inner {
+      position: relative; z-index: 2;
+      display: flex; flex-direction: column; align-items: center;
+    }
+
+    /* Micro-label */
+    .hero-micro {
+      font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500;
+      letter-spacing: .3em; color: var(--green); text-transform: uppercase;
+      margin-bottom: 36px;
+      opacity: 0; animation: au .6s ease forwards .2s;
+    }
+
+    /* Headline */
+    .hero-hl { display: flex; flex-direction: column; align-items: center; margin-bottom: 26px; }
+    .hl { opacity: 0; transform: translateY(42px); line-height: 1.08; }
+    .hl-1 {
+      font-size: clamp(38px, 5vw, 72px); font-weight: 800; color: var(--white);
+      font-family: 'Syne', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      animation: su .72s cubic-bezier(.16,1,.3,1) forwards .4s;
+    }
+    .hl-2 {
+      font-size: clamp(52px, 7vw, 100px); font-weight: 900; color: var(--green);
+      font-family: 'Syne', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      animation: su .72s cubic-bezier(.16,1,.3,1) forwards .6s;
+      text-shadow: 0 0 60px rgba(0,255,136,.35);
+    }
+    .hl-3 {
+      font-size: clamp(26px, 4vw, 54px); font-weight: 700; color: var(--white);
+      font-family: 'Syne', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      animation: su .72s cubic-bezier(.16,1,.3,1) forwards .8s;
+    }
+    @keyframes su { to { opacity:1; transform:translateY(0); } }
+    @keyframes au { to { opacity:1; } }
+
+    /* Subline */
+    .hero-sub {
+      font-family: 'IBM Plex Mono', monospace; font-size: 15px;
+      color: rgba(255,255,255,.48); letter-spacing: .06em;
+      margin-bottom: 44px; max-width: 620px;
+      opacity:0; animation: au .6s ease forwards 1s;
+    }
+
+    /* Buttons */
+    .hero-btns { display:flex; gap:14px; margin-bottom:58px; opacity:0; animation:au .6s ease forwards 1.1s; }
+    .btn-pri {
+      background: var(--green); color: #000;
+      font-family: 'Syne', sans-serif; font-weight: 700;
+      font-size: 15px; padding: 14px 38px; border-radius: 6px;
+      border: none; cursor: none; letter-spacing: .02em;
+      display: inline-flex; align-items: center; justify-content: center;
+      text-decoration: none;
+      position: relative; overflow: hidden;
+      transition: box-shadow .25s, transform .2s;
+    }
+    .btn-pri:hover { box-shadow: 0 0 36px rgba(0,255,136,.5); transform: scale(1.035); }
+    .btn-pri::after {
+      content:''; position:absolute; inset:0;
+      background: linear-gradient(90deg,transparent,rgba(255,255,255,.22),transparent);
+      transform: translateX(-100%);
+    }
+    .btn-pri:hover::after { animation: shim .55s ease; }
+    @keyframes shim { to { transform:translateX(200%); } }
+
+    .btn-ghost {
+      background: transparent; color: rgba(255,255,255,.58);
+      font-family: 'Syne', sans-serif; font-weight: 600;
+      font-size: 15px; padding: 14px 38px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,.18); cursor: none;
+      display: inline-flex; align-items: center; justify-content: center;
+      text-decoration: none;
+      transition: border-color .2s, color .2s;
+    }
+    .btn-ghost:hover { border-color: var(--green); color: var(--green); }
+
+    /* Stats */
+    .hero-stats { display:flex; align-items:center; opacity:0; animation:au .6s ease forwards 1.3s; }
+    .stat-item { padding: 0 44px; text-align: center; }
+    .stat-item:not(:last-child) { border-right: 1px solid rgba(255,255,255,.1); }
+    .stat-num {
+      font-family: 'IBM Plex Mono', monospace; font-size: 28px; font-weight: 500;
+      color: var(--green); display: block; line-height: 1; margin-bottom: 7px;
+    }
+    .stat-lbl {
+      font-size: 11px; color: rgba(255,255,255,.3);
+      letter-spacing: .08em; text-transform: uppercase;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 2 — PRODUCT
+    ═══════════════════════════════════════════════════════ */
+    #s-product {
+      scroll-snap-align: start;
+      height: 100vh; position: relative; overflow: hidden;
+      display: flex; align-items: center;
+      padding: 80px 52px 0;
+      background: radial-gradient(ellipse 80% 60% at 70% 50%, rgba(0,255,136,.025) 0%, transparent 70%);
+    }
+
+    .prod-left { width: 38%; flex-shrink: 0; padding-right: 56px; }
+    .sec-label {
+      font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500;
+      letter-spacing: .26em; color: var(--green); text-transform: uppercase;
+      margin-bottom: 18px;
+      opacity:0; transform:translateY(18px);
+      transition: opacity .5s, transform .5s;
+    }
+    .prod-hl {
+      font-size: clamp(22px, 2.8vw, 40px); font-weight: 800; line-height: 1.18;
+      margin-bottom: 38px;
+      opacity:0; transform:translateY(22px);
+      transition: opacity .6s .1s, transform .6s .1s;
+    }
+    .cap-list { list-style: none; opacity:0; transform:translateY(18px); transition: opacity .6s .2s, transform .6s .2s; }
+    .cap-item {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.06);
+      position: relative;
+      transition: padding-left .2s;
+    }
+    .cap-item:first-child { border-top: 1px solid rgba(255,255,255,.06); }
+    .cap-item::before {
+      content:''; position:absolute; left:-14px; top:0; bottom:0;
+      width:2px; background:var(--green); opacity:0; transition:opacity .2s;
+    }
+    .cap-item:hover::before { opacity:1; }
+    .cap-item:hover { padding-left: 6px; }
+    .cap-icon { font-size:15px; flex-shrink:0; width:20px; text-align:center; }
+    .cap-txt { font-size:13.5px; color:rgba(255,255,255,.65); line-height:1.4; transition:color .2s; }
+    .cap-item:hover .cap-txt { color:var(--white); }
+    .cap-name { color:var(--white); font-weight:700; }
+
+    .prod-right {
+      flex:1; display:flex; align-items:center; justify-content:center;
+      padding-left: 12px;
+    }
+
+    /* Dashboard card */
+    .dash-card {
+      width:100%; max-width:620px;
+      background: rgba(8,14,8,.97);
+      border: 1px solid rgba(0,255,136,.1);
+      border-radius: 12px; overflow: hidden;
+      box-shadow: 0 48px 88px rgba(0,0,0,.7), 0 0 0 1px rgba(0,255,136,.04), inset 0 1px 0 rgba(255,255,255,.03);
+      animation: float 8s ease-in-out infinite;
+      opacity:0; transform: perspective(1200px) rotateY(-6deg) rotateX(2deg) translateY(12px);
+      transition: opacity .7s .35s, transform .7s .35s;
+    }
+    @keyframes float {
+      0%,100% { transform: perspective(1200px) rotateY(-6deg) rotateX(2deg) translateY(0px); }
+      50%      { transform: perspective(1200px) rotateY(-6deg) rotateX(2deg) translateY(-8px); }
+    }
+    .dash-topbar {
+      display:flex; align-items:center; justify-content:space-between;
+      padding: 10px 16px; background: rgba(0,0,0,.45);
+      border-bottom: 1px solid rgba(255,255,255,.04);
+    }
+    .dash-logo { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--green); letter-spacing:.1em; }
+    .dash-dots { display:flex; gap:6px; }
+    .dash-dot { width:10px; height:10px; border-radius:50%; }
+    .dot-r { background:#FF5F57; } .dot-y { background:#FEBC2E; } .dot-g { background:#28C840; }
+
+    .dash-main { display:grid; grid-template-columns:60% 40%; padding:16px; }
+    .dash-col-l { padding-right:16px; border-right:1px solid rgba(255,255,255,.05); }
+    .dash-col-r { padding-left:16px; }
+    .col-lbl {
+      font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:.22em;
+      color:rgba(255,255,255,.28); text-transform:uppercase; margin-bottom:10px;
+    }
+    #eq-canvas { display:block; width:100%; height:134px; }
+    .dash-mini {
+      display:flex; margin-top:11px; padding-top:10px;
+      border-top:1px solid rgba(255,255,255,.04);
+    }
+    .mini-s {
+      flex:1; text-align:center; font-family:'IBM Plex Mono',monospace;
+      font-size:10px; color:var(--green);
+    }
+    .mini-s:not(:last-child) { border-right:1px solid rgba(255,255,255,.05); }
+
+    .live-lbl { display:flex; align-items:center; gap:6px; margin-bottom:10px; }
+    .live-lbl span { font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:.22em; color:rgba(255,255,255,.28); text-transform:uppercase; }
+    .live-dot { width:6px; height:6px; border-radius:50%; background:var(--green); animation:plz 2s ease-in-out infinite; flex-shrink:0; }
+    @keyframes plz { 0%,100%{opacity:1;box-shadow:0 0 5px var(--green);}50%{opacity:.35;box-shadow:none;} }
+
+    .sig-rows { display:flex; flex-direction:column; gap:5px; }
+    .sig-row {
+      display:flex; align-items:center; gap:6px; padding:4px 0;
+      opacity:0; transform:translateX(10px);
+      transition: opacity .4s, transform .4s;
+    }
+    .sig-asset { font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:500; color:var(--white); width:38px; flex-shrink:0; }
+    .sig-badge { font-family:'IBM Plex Mono',monospace; font-size:9px; padding:2px 6px; border-radius:3px; flex-shrink:0; }
+    .bl { background:rgba(0,255,136,.14); color:var(--green); }
+    .bs { background:rgba(255,60,60,.14); color:#FF5050; }
+    .sig-bw { flex:1; height:3px; background:rgba(255,255,255,.08); border-radius:2px; overflow:hidden; }
+    .sig-b  { height:100%; border-radius:2px; width:0; transition:width 1s ease; }
+    .blong  { background:var(--green); }
+    .bshort { background:#FF5050; }
+    .sig-ret { font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--green); flex-shrink:0; width:42px; text-align:right; }
+    .sig-ret.neg { color:#FF5050; }
+
+    .dash-foot {
+      padding:9px 16px; border-top:1px solid rgba(255,255,255,.04);
+      background:rgba(0,0,0,.3); font-family:'IBM Plex Mono',monospace;
+      font-size:9px; color:rgba(255,255,255,.22); letter-spacing:.07em;
+    }
+
+    /* in-view triggers */
+    #s-product.in .sec-label,
+    #s-product.in .prod-hl,
+    #s-product.in .cap-list { opacity:1; transform:translateY(0); }
+    #s-product.in .dash-card { opacity:1; transform:perspective(1200px) rotateY(-6deg) rotateX(2deg) translateY(0); }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 3 — CTA
+    ═══════════════════════════════════════════════════════ */
+    #s-cta {
+      scroll-snap-align: start;
+      height: 100vh; position: relative; overflow: hidden;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center;
+    }
+    #cta-canvas { position:absolute; inset:0; width:100%; height:100%; opacity:.2; }
+    .cta-vig {
+      position:absolute; inset:0; z-index:1; pointer-events:none;
+      background:radial-gradient(ellipse 55% 65% at 50% 50%, transparent 0%, var(--bg) 100%);
+    }
+    .cta-inner {
+      position:relative; z-index:2;
+      max-width:700px; width:100%; padding:0 28px;
+      display:flex; flex-direction:column; align-items:center; gap:22px;
+    }
+    .cta-proof {
+      font-family:'IBM Plex Mono',monospace; font-size:11px;
+      color:rgba(255,255,255,.28); letter-spacing:.22em;
+      opacity:0; transition:opacity .6s;
+    }
+    .cta-hl {
+      font-size: clamp(30px, 4.5vw, 66px); font-weight:900; line-height:1.1;
+      font-family:'Syne','PingFang SC','Microsoft YaHei',sans-serif;
+      clip-path:inset(0 0 102% 0);
+      transition:clip-path .82s cubic-bezier(.16,1,.3,1) .1s;
+    }
+    .cta-sub {
+      font-size:15px; color:rgba(255,255,255,.42);
+      font-family:'Syne',sans-serif; letter-spacing:.02em;
+      opacity:0; transition:opacity .6s .3s;
+    }
+    .btn-mega {
+      height:58px; padding:0 54px; font-size:16px; font-weight:700;
+      background:var(--green); color:#000; border:none; border-radius:8px;
+      cursor:none; font-family:'Syne',sans-serif; letter-spacing:.03em;
+      display:inline-flex; align-items:center; justify-content:center;
+      text-decoration:none;
+      position:relative; overflow:hidden;
+      opacity:0;
+      box-shadow:0 0 0 rgba(0,255,136,0);
+      transition:opacity .6s .4s, box-shadow .28s, transform .2s;
+    }
+    .btn-mega:hover { box-shadow:0 0 60px rgba(0,255,136,.48); transform:translateY(-3px); }
+    .btn-mega:active { transform:scale(.96); }
+    .btn-mega::after {
+      content:''; position:absolute; inset:0;
+      background:linear-gradient(90deg,transparent,rgba(255,255,255,.24),transparent);
+      transform:translateX(-100%);
+    }
+    .btn-mega:hover::after { animation:shim .55s ease; }
+    .trust-micro {
+      display:flex; align-items:center; gap:14px;
+      font-size:12px; color:rgba(255,255,255,.28);
+      font-family:'Syne',sans-serif;
+      opacity:0; transition:opacity .6s .55s;
+    }
+    .tsep { color:rgba(255,255,255,.14); }
+
+    #s-cta.in .cta-proof { opacity:1; }
+    #s-cta.in .cta-hl    { clip-path:inset(0 0 0% 0); }
+    #s-cta.in .cta-sub   { opacity:1; }
+    #s-cta.in .btn-mega  { opacity:1; }
+    #s-cta.in .trust-micro { opacity:1; }
+
+    .cta-foot {
+      position:absolute; bottom:22px; left:0; right:0; z-index:3;
+      text-align:center; font-family:'IBM Plex Mono',monospace;
+      font-size:11px; color:rgba(255,255,255,.17); letter-spacing:.05em;
+    }
+    .cta-foot a { color:rgba(255,255,255,.17); text-decoration:none; transition:color .2s; }
+    .cta-foot a:hover { color:rgba(255,255,255,.38); }
+  </style>
+</head>
+<body>
+
+<!-- Cursor -->
+<div id="cur-dot"></div>
+<div id="cur-ring"></div>
+
+<!-- NAV -->
+<nav id="nav">
+  <div class="nav-logo">
+    <div class="nav-badge">EQ</div>
+    <div class="nav-brand">
+      <span class="nav-name">ESG Quant IO</span>
+      <span class="nav-sub">RESEARCH TO EXECUTION</span>
+    </div>
+  </div>
+  <div class="nav-links">
+    <a href="#">平台能力</a>
+    <a href="#">架构层</a>
+    <a href="#">交付路径</a>
+    <a href="/app/#/dashboard" class="nav-cta" id="nav-app-entry" data-app-entry="dashboard">进入控制台</a>
+  </div>
+</nav>
+
+<!-- ══════════════════════════════ HERO ══════════════════════════════ -->
+<section id="s-hero">
+  <canvas id="hero-canvas"></canvas>
+  <div class="hero-inner">
+    <span class="hero-micro">ESG · QUANT · AI · SINGAPORE</span>
+    <div class="hero-hl">
+      <span class="hl hl-1">研究。验证。</span>
+      <span class="hl hl-2">执行。</span>
+      <span class="hl hl-3">一套系统，全程闭环。</span>
+    </div>
+    <p class="hero-sub">机构级量化策略 · ESG原生 · AI驱动 · 为下一代系统性投资者而建</p>
+    <div class="hero-btns">
+      <a class="btn-pri" href="/app/#/dashboard" id="hero-app-entry" data-app-entry="dashboard">进入控制台 →</a>
+      <a class="btn-ghost" href="#s-product" id="hero-demo-link">查看演示</a>
+    </div>
+    <div class="hero-stats">
+      <div class="stat-item">
+        <span class="stat-num" id="s1">0</span>
+        <span class="stat-lbl">Active Strategies</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-num" id="s2">$0B</span>
+        <span class="stat-lbl">Backtested Volume</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-num" id="s3">0.00</span>
+        <span class="stat-lbl">Avg Strategy Score</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════ PRODUCT ══════════════════════════════ -->
+<section id="s-product">
+  <div class="prod-left">
+    <div class="sec-label">PLATFORM</div>
+    <div class="prod-hl">你的完整量化工作流<br>一个终端，全部搞定。</div>
+    <ul class="cap-list">
+      <li class="cap-item">
+        <span class="cap-icon">⚡</span>
+        <span class="cap-txt"><span class="cap-name">AI 信号生成</span> — 跨资产动量，自适应窗口</span>
+      </li>
+      <li class="cap-item">
+        <span class="cap-icon">🧬</span>
+        <span class="cap-txt"><span class="cap-name">ESG 因子引擎</span> — 多因子评分直接入模</span>
+      </li>
+      <li class="cap-item">
+        <span class="cap-icon">📊</span>
+        <span class="cap-txt"><span class="cap-name">回测中心</span> — 累计收益、夏普、CVaR 全输出</span>
+      </li>
+      <li class="cap-item">
+        <span class="cap-icon">🤖</span>
+        <span class="cap-txt"><span class="cap-name">RAG Copilot</span> — ESG 报告对话，研究链路打通</span>
+      </li>
+    </ul>
+  </div>
+  <div class="prod-right">
+    <div class="dash-card" id="dash-card">
+      <div class="dash-topbar">
+        <span class="dash-logo">ESG QUANT IO</span>
+        <div class="dash-dots">
+          <div class="dash-dot dot-r"></div>
+          <div class="dash-dot dot-y"></div>
+          <div class="dash-dot dot-g"></div>
+        </div>
+      </div>
+      <div class="dash-main">
+        <div class="dash-col-l">
+          <div class="col-lbl">PORTFOLIO EQUITY CURVE</div>
+          <canvas id="eq-canvas"></canvas>
+          <div class="dash-mini">
+            <div class="mini-s">+34.2% Annual</div>
+            <div class="mini-s">Sharpe 2.41</div>
+            <div class="mini-s">Max DD -8.4%</div>
+          </div>
+        </div>
+        <div class="dash-col-r">
+          <div class="live-lbl">
+            <div class="live-dot"></div>
+            <span>LIVE SIGNALS</span>
+          </div>
+          <div class="sig-rows">
+            <div class="sig-row" data-d="0">
+              <span class="sig-asset">NVDA</span>
+              <span class="sig-badge bl">LONG</span>
+              <div class="sig-bw"><div class="sig-b blong" data-w="82"></div></div>
+              <span class="sig-ret">+4.2%</span>
+            </div>
+            <div class="sig-row" data-d="1">
+              <span class="sig-asset">TSLA</span>
+              <span class="sig-badge bs">SHORT</span>
+              <div class="sig-bw"><div class="sig-b bshort" data-w="61"></div></div>
+              <span class="sig-ret neg">-2.8%</span>
+            </div>
+            <div class="sig-row" data-d="2">
+              <span class="sig-asset">AAPL</span>
+              <span class="sig-badge bl">LONG</span>
+              <div class="sig-bw"><div class="sig-b blong" data-w="74"></div></div>
+              <span class="sig-ret">+2.1%</span>
+            </div>
+            <div class="sig-row" data-d="3">
+              <span class="sig-asset">META</span>
+              <span class="sig-badge bl">LONG</span>
+              <div class="sig-bw"><div class="sig-b blong" data-w="90"></div></div>
+              <span class="sig-ret">+5.7%</span>
+            </div>
+            <div class="sig-row" data-d="4">
+              <span class="sig-asset">XOM</span>
+              <span class="sig-badge bs">SHORT</span>
+              <div class="sig-bw"><div class="sig-b bshort" data-w="45"></div></div>
+              <span class="sig-ret neg">-1.4%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="dash-foot">LAST UPDATE 14:32:07 SGT &nbsp;·&nbsp; 12 TRADES TODAY &nbsp;·&nbsp; P&amp;L +$18,440</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════ CTA ══════════════════════════════ -->
+<section id="s-cta">
+  <canvas id="cta-canvas"></canvas>
+  <div class="cta-vig"></div>
+  <div class="cta-inner">
+    <span class="cta-proof">— 已有 2,800+ 量化研究者在使用 —</span>
+    <h2 class="cta-hl">准备好交易得更聪明了吗？</h2>
+    <p class="cta-sub">免费开始。无需信用卡。ESG数据已内置。</p>
+    <a class="btn-mega" href="/app/#/dashboard" id="cta-free-start" data-app-entry="dashboard">立即免费开始 →</a>
+    <div class="trust-micro">
+      <span>✓ 永久免费层</span>
+      <span class="tsep">·</span>
+      <span>✓ 无需API密钥即可启动</span>
+      <span class="tsep">·</span>
+      <span>✓ ESG数据已内置</span>
+    </div>
+  </div>
+  <div class="cta-foot">
+    © 2026 ESG Quant IO · Singapore · <a href="#">Privacy</a> · <a href="#">Terms</a>
+  </div>
+</section>
+
+<script>
+/* ═══════════════════════════════════════════════════════
+   CURSOR
+═══════════════════════════════════════════════════════ */
+const dot  = document.getElementById('cur-dot');
+const ring = document.getElementById('cur-ring');
+let mx=0, my=0, rx=0, ry=0;
+
+document.addEventListener('mousemove', e => { mx=e.clientX; my=e.clientY; });
+(function curLoop() {
+  rx += (mx - rx) * 0.1;
+  ry += (my - ry) * 0.1;
+  dot.style.left  = mx + 'px'; dot.style.top  = my + 'px';
+  ring.style.left = rx + 'px'; ring.style.top = ry + 'px';
+  requestAnimationFrame(curLoop);
+})();
+document.querySelectorAll('a,button').forEach(el => {
+  el.addEventListener('mouseenter', () => document.body.classList.add('hov'));
+  el.addEventListener('mouseleave', () => document.body.classList.remove('hov'));
+});
+
+/* ═══════════════════════════════════════════════════════
+   NAV SCROLL
+═══════════════════════════════════════════════════════ */
+const navEl = document.getElementById('nav');
+window.addEventListener('scroll', () => {
+  navEl.classList.toggle('scrolled', (document.documentElement.scrollTop || window.scrollY) > 60);
+}, { passive: true });
+
+/* ═══════════════════════════════════════════════════════
+   CANDLE ENGINE
+═══════════════════════════════════════════════════════ */
+const CW=11, CG=5, CS=CW+CG;
+
+function mkC(last) {
+  const chg = (Math.random() - 0.46) * 3.8;
+  const o=last, c=last+chg;
+  const hi=Math.max(o,c)+Math.random()*1.9;
+  const lo=Math.min(o,c)-Math.random()*1.9;
+  return {o,c,hi,lo,g:c>=o};
+}
+
+function buildArr(W, seed) {
+  const arr=[]; let p=seed;
+  const n=Math.ceil(W/CS)+6;
+  for (let i=0;i<n;i++) { const c=mkC(p); arr.push(c); p=c.c; }
+  return arr;
+}
+
+function drawC(ctx, W, H, arr, off) {
+  ctx.clearRect(0,0,W,H);
+  let mn=Infinity, mx=-Infinity;
+  arr.forEach(c=>{ if(c.lo<mn)mn=c.lo; if(c.hi>mx)mx=c.hi; });
+  const rng=mx-mn||1, pad=H*.14, sc=(H-pad*2)/rng;
+  const toY=p=>H-pad-(p-mn)*sc;
+
+  arr.forEach((c,i)=>{
+    const x = i*CS - (off%CS);
+    if (x < -CS || x > W+CS) return;
+    const cx = x + CW/2;
+    const y1 = toY(Math.max(c.o,c.c));
+    const y2 = toY(Math.min(c.o,c.c));
+    const bh = Math.max(y2-y1,1);
+    const col  = c.g ? '#00FF88' : '#FF3C3C';
+    const glow = c.g ? 'rgba(0,255,136,.6)' : 'rgba(255,60,60,.5)';
+    ctx.save();
+    ctx.shadowColor=glow; ctx.shadowBlur=9;
+    ctx.fillStyle=col;
+    ctx.fillRect(x,y1,CW,bh);
+    ctx.strokeStyle=col; ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(cx,toY(c.hi)); ctx.lineTo(cx,y1);
+    ctx.moveTo(cx,y1+bh);    ctx.lineTo(cx,toY(c.lo));
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
+function mkState(canvas, seed) {
+  const W=canvas.offsetWidth||canvas.width;
+  const H=canvas.offsetHeight||canvas.height;
+  canvas.width=W; canvas.height=H;
+  return {canvas, ctx:canvas.getContext('2d'), W, H, arr:buildArr(W,seed), off:0};
+}
+
+const hCanvas = document.getElementById('hero-canvas');
+const cCanvas = document.getElementById('cta-canvas');
+let hS, cS;
+
+function resizeCanvases() {
+  hS = mkState(hCanvas, 150);
+  cS = mkState(cCanvas, 200);
+}
+window.addEventListener('resize', resizeCanvases, {passive:true});
+resizeCanvases();
+
+(function candleLoop() {
+  [hS, cS].forEach(st => {
+    if (!st) return;
+    st.off += 0.42;
+    if (st.off >= CS) {
+      st.off -= CS;
+      st.arr.shift();
+      st.arr.push(mkC(st.arr[st.arr.length-1].c));
+    }
+    drawC(st.ctx, st.W, st.H, st.arr, st.off);
+  });
+  requestAnimationFrame(candleLoop);
+})();
+
+/* ═══════════════════════════════════════════════════════
+   HERO COUNTERS
+═══════════════════════════════════════════════════════ */
+function counter(el, target, fmt, dur) {
+  const t0 = performance.now();
+  (function tick(now) {
+    const p = Math.min((now-t0)/dur, 1);
+    const e = 1 - Math.pow(1-p, 3);
+    el.textContent = fmt(e * target);
+    if (p < 1) requestAnimationFrame(tick);
+  })(performance.now());
+}
+
+setTimeout(()=>{
+  counter(document.getElementById('s1'), 2847,
+    v => Math.floor(v).toLocaleString(), 1600);
+  counter(document.getElementById('s2'), 4.2,
+    v => '$' + v.toFixed(1) + 'B+', 1600);
+  counter(document.getElementById('s3'), 2.41,
+    v => 'Sharpe ' + v.toFixed(2), 1600);
+}, 1300);
+
+/* ═══════════════════════════════════════════════════════
+   EQUITY CURVE (dashboard)
+═══════════════════════════════════════════════════════ */
+// Normalized curve points (0 = bottom, 1 = top of chart range)
+const EQ_PTS = [0,.03,.08,.05,.12,.17,.14,.21,.27,.24,.30,.37,.40];
+
+function drawEq(canvas, progress) {
+  const w = canvas.offsetWidth;
+  const h = canvas.offsetHeight;
+  if (!w || !h) return;
+  canvas.width  = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  const LM=42, RM=8, TM=10, BM=18;
+  const cw=w-LM-RM, ch=h-TM-BM;
+
+  // Grid lines + Y labels
+  const yLabels=['$1.4M','$1.3M','$1.2M','$1.1M','$1.0M'];
+  ctx.font='8px IBM Plex Mono';
+  ctx.fillStyle='rgba(255,255,255,.22)';
+  ctx.textAlign='right';
+  yLabels.forEach((lbl,i)=>{
+    const y = TM + ch*(i/4);
+    ctx.fillText(lbl, LM-6, y+3);
+    ctx.strokeStyle='rgba(255,255,255,.04)';
+    ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(LM,y); ctx.lineTo(LM+cw,y); ctx.stroke();
+  });
+
+  // X labels
+  const xLabels=['Jan','Mar','May','Jul','Sep','Nov','Dec'];
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(255,255,255,.18)';
+  xLabels.forEach((lbl,i)=>{
+    const x = LM + cw*(i/6);
+    ctx.fillText(lbl, x, h-2);
+  });
+
+  // Visible portion
+  const total = EQ_PTS.length - 1;
+  const visEnd = progress * total;
+  const visPts = Math.floor(visEnd);
+  if (visPts < 1) return;
+
+  const px = i => LM + cw*(i/total);
+  const py = i => TM + ch - ch*EQ_PTS[i] - 2;
+
+  // Partial last point via lerp
+  const pts = [];
+  for (let i=0; i<=visPts && i<EQ_PTS.length; i++) pts.push({x:px(i),y:py(i)});
+  if (visPts < total) {
+    const frac = visEnd - visPts;
+    const ax=px(visPts), ay=py(visPts);
+    const bx=px(visPts+1), by=py(visPts+1);
+    pts.push({x:ax+(bx-ax)*frac, y:ay+(by-ay)*frac});
+  }
+  if (pts.length < 2) return;
+
+  // Fill
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, TM+ch);
+  ctx.lineTo(pts[0].x, pts[0].y);
+  for (let i=1;i<pts.length;i++) {
+    const prev=pts[i-1], cur=pts[i];
+    const cpx=(prev.x+cur.x)/2;
+    ctx.bezierCurveTo(cpx,prev.y,cpx,cur.y,cur.x,cur.y);
+  }
+  const last=pts[pts.length-1];
+  ctx.lineTo(last.x, TM+ch);
+  ctx.closePath();
+  const grad=ctx.createLinearGradient(0,TM,0,TM+ch);
+  grad.addColorStop(0,'rgba(0,255,136,.13)');
+  grad.addColorStop(1,'rgba(0,255,136,0)');
+  ctx.fillStyle=grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i=1;i<pts.length;i++) {
+    const prev=pts[i-1], cur=pts[i];
+    const cpx=(prev.x+cur.x)/2;
+    ctx.bezierCurveTo(cpx,prev.y,cpx,cur.y,cur.x,cur.y);
+  }
+  ctx.strokeStyle='#00FF88';
+  ctx.lineWidth=1.8;
+  ctx.shadowColor='rgba(0,255,136,.55)';
+  ctx.shadowBlur=7;
+  ctx.stroke();
+
+  // Endpoint
+  ctx.shadowBlur=0;
+  ctx.beginPath();
+  ctx.arc(last.x,last.y,3,0,Math.PI*2);
+  ctx.fillStyle='#00FF88';
+  ctx.shadowColor='#00FF88'; ctx.shadowBlur=10;
+  ctx.fill();
+}
+
+/* ═══════════════════════════════════════════════════════
+   INTERSECTION OBSERVER
+═══════════════════════════════════════════════════════ */
+function animateProduct() {
+  document.getElementById('s-product').classList.add('in');
+
+  // Equity curve animation
+  const eqC = document.getElementById('eq-canvas');
+  const t0 = performance.now();
+  const dur = 2100;
+  (function loop(now) {
+    const p = Math.min((now-t0)/dur, 1);
+    drawEq(eqC, p);
+    if (p < 1) requestAnimationFrame(loop);
+  })(performance.now());
+
+  // Signal rows
+  document.querySelectorAll('.sig-row').forEach((row,i) => {
+    setTimeout(()=>{
+      row.style.opacity='1';
+      row.style.transform='translateX(0)';
+      const bar = row.querySelector('.sig-b');
+      if (bar) { bar.style.width='0'; setTimeout(()=>{ bar.style.width=bar.dataset.w+'%'; },80); }
+    }, 350 + i*110);
+  });
+}
+
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (!e.isIntersecting) return;
+    if (e.target.id === 's-product') { animateProduct(); io.unobserve(e.target); }
+    if (e.target.id === 's-cta')     { e.target.classList.add('in'); io.unobserve(e.target); }
+  });
+}, { threshold: 0.15 });
+
+io.observe(document.getElementById('s-product'));
+io.observe(document.getElementById('s-cta'));
+
+// Pre-size equity canvas
+const eqEl = document.getElementById('eq-canvas');
+eqEl.style.width='100%';
+eqEl.style.height='134px';
+drawEq(eqEl, 0);
+
+const DASHBOARD_ENTRY = '/app/#/dashboard';
+const DASHBOARD_OVERVIEW_ENDPOINT = '/api/v1/quant/platform/overview';
+
+function warmDashboardOverview() {
+  if (warmDashboardOverview.done || !window.fetch) return;
+  warmDashboardOverview.done = true;
+  fetch(DASHBOARD_OVERVIEW_ENDPOINT, {
+    headers: { 'Accept': 'application/json' },
+    credentials: 'same-origin',
+  }).catch(() => null);
+}
+
+document.querySelectorAll('[data-app-entry]').forEach((el) => {
+  el.setAttribute('href', DASHBOARD_ENTRY);
+  el.addEventListener('mouseenter', warmDashboardOverview, { once: true });
+  el.addEventListener('focus', warmDashboardOverview, { once: true });
+});
+window.addEventListener('load', warmDashboardOverview, { once: true });
+</script>
+</body>
+</html>

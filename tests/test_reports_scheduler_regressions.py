@@ -1,7 +1,11 @@
 from fastapi.testclient import TestClient
 
 import gateway.main as main_module
+from gateway.config import settings
 from gateway.scheduler.report_scheduler import PushRule, ReportScheduler
+
+
+ADMIN_HEADERS = {"x-api-key": settings.ADMIN_API_KEY}
 
 
 class _FakeResult:
@@ -70,6 +74,7 @@ def test_report_statistics_route_is_not_shadowed(monkeypatch):
 
     response = client.get(
         "/admin/reports/statistics",
+        headers=ADMIN_HEADERS,
         params={"period": "2026-04-01:2026-04-10", "group_by": "report_type"},
     )
 

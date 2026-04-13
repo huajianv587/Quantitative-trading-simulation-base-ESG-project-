@@ -12,7 +12,9 @@ def test_root_serves_product_site():
 
     assert response.status_code == 200
     assert "ESG Quant IO" in response.text
-    assert "Industrial ESG Quant Platform" in response.text
+    assert '/app/#/dashboard' in response.text
+    assert 'data-app-entry="dashboard"' in response.text
+    assert '/api/v1/quant/platform/overview' in response.text
 
 
 def test_app_and_blueprint_entrypoints_exist():
