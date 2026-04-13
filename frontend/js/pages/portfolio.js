@@ -1,16 +1,35 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
+import { getLang, onLangChange, translateLoose } from '../i18n.js?v=8';
 
 let _step     = 1;
 let _result   = null;
 let _profile  = { riskScore: 65, horizon: '5-7y', esgPriority: 'High', maxDD: -18 };
 let _build    = { expectedReturn: 0, vol: 0, sharpe: 0, holdings: [] };
+let _currentContainer = null;
+let _langCleanup = null;
+
+const localizeSector = (value) => translateLoose(value || '');
+const lt = (en, zh) => getLang() === 'zh' ? zh : en;
 
 export function render(container) {
+  _currentContainer = container;
   container.innerHTML = buildShell();
   bindEvents(container);
   loadPrefill(container);
   goStep(container, 1);
+  _langCleanup ||= onLangChange(() => {
+    if (!_currentContainer?.isConnected) return;
+    goStep(_currentContainer, _step);
+    updateSummary(_currentContainer);
+    if (_step === 4 && _result?.holdings?.length) showSuggestions(_currentContainer);
+  });
+}
+
+export function destroy() {
+  _currentContainer = null;
+  _langCleanup?.();
+  _langCleanup = null;
 }
 
 function loadPrefill(container) {
@@ -33,8 +52,8 @@ function buildShell() {
   return `
   <div class="page-header">
     <div>
-      <div class="page-header__title">Portfolio Optimizer</div>
-      <div class="page-header__sub">Institutional Portfolio Construction · Mean-Variance · ESG-Constrained · 5-Step Workflow</div>
+      <div class="page-header__title">${translateLoose('Portfolio Optimizer')}</div>
+      <div class="page-header__sub">${translateLoose('Institutional Portfolio Construction · Mean-Variance · ESG-Constrained · 5-Step Workflow')}</div>
     </div>
   </div>
 
@@ -43,7 +62,7 @@ function buildShell() {
       <div class="wizard-step-item" id="wizard-step-${n}">
         <button class="wizard-step-btn" data-wizard="${n}">
           <div class="wizard-step-num">${n}</div>
-          <div class="wizard-step-label">${label}</div>
+          <div class="wizard-step-label">${translateLoose(label)}</div>
         </button>
       </div>
       ${n < 5 ? `<div class="wizard-connector" id="wc-${n}"></div>` : ''}
@@ -53,23 +72,23 @@ function buildShell() {
   <div style="display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:start">
     <div class="portfolio-summary" id="po-summary">
       <div class="portfolio-summary-header">
-        <div class="card-title">CURRENT BUILD</div>
+        <div class="card-title">${translateLoose('CURRENT BUILD')}</div>
       </div>
       <div class="portfolio-summary-body">
         ${[['Expected Return','ps-ret','pos'],['Volatility','ps-vol',''],['Sharpe Estimate','ps-sharpe','acc'],['Max DD Est.','ps-dd','neg'],['Diversification','ps-div','']].map(([l,id,c]) => `
           <div class="ps-metric">
-            <span class="ps-label">${l}</span>
+            <span class="ps-label">${translateLoose(l)}</span>
             <span class="ps-value ${c}" id="${id}">—</span>
           </div>`).join('')}
         <div style="margin-top:10px;border-top:1px solid var(--border-subtle);padding-top:10px">
-          <div style="font-family:var(--f-display);font-size:8px;letter-spacing:0.2em;color:var(--text-dim);margin-bottom:8px">TOP HOLDINGS</div>
+          <div style="font-family:var(--f-display);font-size:8px;letter-spacing:0.2em;color:var(--text-dim);margin-bottom:8px">${translateLoose('TOP HOLDINGS')}</div>
           <div id="ps-holdings" style="display:flex;flex-direction:column;gap:6px">
-            <div class="text-muted text-sm">Not built yet</div>
+            <div class="text-muted text-sm">${translateLoose('Not built yet')}</div>
           </div>
         </div>
         <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">
-          <button class="btn btn-ghost btn-sm" id="btn-clear-portfolio">Clear Portfolio</button>
-          <button class="btn btn-primary btn-sm" id="btn-to-execution" disabled>→ Send to Execution</button>
+          <button class="btn btn-ghost btn-sm" id="btn-clear-portfolio">${translateLoose('Clear Portfolio')}</button>
+          <button class="btn btn-primary btn-sm" id="btn-to-execution" disabled>${translateLoose('→ Send to Execution')}</button>
         </div>
       </div>
     </div>
@@ -104,58 +123,58 @@ function goStep(container, n) {
 /* ── Step 1: Risk Profile ── */
 function buildStep1() {
   return `<div class="card">
-    <div class="card-header"><span class="card-title">Step 1 — Investor Risk Profile</span></div>
+    <div class="card-header"><span class="card-title">${translateLoose('Step 1 — Investor Risk Profile')}</span></div>
     <div class="card-body" style="display:flex;flex-direction:column;gap:20px">
       <div class="form-group">
-        <label class="form-label">If your portfolio dropped 20% in a month, you would:</label>
+        <label class="form-label">${translateLoose('If your portfolio dropped 20% in a month, you would:')}</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${['Sell everything','Sell some','Hold position','Buy more'].map((o,i) =>
-            `<button class="filter-chip${i===2?' active':''}" data-q1="${i}">${o}</button>`).join('')}
+            `<button class="filter-chip${i===2?' active':''}" data-q1="${i}">${translateLoose(o)}</button>`).join('')}
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Investment time horizon</label>
+        <label class="form-label">${translateLoose('Investment time horizon')}</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${['< 1 year','1–3 years','3–10 years','10+ years'].map((o,i) =>
-            `<button class="filter-chip${i===2?' active':''}" data-q2="${i}">${o}</button>`).join('')}
+            `<button class="filter-chip${i===2?' active':''}" data-q2="${i}">${translateLoose(o)}</button>`).join('')}
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Expected annual return: <span id="q3-val" style="color:var(--green);font-family:var(--f-display)">15%</span></label>
+        <label class="form-label">${translateLoose('Expected annual return:')} <span id="q3-val" style="color:var(--green);font-family:var(--f-display)">15%</span></label>
         <input type="range" id="q3-range" min="5" max="50" value="15" style="width:100%;accent-color:var(--green);margin-top:6px">
       </div>
       <div class="form-group">
-        <label class="form-label">Max acceptable drawdown: <span id="q4-val" style="color:var(--red);font-family:var(--f-display)">-20%</span></label>
+        <label class="form-label">${translateLoose('Max acceptable drawdown:')} <span id="q4-val" style="color:var(--red);font-family:var(--f-display)">-20%</span></label>
         <input type="range" id="q4-range" min="5" max="50" value="20" style="width:100%;accent-color:var(--red);margin-top:6px">
       </div>
       <div class="form-group">
-        <label class="form-label">ESG / Sustainability importance</label>
+        <label class="form-label">${translateLoose('ESG / Sustainability importance')}</label>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           ${['None','Low','Medium','High','Critical'].map((o,i) =>
-            `<button class="filter-chip${i===3?' active':''}" data-q5="${i}">${o}</button>`).join('')}
+            `<button class="filter-chip${i===3?' active':''}" data-q5="${i}">${translateLoose(o)}</button>`).join('')}
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Trading style</label>
+        <label class="form-label">${translateLoose('Trading style')}</label>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
           ${[['📊','Index/Passive'],['⚡','Momentum'],['💎','Value'],['🌱','ESG-First'],['🤖','Quant/Systematic'],['📈','Growth']].map(([icon,label],i) =>
             `<button class="filter-chip${i===4?' active':''}" data-q6="${i}" style="text-align:left;gap:6px">
-              <span style="font-size:14px">${icon}</span>${label}
+              <span style="font-size:14px">${icon}</span>${translateLoose(label)}
             </button>`).join('')}
         </div>
       </div>
       <div style="padding:18px;background:rgba(0,255,136,0.04);border:1px solid rgba(0,255,136,0.18);border-radius:12px">
-        <div style="font-family:var(--f-display);font-size:16px;font-weight:800;color:var(--green);margin-bottom:10px">MODERATE GROWTH INVESTOR</div>
+        <div style="font-family:var(--f-display);font-size:16px;font-weight:800;color:var(--green);margin-bottom:10px">${translateLoose('MODERATE GROWTH INVESTOR')}</div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
           ${[['Risk Tolerance','67/100'],['Max DD Tolerance','-18%'],['Investment Horizon','5–7 years'],['Equity Allocation','70%'],['ESG Priority','High'],['Strategy Fit','Quant/ESG']].map(([k,v]) => `
             <div>
-              <div class="text-muted text-sm">${k}</div>
-              <div style="font-family:var(--f-display);font-size:12px;font-weight:700;color:var(--text-primary);margin-top:3px">${v}</div>
+              <div class="text-muted text-sm">${translateLoose(k)}</div>
+              <div style="font-family:var(--f-display);font-size:12px;font-weight:700;color:var(--text-primary);margin-top:3px">${translateLoose(v)}</div>
             </div>`).join('')}
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end">
-        <button class="btn btn-primary" id="s1-next">Accept & Continue →</button>
+        <button class="btn btn-primary" id="s1-next">${translateLoose('Accept & Continue →')}</button>
       </div>
     </div>
   </div>`;
@@ -188,33 +207,33 @@ function buildStep2() {
     { name:'Custom Watchlist', stocks:8, esg:72, pe:23 },
   ];
   return `<div class="card">
-    <div class="card-header"><span class="card-title">Step 2 — Investment Universe</span></div>
+    <div class="card-header"><span class="card-title">${translateLoose('Step 2 — Investment Universe')}</span></div>
     <div class="card-body" style="display:flex;flex-direction:column;gap:20px">
       <div>
-        <div class="section-title" style="margin-bottom:12px">Preset Universes</div>
+        <div class="section-title" style="margin-bottom:12px">${translateLoose('Preset Universes')}</div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
           ${universes.map((u,i) => `
             <div class="model-catalog-card${i===1?' active':''}" data-universe="${u.name}" style="padding:14px;cursor:pointer">
-              <div style="font-family:var(--f-display);font-size:10px;font-weight:700;color:var(--text-primary);margin-bottom:8px">${u.name}</div>
+              <div style="font-family:var(--f-display);font-size:10px;font-weight:700;color:var(--text-primary);margin-bottom:8px">${translateLoose(u.name)}</div>
               <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px">
-                <div><div style="font-family:var(--f-display);font-size:12px;font-weight:700">${u.stocks}</div><div class="text-muted text-sm">stocks</div></div>
-                <div><div style="font-family:var(--f-display);font-size:12px;font-weight:700;color:var(--green)">${u.esg}</div><div class="text-muted text-sm">ESG avg</div></div>
+                <div><div style="font-family:var(--f-display);font-size:12px;font-weight:700">${u.stocks}</div><div class="text-muted text-sm">${translateLoose('stocks')}</div></div>
+                <div><div style="font-family:var(--f-display);font-size:12px;font-weight:700;color:var(--green)">${u.esg}</div><div class="text-muted text-sm">${translateLoose('ESG avg')}</div></div>
                 <div><div style="font-family:var(--f-display);font-size:12px;font-weight:700">${u.pe}x</div><div class="text-muted text-sm">P/E</div></div>
               </div>
             </div>`).join('')}
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Custom Universe Override</label>
-        <input class="form-input" id="po-universe" placeholder="AAPL, MSFT, NVDA… (blank = use preset)">
+        <label class="form-label">${translateLoose('Custom Universe Override')}</label>
+        <input class="form-input" id="po-universe" placeholder="${translateLoose('AAPL, MSFT, NVDA… (blank = use preset)', 'placeholder')}">
       </div>
       <div>
-        <div class="section-title" style="margin-bottom:12px">Asset Class Allocation</div>
+        <div class="section-title" style="margin-bottom:12px">${translateLoose('Asset Class Allocation')}</div>
         <div style="display:grid;grid-template-columns:1fr 180px;gap:20px;align-items:start">
           <div style="display:flex;flex-direction:column;gap:10px">
             ${[['US Equities',60,'var(--green)'],['International',20,'var(--cyan)'],['Fixed Income',10,'var(--purple)'],['Commodities',5,'var(--amber)'],['Alternatives',5,'var(--red)']].map(([n,v,c]) => `
               <div style="display:flex;align-items:center;gap:12px">
-                <span style="font-family:var(--f-mono);font-size:11px;color:var(--text-secondary);width:110px">${n}</span>
+                <span style="font-family:var(--f-mono);font-size:11px;color:var(--text-secondary);width:110px">${translateLoose(n)}</span>
                 <input type="range" min="0" max="100" value="${v}" style="flex:1;accent-color:${c}">
                 <span style="font-family:var(--f-display);font-size:12px;font-weight:700;color:${c};width:36px">${v}%</span>
               </div>`).join('')}
@@ -223,8 +242,8 @@ function buildStep2() {
         </div>
       </div>
       <div style="display:flex;justify-content:space-between">
-        <button class="btn btn-ghost" id="s2-back">← Back</button>
-        <button class="btn btn-primary" id="s2-next">Next: Constraints →</button>
+        <button class="btn btn-ghost" id="s2-back">${translateLoose('← Back')}</button>
+        <button class="btn btn-primary" id="s2-next">${translateLoose('Next: Constraints →')}</button>
       </div>
     </div>
   </div>`;
@@ -268,51 +287,51 @@ function drawAllocPie(container) {
 /* ── Step 3: Constraints ── */
 function buildStep3() {
   return `<div class="card">
-    <div class="card-header"><span class="card-title">Step 3 — Portfolio Constraints & Risk Parameters</span></div>
+    <div class="card-header"><span class="card-title">${translateLoose('Step 3 — Portfolio Constraints & Risk Parameters')}</span></div>
     <div class="card-body" style="display:flex;flex-direction:column;gap:20px">
       <div>
-        <div class="section-title" style="margin-bottom:12px">Position Constraints</div>
+        <div class="section-title" style="margin-bottom:12px">${translateLoose('Position Constraints')}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div class="form-group">
-            <label class="form-label">Max position weight: <span id="max-pos-val" style="color:var(--green)">10%</span></label>
+            <label class="form-label">${lt('Max position weight:', '最大持仓权重：')} <span id="max-pos-val" style="color:var(--green)">10%</span></label>
             <input type="range" id="max-pos" min="1" max="30" value="10" style="width:100%;accent-color:var(--green)">
           </div>
           <div class="form-group">
-            <label class="form-label">Max sector concentration: <span id="max-sec-val" style="color:var(--amber)">30%</span></label>
+            <label class="form-label">${lt('Max sector concentration:', '最大行业集中度：')} <span id="max-sec-val" style="color:var(--amber)">30%</span></label>
             <input type="range" id="max-sec" min="10" max="60" value="30" style="width:100%;accent-color:var(--amber)">
           </div>
         </div>
       </div>
       <div>
-        <div class="section-title" style="margin-bottom:12px">Optimization Method</div>
+        <div class="section-title" style="margin-bottom:12px">${translateLoose('Optimization Method')}</div>
         <div style="display:flex;flex-direction:column;gap:8px">
           ${[['Maximum Diversification','Minimize correlation between holdings'],['Risk Parity','Equal risk contribution — Recommended'],['Minimum Variance','Lowest possible volatility'],['Maximum Sharpe','Best risk-adjusted return'],['Equal Weight','Simple 1/N allocation']].map(([l,d],i) => `
             <label style="display:flex;align-items:flex-start;gap:12px;padding:10px 14px;border-radius:8px;background:${i===1?'rgba(0,255,136,0.05)':'rgba(0,0,0,0.18)'};border:1px solid ${i===1?'rgba(0,255,136,0.2)':'var(--border-subtle)'};cursor:pointer">
               <input type="radio" name="opt-method" value="${i}" ${i===1?'checked':''} style="margin-top:3px;accent-color:var(--green)">
               <div>
-                <div style="font-family:var(--f-display);font-size:10px;font-weight:600;color:var(--text-primary)">${l}</div>
-                <div style="font-family:var(--f-mono);font-size:10px;color:var(--text-dim);margin-top:2px">${d}</div>
+                <div style="font-family:var(--f-display);font-size:10px;font-weight:600;color:var(--text-primary)">${translateLoose(l)}</div>
+                <div style="font-family:var(--f-mono);font-size:10px;color:var(--text-dim);margin-top:2px">${translateLoose(d)}</div>
               </div>
             </label>`).join('')}
         </div>
       </div>
       <div>
-        <div class="section-title" style="margin-bottom:12px">ESG Constraints</div>
+        <div class="section-title" style="margin-bottom:12px">${translateLoose('ESG Constraints')}</div>
         <div class="form-group">
-          <label class="form-label">Min portfolio ESG score: <span id="min-esg-val" style="color:var(--green)">60</span></label>
+          <label class="form-label">${lt('Min portfolio ESG score:', '组合最低 ESG 评分：')} <span id="min-esg-val" style="color:var(--green)">60</span></label>
           <input type="range" id="min-esg" min="0" max="90" value="60" style="width:100%;accent-color:var(--green)">
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
           ${['Weapons','Tobacco','Gambling','Fossil Fuels','Private Prisons'].map(cat => `
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
               <input type="checkbox" checked style="accent-color:var(--green)">
-              <span style="font-family:var(--f-mono);font-size:11px;color:var(--text-secondary)">Exclude ${cat}</span>
+              <span style="font-family:var(--f-mono);font-size:11px;color:var(--text-secondary)">${translateLoose(`Exclude ${cat}`)}</span>
             </label>`).join('')}
         </div>
       </div>
       <div style="display:flex;justify-content:space-between">
-        <button class="btn btn-ghost" id="s3-back">← Back</button>
-        <button class="btn btn-primary" id="s3-next">Next: Optimize →</button>
+        <button class="btn btn-ghost" id="s3-back">${translateLoose('← Back')}</button>
+        <button class="btn btn-primary" id="s3-next">${translateLoose('Next: Optimize →')}</button>
       </div>
     </div>
   </div>`;
@@ -331,31 +350,31 @@ function buildStep4() {
   return `<div style="display:flex;flex-direction:column;gap:16px">
     <div class="card">
       <div class="card-header">
-        <span class="card-title">Step 4 — Efficient Frontier Analysis</span>
-        <button class="btn btn-primary btn-sm" id="btn-optimize">⚡ Optimize Now</button>
+        <span class="card-title">${translateLoose('Step 4 — Efficient Frontier Analysis')}</span>
+        <button class="btn btn-primary btn-sm" id="btn-optimize">${translateLoose('⚡ Optimize Now')}</button>
       </div>
       <div class="card-body">
         <div style="display:grid;grid-template-columns:1fr 280px;gap:20px;align-items:start">
           <div>
-            <div style="font-family:var(--f-mono);font-size:11px;color:var(--text-dim);margin-bottom:8px">Efficient Frontier · Risk/Return Tradeoff</div>
+            <div style="font-family:var(--f-mono);font-size:11px;color:var(--text-dim);margin-bottom:8px">${translateLoose('Efficient Frontier · Risk/Return Tradeoff')}</div>
             <canvas id="frontier-canvas" height="300" style="width:100%;border-radius:8px"></canvas>
           </div>
           <div>
-            <div class="section-title" style="margin-bottom:12px">Suggested Portfolios</div>
+            <div class="section-title" style="margin-bottom:12px">${translateLoose('Suggested Portfolios')}</div>
             <div id="port-suggestions" style="display:flex;flex-direction:column;gap:10px">
-              <div class="text-muted text-sm">Click Optimize to see suggestions</div>
+              <div class="text-muted text-sm">${translateLoose('Click Optimize to see suggestions')}</div>
             </div>
           </div>
         </div>
       </div>
     </div>
     <div class="card" id="opt-detail" style="display:none">
-      <div class="card-header"><span class="card-title">Selected Portfolio — Holdings</span></div>
+      <div class="card-header"><span class="card-title">${translateLoose('Selected Portfolio — Holdings')}</span></div>
       <div class="card-body" id="opt-holdings-table"></div>
     </div>
     <div style="display:flex;justify-content:space-between">
-      <button class="btn btn-ghost" id="s4-back">← Back</button>
-      <button class="btn btn-primary" id="s4-next">Review Portfolio →</button>
+      <button class="btn btn-ghost" id="s4-back">${translateLoose('← Back')}</button>
+      <button class="btn btn-primary" id="s4-next">${translateLoose('Review Portfolio →')}</button>
     </div>
   </div>`;
 }
@@ -420,13 +439,13 @@ function drawFrontier(canvas, selected, dpr) {
   ctx.beginPath(); ctx.arc(px(ms.vol),py(ms.ret),7*dpr,0,Math.PI*2);
   ctx.fillStyle='#FFD700'; ctx.fill();
   ctx.fillStyle='#fff'; ctx.font=`bold ${9*dpr}px Orbitron`; ctx.textAlign='left';
-  ctx.fillText('★ Max Sharpe', px(ms.vol)+10*dpr, py(ms.ret)+3*dpr);
+  ctx.fillText(translateLoose('★ Max Sharpe'), px(ms.vol)+10*dpr, py(ms.ret)+3*dpr);
   /* Min Var ◆ */
   const mv = pts[3];
   ctx.beginPath(); ctx.arc(px(mv.vol),py(mv.ret),5*dpr,0,Math.PI*2);
   ctx.fillStyle='#00E5FF'; ctx.fill();
   ctx.fillStyle='rgba(0,229,255,0.7)'; ctx.font=`${8*dpr}px IBM Plex Mono`; ctx.textAlign='left';
-  ctx.fillText('◆ Min Var', px(mv.vol)+8*dpr, py(mv.ret)+3*dpr);
+  ctx.fillText(translateLoose('◆ Min Var'), px(mv.vol)+8*dpr, py(mv.ret)+3*dpr);
   /* Current portfolio dot */
   const sp = selected || ms;
   ctx.beginPath(); ctx.arc(px(sp.vol||ms.vol),py(sp.ret||ms.ret),8*dpr,0,Math.PI*2);
@@ -437,7 +456,7 @@ function drawFrontier(canvas, selected, dpr) {
 async function runOptimize(container) {
   const btn = container.querySelector('#btn-optimize');
   if (!btn) return;
-  btn.disabled = true; btn.textContent = 'Optimizing…';
+  btn.disabled = true; btn.textContent = translateLoose('Optimizing…');
   const universeInput = container.querySelector('#po-universe')?.value || container._prefillUniverse || '';
   const universe = universeInput ? universeInput.split(/[,\s]+/).filter(Boolean).map(s=>s.toUpperCase()) : [];
   try {
@@ -448,12 +467,12 @@ async function runOptimize(container) {
     _result = { holdings:[{symbol:'AAPL',weight:0.18,sector:'Technology',esg_score:78},{symbol:'MSFT',weight:0.15,sector:'Technology',esg_score:82},{symbol:'NEE',weight:0.14,sector:'Utilities',esg_score:91},{symbol:'NVDA',weight:0.12,sector:'Technology',esg_score:71},{symbol:'TSLA',weight:0.10,sector:'Consumer Disc',esg_score:68}], expected_return:0.226, expected_volatility:0.123, sharpe_estimate:1.84 };
     _build = { expectedReturn:0.226, vol:0.123, sharpe:1.84, holdings:_result.holdings };
   } finally {
-    btn.disabled = false; btn.textContent = '⚡ Optimize Now';
+    btn.disabled = false; btn.textContent = translateLoose('⚡ Optimize Now');
     updateSummary(container);
     showSuggestions(container);
     const canvas = container.querySelector('#frontier-canvas');
     if (canvas) drawFrontier(canvas, null, window.devicePixelRatio||1);
-    toast.success('Optimization complete', `Sharpe: ${_build.sharpe.toFixed(2)}`);
+    toast.success(translateLoose('Optimization complete'), translateLoose(`Sharpe: ${_build.sharpe.toFixed(2)}`));
   }
 }
 
@@ -467,14 +486,14 @@ function showSuggestions(container) {
   ];
   el.innerHTML = sug.map(s => `
     <div style="padding:14px;border-radius:10px;border:1px solid ${s.pri?'rgba(0,255,136,0.3)':'var(--border-subtle)'};background:${s.pri?'rgba(0,255,136,0.05)':'var(--bg-raised)'}">
-      <div style="font-family:var(--f-display);font-size:10px;font-weight:700;color:${s.pri?'var(--green)':'var(--text-primary)'};margin-bottom:8px">${s.label}</div>
+      <div style="font-family:var(--f-display);font-size:10px;font-weight:700;color:${s.pri?'var(--green)':'var(--text-primary)'};margin-bottom:8px">${translateLoose(s.label)}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px">
         ${[['Return',s.ret+'%'],['Sharpe',s.sharpe],['Vol',s.vol+'%'],['MaxDD','-'+s.dd+'%']].map(([k,v]) =>
-          `<div style="font-size:10px"><span class="text-muted">${k}: </span><span style="font-family:var(--f-display);font-size:11px;font-weight:700">${v}</span></div>`
+          `<div style="font-size:10px"><span class="text-muted">${translateLoose(`${k}:`)} </span><span style="font-family:var(--f-display);font-size:11px;font-weight:700">${v}</span></div>`
         ).join('')}
       </div>
-      <div class="text-muted text-sm" style="margin-bottom:8px">Top: ${s.top.join(' · ')}</div>
-      <button class="btn ${s.pri?'btn-primary':'btn-ghost'} btn-sm" style="width:100%">Select This</button>
+      <div class="text-muted text-sm" style="margin-bottom:8px">${translateLoose(`Top: ${s.top.join(' · ')}`)}</div>
+      <button class="btn ${s.pri?'btn-primary':'btn-ghost'} btn-sm" style="width:100%">${translateLoose('Select This')}</button>
     </div>`).join('');
 
   const detailEl = container.querySelector('#opt-detail');
@@ -486,11 +505,11 @@ function showSuggestions(container) {
           <div class="pbar-wrap" style="width:80px"><div class="pbar" style="width:${(h.weight*100).toFixed(0)}%"></div></div>
           <span style="font-family:var(--f-display);font-size:11px;font-weight:600;color:var(--green)">${(h.weight*100).toFixed(1)}%</span>
         </div></td>
-        <td class="text-dim text-sm">${h.sector||''}</td>
+        <td class="text-dim text-sm">${localizeSector(h.sector)}</td>
         <td class="cell-num" style="color:var(--green)">${h.esg_score||'—'}</td>
       </tr>`).join('');
     container.querySelector('#opt-holdings-table').innerHTML = `<div class="tbl-wrap"><table>
-      <thead><tr><th>Symbol</th><th>Weight</th><th>Sector</th><th>ESG</th></tr></thead>
+      <thead><tr><th>${translateLoose('Symbol')}</th><th>${translateLoose('Weight')}</th><th>${translateLoose('Sector')}</th><th>ESG</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
   }
@@ -521,37 +540,37 @@ function updateSummary(container) {
 function buildStep5() {
   const holdings = _result?.holdings || [];
   return `<div class="card">
-    <div class="card-header"><span class="card-title">Step 5 — Portfolio Review & Execution Preparation</span></div>
+    <div class="card-header"><span class="card-title">${translateLoose('Step 5 — Portfolio Review & Execution Preparation')}</span></div>
     <div class="card-body" style="display:flex;flex-direction:column;gap:20px">
       <div class="metrics-row" style="grid-template-columns:repeat(4,1fr)">
         ${[['Expected Return',(_build.expectedReturn*100).toFixed(1)+'%','pos'],['Volatility',(_build.vol*100).toFixed(1)+'%',''],['Sharpe',_build.sharpe.toFixed(2),'acc'],['Holdings',holdings.length,'']].map(([l,v,c]) => `
-          <div class="metric-card"><div class="metric-sheen"></div><div class="metric-label">${l}</div><div class="metric-value ${c}">${v||'—'}</div></div>`).join('')}
+          <div class="metric-card"><div class="metric-sheen"></div><div class="metric-label">${translateLoose(l)}</div><div class="metric-value ${c}">${v||'—'}</div></div>`).join('')}
       </div>
       ${holdings.length ? `<div class="tbl-wrap"><table>
-        <thead><tr><th>Symbol</th><th>Weight</th><th>Sector</th><th>ESG</th></tr></thead>
+        <thead><tr><th>${translateLoose('Symbol')}</th><th>${translateLoose('Weight')}</th><th>${translateLoose('Sector')}</th><th>ESG</th></tr></thead>
         <tbody>${holdings.map(h => `
           <tr><td class="cell-symbol">${h.symbol}</td>
             <td><div style="display:flex;align-items:center;gap:8px">
               <div class="pbar-wrap" style="width:70px"><div class="pbar" style="width:${(h.weight*100).toFixed(0)}%"></div></div>
               <span style="font-family:var(--f-display);font-size:11px;font-weight:600;color:var(--green)">${(h.weight*100).toFixed(1)}%</span>
             </div></td>
-            <td class="text-dim text-sm">${h.sector||''}</td>
+            <td class="text-dim text-sm">${localizeSector(h.sector)}</td>
             <td class="cell-num" style="color:var(--green)">${h.esg_score||'—'}</td>
           </tr>`).join('')}
         </tbody>
-      </table></div>` : '<div class="text-muted text-sm">Run optimization first (Step 4)</div>'}
+      </table></div>` : `<div class="text-muted text-sm">${translateLoose('Run optimization first (Step 4)')}</div>`}
       <div style="padding:14px;background:rgba(255,179,0,0.04);border:1px solid rgba(255,179,0,0.18);border-radius:10px">
         <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
           <input type="checkbox" id="risk-ack" style="accent-color:var(--green)">
-          <span style="font-family:var(--f-mono);font-size:11px;color:var(--text-secondary)">I acknowledge the investment risks and confirm this portfolio is suitable for my risk profile.</span>
+          <span style="font-family:var(--f-mono);font-size:11px;color:var(--text-secondary)">${translateLoose('I acknowledge the investment risks and confirm this portfolio is suitable for my risk profile.')}</span>
         </label>
       </div>
       <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost" id="s5-back">← Back</button>
-          <button class="btn btn-ghost btn-sm">📊 Export CSV</button>
+          <button class="btn btn-ghost" id="s5-back">${translateLoose('← Back')}</button>
+          <button class="btn btn-ghost btn-sm">${translateLoose('📊 Export CSV')}</button>
         </div>
-        <button class="btn btn-primary" id="s5-execute">→ Send to Execution Monitor</button>
+        <button class="btn btn-primary" id="s5-execute">${translateLoose('→ Send to Execution Monitor')}</button>
       </div>
     </div>
   </div>`;
@@ -560,7 +579,7 @@ function bindStep5(container) {
   container.querySelector('#s5-back')?.addEventListener('click', () => goStep(container, 4));
   container.querySelector('#s5-execute')?.addEventListener('click', () => {
     const ack = container.querySelector('#risk-ack');
-    if (!ack?.checked) { toast.warning('Acknowledgment required', 'Please confirm the risk disclosure'); return; }
+    if (!ack?.checked) { toast.warning(translateLoose('Acknowledgment required'), translateLoose('Please confirm the risk disclosure')); return; }
     if (_result) {
       const uni = (_result.holdings||[]).map(h=>h.symbol).join(', ');
       window.sessionStorage.setItem('qt.execution.prefill', JSON.stringify({ universe: uni, capital: 1000000, broker: 'alpaca' }));
@@ -577,7 +596,7 @@ function bindEvents(container) {
     if (e.target.closest('#btn-clear-portfolio')) {
       _result = null; _build = { expectedReturn:0, vol:0, sharpe:0, holdings:[] };
       ['#ps-ret','#ps-vol','#ps-sharpe','#ps-dd','#ps-div'].forEach(id => { const el=container.querySelector(id); if(el) el.textContent='—'; });
-      container.querySelector('#ps-holdings').innerHTML = '<div class="text-muted text-sm">Not built yet</div>';
+      container.querySelector('#ps-holdings').innerHTML = `<div class="text-muted text-sm">${translateLoose('Not built yet')}</div>`;
       container.querySelector('#btn-to-execution').disabled = true;
     }
     if (e.target.closest('#btn-to-execution') && _result) {

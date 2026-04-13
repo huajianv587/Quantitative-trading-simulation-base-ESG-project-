@@ -1,23 +1,34 @@
 import { api, openExecutionWS } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
+import { getLocale, onLangChange, translateLoose } from '../i18n.js?v=8';
 
 let _ws        = null;
 let _orders    = [];
 let _killArmed = false;
+let _currentContainer = null;
+let _langCleanup = null;
 
 export function render(container) {
+  _currentContainer = container;
+  _ws?.close(); _ws = null;
   container.innerHTML = buildShell();
   bindEvents(container);
   applyPrefill(container);
   loadOrders(container);
   loadPositions(container);
   connectWS(container);
+  _langCleanup ||= onLangChange(() => {
+    if (_currentContainer?.isConnected) render(_currentContainer);
+  });
 }
 
 export function destroy() {
   _ws?.close(); _ws = null;
   _orders    = [];
   _killArmed = false;
+  _currentContainer = null;
+  _langCleanup?.();
+  _langCleanup = null;
 }
 
 function applyPrefill(container) {
@@ -77,6 +88,27 @@ function buildShell() {
               </select>
             </div>
           </div>
+
+          <!-- Alpaca API credentials (stored locally) -->
+          <div class="alpaca-key-section">
+            <div class="alpaca-key-header">
+              <span style="color:var(--amber);font-size:11px">🔑</span>
+              <span style="font-family:var(--f-display);font-size:10px;font-weight:600;letter-spacing:0.06em">ALPACA API CREDENTIALS</span>
+              <span id="alpaca-key-status" class="alpaca-key-badge" style="display:none">✓ SET</span>
+            </div>
+            <div class="form-group" style="margin-bottom:8px">
+              <label class="form-label">API Key ID</label>
+              <input class="form-input" id="ex-alpaca-key" type="password" placeholder="PKXXXXX… (optional, stored locally)" autocomplete="off">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label">Secret Key</label>
+              <input class="form-input" id="ex-alpaca-secret" type="password" placeholder="Enter secret key…" autocomplete="off">
+            </div>
+            <div style="font-family:var(--f-mono);font-size:9px;color:var(--text-dim);margin-top:6px;line-height:1.5">
+              Credentials stored in browser only · Never sent to third parties · Used by backend to connect Alpaca Paper Trading
+            </div>
+          </div>
+
           <div class="form-group" style="display:flex;align-items:center;gap:10px">
             <label class="form-label" style="margin:0;flex:1">Submit Orders to Broker</label>
             <label class="toggle">
@@ -174,6 +206,32 @@ function bindEvents(container) {
   container.querySelector('#btn-refresh-pos').addEventListener('click', () => loadPositions(container));
   container.querySelector('#filter-status').addEventListener('change', () => renderOrders(container));
 
+  /* Alpaca API key persistence */
+  const keyEl    = container.querySelector('#ex-alpaca-key');
+  const secretEl = container.querySelector('#ex-alpaca-secret');
+  const statusEl = container.querySelector('#alpaca-key-status');
+  const syncKeyStatus = () => {
+    const hasKey = !!(localStorage.getItem('qt.alpaca.key'));
+    if (statusEl) statusEl.style.display = hasKey ? 'inline' : 'none';
+  };
+  if (keyEl) {
+    keyEl.value = localStorage.getItem('qt.alpaca.key') || '';
+    keyEl.addEventListener('change', () => {
+      if (keyEl.value) localStorage.setItem('qt.alpaca.key', keyEl.value);
+      else localStorage.removeItem('qt.alpaca.key');
+      syncKeyStatus();
+      if (keyEl.value) toast.success(translateLoose('API key saved'), translateLoose('Stored locally in browser'));
+    });
+  }
+  if (secretEl) {
+    secretEl.value = localStorage.getItem('qt.alpaca.secret') || '';
+    secretEl.addEventListener('change', () => {
+      if (secretEl.value) localStorage.setItem('qt.alpaca.secret', secretEl.value);
+      else localStorage.removeItem('qt.alpaca.secret');
+    });
+  }
+  syncKeyStatus();
+
   /* Kill switch */
   const killBtn = container.querySelector('#btn-kill');
   const killHeader = container.querySelector('#btn-kill-header');
@@ -195,7 +253,7 @@ function bindEvents(container) {
     disarmKill(container);
     try {
       await api.execution.killSwitch(true, 'Manual operator trigger');
-      toast.warning('Kill switch activated', 'All pending orders cancelled');
+      toast.warning(translateLoose('Kill switch activated'), translateLoose('All pending orders cancelled'));
       container.querySelector('#kill-activated').style.display = '';
       loadOrders(container);
     } catch (e) { toast.error('Kill switch failed', e.message); }
@@ -223,7 +281,7 @@ async function runExecution(container) {
 
   try {
     const res = await api.execution.paper({ universe, capital_base: capital, broker, mode: 'paper', submit_orders: submitOrders });
-    toast.success('Execution plan submitted', `${res.orders?.length || 0} orders`);
+    toast.success(translateLoose('Execution plan submitted'), translateLoose(`${res.orders?.length || 0} orders`));
     [container.querySelector('#btn-kill'), container.querySelector('#btn-kill-header')].forEach(b => { if(b) b.disabled = false; });
     await loadOrders(container);
     _ws?.close(); connectWS(container, res.execution_id);
@@ -240,7 +298,7 @@ async function loadOrders(container) {
     renderOrders(container);
   } catch (e) {
     container.querySelector('#orders-body').innerHTML =
-      `<div class="empty-state" style="min-height:100px"><div class="empty-state__title">Could not load orders</div><div class="empty-state__text">${e.message}</div></div>`;
+      `<div class="empty-state" style="min-height:100px"><div class="empty-state__title">${translateLoose('Could not load orders')}</div><div class="empty-state__text">${e.message}</div></div>`;
   }
 }
 
@@ -249,13 +307,13 @@ function renderOrders(container) {
   const filter  = container.querySelector('#filter-status')?.value || 'all';
   const countEl = container.querySelector('#order-count');
   const filtered = filter === 'all' ? _orders : _orders.filter(o => o.status === filter);
-  if (countEl) countEl.textContent = `${filtered.length} orders`;
+  if (countEl) countEl.textContent = translateLoose(`${filtered.length} orders`);
 
   if (!filtered.length) {
     body.innerHTML = `<div class="empty-state" style="min-height:100px">
       <div class="empty-state__icon">📋</div>
-      <div class="empty-state__title">No orders</div>
-      <div class="empty-state__text">Submit an execution plan to see orders here.</div>
+      <div class="empty-state__title">${translateLoose('No orders')}</div>
+      <div class="empty-state__text">${translateLoose('Submit an execution plan to see orders here.')}</div>
     </div>`;
     return;
   }
@@ -285,14 +343,14 @@ async function loadPositions(container) {
   try {
     const data = await api.execution.positions(broker);
     const positions = data.positions || [];
-    if (!positions.length) { el.innerHTML = '<div class="text-muted text-sm">No open positions</div>'; return; }
+    if (!positions.length) { el.innerHTML = `<div class="text-muted text-sm">${translateLoose('No open positions')}</div>`; return; }
     el.innerHTML = positions.map(p => {
       const pnl = p.unrealized_pl ?? p.unrealized_pnl;
       const cls = (pnl ?? 0) >= 0 ? 'pos' : 'neg';
       return `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.02)">
         <div>
           <span class="cell-symbol" style="font-size:12px">${p.symbol}</span>
-          <span style="margin-left:8px;color:var(--text-dim);font-family:var(--f-mono);font-size:10px">${p.qty} shares</span>
+          <span style="margin-left:8px;color:var(--text-dim);font-family:var(--f-mono);font-size:10px">${translateLoose(`${p.qty} shares`)}</span>
         </div>
         <div style="text-align:right">
           <div style="font-family:var(--f-mono);font-size:11px">${p.current_price ? '$'+Number(p.current_price).toFixed(2) : '—'}</div>
@@ -351,6 +409,6 @@ function statusClass(s) {
 
 function shortTime(iso) {
   if (!iso) return '';
-  try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  try { return new Date(iso).toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
   catch { return iso; }
 }

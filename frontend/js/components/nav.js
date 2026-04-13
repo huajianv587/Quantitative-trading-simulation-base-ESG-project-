@@ -1,4 +1,5 @@
-import { ROUTES } from '../router.js?v=3';
+import { t, onLangChange } from '../i18n.js?v=8';
+import { ROUTES } from '../router.js?v=8';
 
 const ICONS = {
   grid: '<path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/>',
@@ -35,20 +36,20 @@ export function renderNav() {
   });
 
   const groupLabels = {
-    core: 'Platform',
-    quant: 'Quant Engine',
-    research: 'Research',
-    ops: 'Operations',
+    core: 'nav.platform',
+    quant: 'nav.quant',
+    research: 'nav.research',
+    ops: 'nav.ops',
   };
 
   let html = '';
   Object.entries(groups).forEach(([group, items]) => {
-    html += `<div class="nav-section-label">${groupLabels[group] || group}</div>`;
+    html += `<div class="nav-section-label">${t(groupLabels[group] || group)}</div>`;
     items.forEach(({ path, config }) => {
       const active = path === current ? 'active' : '';
       html += `<a class="nav-item ${active}" href="#${path}" data-path="${path}">
         ${icon(config.icon)}
-        <span>${config.label}</span>
+        <span>${config.labelKey ? t(config.labelKey) : config.label}</span>
       </a>`;
     });
   });
@@ -61,10 +62,19 @@ export function updateHealth(online) {
   const text = document.getElementById('health-text');
   if (!dot || !text) return;
   dot.className = `status-dot ${online ? 'online' : 'degraded'}`;
-  text.textContent = online ? 'Backend Online' : 'Backend Offline';
+  text.textContent = online ? t('common.backend_online') : t('common.backend_offline');
 }
 
 export function initNav() {
   renderNav();
   window.addEventListener('route-change', renderNav);
+  onLangChange(() => {
+    renderNav();
+    const dot = document.getElementById('health-dot');
+    const text = document.getElementById('health-text');
+    if (!dot || !text) return;
+    if (dot.classList.contains('online')) updateHealth(true);
+    else if (dot.classList.contains('degraded')) updateHealth(false);
+    else text.textContent = t('common.connecting');
+  });
 }

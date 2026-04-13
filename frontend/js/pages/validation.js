@@ -1,9 +1,27 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
+import { onLangChange, translateLoose } from '../i18n.js?v=8';
+
+let _currentContainer = null;
+let _lastValidation = null;
+let _langCleanup = null;
 
 export function render(container) {
+  _currentContainer = container;
   container.innerHTML = buildShell();
   bindEvents(container);
+  _langCleanup ||= onLangChange(() => {
+    if (_currentContainer?.isConnected && _lastValidation) {
+      showValidationResults(_currentContainer, _lastValidation);
+    }
+  });
+}
+
+export function destroy() {
+  _currentContainer = null;
+  _lastValidation = null;
+  _langCleanup?.();
+  _langCleanup = null;
 }
 
 function buildShell() {
@@ -150,6 +168,7 @@ function mockValidationResult(strategy) {
 }
 
 function showValidationResults(container, res) {
+  _lastValidation = res;
   const isGo = (res.recommendation || '').toUpperCase().includes('GO');
   const oosShp = res.out_of_sample_sharpe ?? 1.24;
   const isShp  = res.in_sample_sharpe ?? 1.87;
@@ -255,7 +274,7 @@ function drawWalkForwardChart(container, res) {
   ctx.beginPath(); ctx.moveTo(padL,py(1.0)); ctx.lineTo(W-padR,py(1.0)); ctx.stroke();
   ctx.setLineDash([]);
   ctx.fillStyle='rgba(0,255,136,0.4)'; ctx.font=`${9*dpr}px IBM Plex Mono`; ctx.textAlign='right';
-  ctx.fillText('Robust Zone', W-padR-6*dpr, py(1.0)-4*dpr);
+  ctx.fillText(translateLoose('Robust Zone'), W-padR-6*dpr, py(1.0)-4*dpr);
 
   /* IS line */
   ctx.beginPath();
@@ -283,6 +302,6 @@ function drawWalkForwardChart(container, res) {
     ctx.strokeStyle=c; ctx.lineWidth=2*dpr;
     ctx.beginPath(); ctx.moveTo(x,padT/2); ctx.lineTo(x+20*dpr,padT/2); ctx.stroke();
     ctx.fillStyle='rgba(240,244,255,0.7)'; ctx.font=`${9*dpr}px IBM Plex Mono`; ctx.textAlign='left';
-    ctx.fillText(label, x+24*dpr, padT/2+3*dpr);
+    ctx.fillText(translateLoose(label), x+24*dpr, padT/2+3*dpr);
   });
 }

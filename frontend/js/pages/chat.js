@@ -1,5 +1,6 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
+import { getLang, getLocale, onLangChange } from '../i18n.js?v=8';
 
 const SESSIONS = [
   { id: 'session-001', title: 'NVDA ESG Deep-Dive', preview: 'Why is NVDA ranked #1…', ts: '10:24 AM', msgs: 6 },
@@ -29,17 +30,63 @@ const CONTEXT_ITEMS = [
 let _messages = [];
 let _activeSession = 'session-001';
 let _streaming = false;
+let _container = null;
+let _disposeLang = null;
+
+function isZh() {
+  return getLang() === 'zh';
+}
+
+function copy(key) {
+  const text = {
+    en: {
+      headerTitle: 'ESG Alpha Research Agent',
+      headerMetaTail: 'Context-aware · Multi-turn',
+      inputPlaceholder: 'Ask about a stock, factor, sector, regime, or signal rationale… (Ctrl+Enter to send)',
+      sendShortcut: 'Ctrl+↵ to send',
+      welcome: 'Hello! I\'m your ESG Alpha Research Agent. I have access to your current portfolio, live P1/P2 model signals, ESG scores, and market regime data.\n\nYou can ask me about:\n• **Specific stocks** — ESG scores, factor exposures, signal rationale\n• **Portfolio analysis** — Risk attribution, factor breakdown\n• **Market regime** — Current state, impact on strategy\n• **Strategy insights** — Why certain trades are ranked highly\n\nWhat would you like to explore?',
+    },
+    zh: {
+      headerTitle: 'ESG Alpha 研究智能体',
+      headerMetaTail: '上下文感知 · 多轮',
+      inputPlaceholder: '询问股票、因子、板块、市场状态或信号逻辑…（Ctrl+Enter 发送）',
+      sendShortcut: 'Ctrl+↵ 发送',
+      welcome: '你好，我是你的 ESG Alpha 研究智能体。我可以访问你当前的投资组合、实时 P1/P2 模型信号、ESG 评分和市场状态数据。\n\n你可以问我这些内容：\n• **个股分析** — ESG 评分、因子暴露和信号逻辑\n• **组合分析** — 风险归因和因子拆解\n• **市场状态** — 当前状态及对策略的影响\n• **策略洞察** — 为什么某些交易排名靠前\n\n你想先看哪一部分？',
+    },
+  };
+
+  return text[getLang()]?.[key] || text.en[key] || key;
+}
 
 export function render(container) {
+  _container = container;
   container.innerHTML = buildShell();
   bindEvents(container);
   loadWelcomeMessages();
   renderMessages(container);
+  _disposeLang?.();
+  _disposeLang = onLangChange(() => {
+    if (!_container?.isConnected) return;
+    const question = _container.querySelector('#chat-question')?.value || '';
+    const sessionValue = _container.querySelector('#chat-session')?.value || '';
+    const shouldRefreshWelcome = _messages.length === 1 && _messages[0]?.isWelcome;
+    _container.innerHTML = buildShell();
+    bindEvents(_container);
+    if (shouldRefreshWelcome) loadWelcomeMessages();
+    renderMessages(_container);
+    const questionEl = _container.querySelector('#chat-question');
+    const sessionEl = _container.querySelector('#chat-session');
+    if (questionEl) questionEl.value = question;
+    if (sessionEl && sessionValue) sessionEl.value = sessionValue;
+  });
 }
 
 export function destroy() {
   _messages = [];
   _streaming = false;
+  _container = null;
+  _disposeLang?.();
+  _disposeLang = null;
 }
 
 /* ── Shell ── */
@@ -95,8 +142,8 @@ function buildShell() {
       <!-- Session header -->
       <div class="chat-session-header">
         <div>
-          <div style="font-family:var(--f-display);font-size:13px;font-weight:700;color:var(--text-primary)">ESG Alpha Research Agent</div>
-          <div style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">Session: <span id="active-session-id">${_activeSession}</span> · Context-aware · Multi-turn</div>
+          <div style="font-family:var(--f-display);font-size:13px;font-weight:700;color:var(--text-primary)">${copy('headerTitle')}</div>
+          <div style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${isZh() ? '会话' : 'Session'}: <span id="active-session-id">${_activeSession}</span> · ${copy('headerMetaTail')}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           <div class="live-dot"></div>
@@ -111,12 +158,12 @@ function buildShell() {
       <!-- Input -->
       <div class="chat-input-bar">
         <textarea class="chat-textarea" id="chat-question" rows="3"
-          placeholder="Ask about a stock, factor, sector, regime, or signal rationale… (Ctrl+Enter to send)"></textarea>
+          placeholder="${copy('inputPlaceholder')}"></textarea>
         <div class="chat-input-actions">
           <div style="display:flex;gap:6px;align-items:center">
             <input class="form-input" id="chat-session" value="${window.__ESG_USER_ID__ || 'user_123'}"
               style="width:130px;height:26px;font-size:10px" placeholder="Session ID">
-            <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">Ctrl+↵ to send</span>
+            <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${copy('sendShortcut')}</span>
           </div>
           <button class="btn btn-primary" id="send-btn" style="min-width:90px">▶ Send</button>
         </div>
@@ -129,7 +176,7 @@ function loadWelcomeMessages() {
   _messages = [
     {
       role: 'assistant', ts: new Date(Date.now() - 120000).toISOString(),
-      content: 'Hello! I\'m your ESG Alpha Research Agent. I have access to your current portfolio, live P1/P2 model signals, ESG scores, and market regime data.\n\nYou can ask me about:\n• **Specific stocks** — ESG scores, factor exposures, signal rationale\n• **Portfolio analysis** — Risk attribution, factor breakdown\n• **Market regime** — Current state, impact on strategy\n• **Strategy insights** — Why certain trades are ranked highly\n\nWhat would you like to explore?',
+      content: copy('welcome'),
       meta: null, isWelcome: true,
     }
   ];
@@ -268,7 +315,7 @@ function renderMessages(container) {
 
 function buildMessage(msg) {
   const isUser = msg.role === 'user';
-  const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const time = new Date(msg.ts).toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit' });
   const isStreaming = !!msg.streamId && !msg.content;
 
   // Format markdown-lite (bold, tables, bullets)

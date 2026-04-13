@@ -1,7 +1,16 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
+import { getLang, getLocale, onLangChange, translateLoose } from '../i18n.js?v=8';
 
 let _pollTimer = null;
+let _currentContainer = null;
+let _langCleanup = null;
+let _pipelineAnimId = null;
+let _pipelineParticles = [];
+
+const isLight = () => document.body.classList.contains('light');
+const PIPE_BG = () => isLight() ? '#F0F4FF' : '#04040C';
+const PIPE_DOT = () => isLight() ? 'rgba(0,168,85,0.10)' : 'rgba(0,255,136,0.07)';
 
 const PIPELINE_NODES = [
   { id: 'raw',      label: 'Raw Ingestion',     icon: '⬇',  status: 'live',    x: 40,  y: 120 },
@@ -23,16 +32,58 @@ const SOURCES = [
   { id: 'alt_data',    name: 'Alternative Data',        type: 'Batch',  freshness: '2 hrs',  records: '520K',  status: 'warning', lag: '45min' },
 ];
 
+const SOURCE_TYPE_ZH = {
+  Stream: '流式',
+  Batch: '批处理',
+  Event: '事件',
+  Daily: '每日',
+};
+
+function formatUnitSpan(value) {
+  const raw = String(value || '').trim();
+  if (getLang() !== 'zh') return raw;
+  return raw
+    .replace(/hrs?/g, '小时')
+    .replace(/hr/g, '小时')
+    .replace(/min/g, '分钟')
+    .replace(/s\b/g, '秒');
+}
+
+function formatFreshness(value) {
+  return getLang() === 'zh' ? `${formatUnitSpan(value)} 前` : `${value} ago`;
+}
+
+function formatLag(value) {
+  return getLang() === 'zh' ? `延迟 ${formatUnitSpan(value)}` : `lag ${value}`;
+}
+
+function formatRecordsMeta(type, records) {
+  return getLang() === 'zh'
+    ? `${SOURCE_TYPE_ZH[type] || translateLoose(type)} · ${records} 条记录`
+    : `${type} · ${records} records`;
+}
+
 export function render(container) {
+  if (_pollTimer) window.clearInterval(_pollTimer);
+  if (_pipelineAnimId) { cancelAnimationFrame(_pipelineAnimId); _pipelineAnimId = null; }
+  _currentContainer = container;
   container.innerHTML = buildShell();
   bindEvents(container);
   drawPipelineFlow(container);
   renderFreshness(container);
+  _langCleanup ||= onLangChange(() => {
+    if (_currentContainer?.isConnected) render(_currentContainer);
+  });
 }
 
 export function destroy() {
   if (_pollTimer) window.clearInterval(_pollTimer);
+  if (_pipelineAnimId) { cancelAnimationFrame(_pipelineAnimId); _pipelineAnimId = null; }
   _pollTimer = null;
+  _currentContainer = null;
+  _pipelineParticles = [];
+  _langCleanup?.();
+  _langCleanup = null;
 }
 
 /* ── Shell ── */
@@ -58,7 +109,7 @@ function buildShell() {
       </div>
     </div>
     <div class="pipeline-canvas-wrap" style="padding:8px 16px 16px">
-      <canvas id="pipeline-canvas" height="200" style="width:100%;cursor:pointer"></canvas>
+      <canvas id="pipeline-canvas" height="160" style="width:100%;cursor:pointer"></canvas>
     </div>
   </div>
 
@@ -142,7 +193,7 @@ NVIDIA</textarea>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px" id="freshness-kpis">
         ${[
           ['Live Feeds', '6/8', 'var(--green)'],
-          ['Avg Freshness', '4.2 hrs', 'var(--amber)'],
+          ['Avg Freshness', getLang() === 'zh' ? '4.2 小时' : '4.2 hrs', 'var(--amber)'],
           ['Records Today', '9.1M', 'var(--cyan)'],
           ['Alerts', '1 warning', 'var(--amber)'],
         ].map(([l,v,c]) => `
@@ -170,85 +221,176 @@ NVIDIA</textarea>
   </div>`;
 }
 
-/* ── Pipeline Flow Canvas ── */
+/* ── Pipeline Flow Canvas (Sci-fi animated) ── */
 function drawPipelineFlow(container) {
+  if (_pipelineAnimId) { cancelAnimationFrame(_pipelineAnimId); _pipelineAnimId = null; }
+
   const canvas = container.querySelector('#pipeline-canvas');
   if (!canvas) return;
+
   const dpr = window.devicePixelRatio || 1;
-  const W = canvas.parentElement?.offsetWidth || 760, H = 200;
+  const W = canvas.parentElement?.offsetWidth || 760;
+  const H = 160;
   canvas.width = W * dpr; canvas.height = H * dpr;
   canvas.style.height = H + 'px';
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = 'var(--bg-surface)'; ctx.fillRect(0, 0, W, H);
 
   const N = PIPELINE_NODES.length;
-  const nodeW = 90, nodeH = 50, gapX = (W - N * nodeW) / (N + 1);
-  const nodeY = H / 2 - nodeH / 2;
+  const nodeW = 82, nodeH = 46;
+  const gapX  = (W - N * nodeW) / (N + 1);
+  const nodeY  = H / 2 - nodeH / 2;
 
   PIPELINE_NODES.forEach((node, i) => {
-    const x = gapX + i * (nodeW + gapX);
-    node._x = x; node._y = nodeY;
+    node._x = gapX + i * (nodeW + gapX);
+    node._y = nodeY;
+  });
 
-    // Connector line
-    if (i < N - 1) {
-      const nx = gapX + (i + 1) * (nodeW + gapX);
-      const mid = x + nodeW;
+  // Init particles (3 per connection gap)
+  _pipelineParticles = [];
+  for (let i = 0; i < N - 1; i++) {
+    for (let j = 0; j < 3; j++) {
+      _pipelineParticles.push({
+        from: i, to: i + 1,
+        progress: Math.random(),
+        speed: 0.12 + Math.random() * 0.18,
+        size:  1.5 + Math.random() * 2,
+      });
+    }
+  }
 
-      // Animated dashes
-      ctx.setLineDash([6, 4]);
-      ctx.strokeStyle = 'rgba(0,255,136,0.3)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(mid, H/2); ctx.lineTo(nx, H/2); ctx.stroke();
-      ctx.setLineDash([]);
+  let lastTs = 0;
+  function frame(ts) {
+    if (!canvas.isConnected) { _pipelineAnimId = null; return; }
+    const dt = Math.min((ts - lastTs) / 1000, 0.1);
+    lastTs = ts;
 
-      // Arrow head
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    /* ── Background ── */
+    ctx.fillStyle = PIPE_BG(); ctx.fillRect(0, 0, W, H);
+    // Dot-matrix grid
+    ctx.fillStyle = PIPE_DOT();
+    for (let gx = 14; gx < W; gx += 22) {
+      for (let gy = 10; gy < H; gy += 18) { ctx.fillRect(gx - 0.5, gy - 0.5, 1, 1); }
+    }
+    // Horizontal scan line
+    const scanY = (ts / 3000 % 1) * H;
+    const scanGrad = ctx.createLinearGradient(0, scanY - 20, 0, scanY + 20);
+    scanGrad.addColorStop(0,   'rgba(0,255,136,0)');
+    scanGrad.addColorStop(0.5, 'rgba(0,255,136,0.06)');
+    scanGrad.addColorStop(1,   'rgba(0,255,136,0)');
+    ctx.fillStyle = scanGrad; ctx.fillRect(0, scanY - 20, W, 40);
+
+    /* ── Corner brackets ── */
+    const brk = 14;
+    ctx.strokeStyle = 'rgba(0,255,136,0.4)'; ctx.lineWidth = 1.5;
+    [[4, 4, 1, 1], [W-4, 4, -1, 1], [4, H-4, 1, -1], [W-4, H-4, -1, -1]].forEach(([cx, cy, sx, sy]) => {
+      ctx.beginPath();
+      ctx.moveTo(cx + sx * brk, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + sy * brk);
+      ctx.stroke();
+    });
+
+    /* ── Connection tracks ── */
+    PIPELINE_NODES.forEach((node, i) => {
+      if (i >= N - 1) return;
+      const x1 = node._x + nodeW + 2, x2 = PIPELINE_NODES[i+1]._x - 2, y = H / 2;
+      // Track glow
+      ctx.strokeStyle = 'rgba(0,255,136,0.12)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke();
+      // Track core
+      ctx.strokeStyle = 'rgba(0,255,136,0.22)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke();
+      // Arrow tip
       ctx.fillStyle = 'rgba(0,255,136,0.5)';
       ctx.beginPath();
-      ctx.moveTo(nx - 8, H/2 - 4);
-      ctx.lineTo(nx, H/2);
-      ctx.lineTo(nx - 8, H/2 + 4);
+      ctx.moveTo(x2 - 7, y - 3.5); ctx.lineTo(x2 + 1, y); ctx.lineTo(x2 - 7, y + 3.5);
       ctx.closePath(); ctx.fill();
-    }
+    });
 
-    // Node box
-    const isWarn = node.status === 'warning';
-    const borderColor = isWarn ? 'rgba(255,179,0,0.5)' : 'rgba(0,255,136,0.35)';
-    const bgColor = isWarn ? 'rgba(255,179,0,0.06)' : 'rgba(0,255,136,0.05)';
+    /* ── Update + draw particles ── */
+    _pipelineParticles.forEach(p => {
+      p.progress += p.speed * dt;
+      if (p.progress >= 1) { p.progress = 0; p.speed = 0.12 + Math.random() * 0.18; }
+      const fn = PIPELINE_NODES[p.from], tn = PIPELINE_NODES[p.to];
+      const x1 = fn._x + nodeW + 2, x2 = tn._x - 2, y = H / 2;
+      const px = x1 + (x2 - x1) * p.progress;
+      // Radial glow
+      const rg = ctx.createRadialGradient(px, y, 0, px, y, p.size * 4);
+      rg.addColorStop(0, 'rgba(0,255,136,0.95)');
+      rg.addColorStop(0.4, 'rgba(0,255,136,0.4)');
+      rg.addColorStop(1, 'rgba(0,255,136,0)');
+      ctx.fillStyle = rg;
+      ctx.beginPath(); ctx.arc(px, y, p.size * 4, 0, Math.PI * 2); ctx.fill();
+    });
 
-    ctx.fillStyle = bgColor;
-    ctx.beginPath();
-    roundRect(ctx, x, nodeY, nodeW, nodeH, 8);
-    ctx.fill();
-    ctx.strokeStyle = borderColor; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    roundRect(ctx, x, nodeY, nodeW, nodeH, 8);
-    ctx.stroke();
+    /* ── Draw nodes ── */
+    const T = ts / 1000;
+    PIPELINE_NODES.forEach((node, i) => {
+      const x = node._x, y = node._y;
+      const isWarn = node.status === 'warning';
+      const gColor = isWarn ? '#FFB300' : '#00FF88';
+      const pulse  = (Math.sin(T * 1.6 + i * 0.9) + 1) / 2; // 0-1
 
-    // Glow on live nodes
-    if (!isWarn) {
-      ctx.shadowColor = '#00FF88'; ctx.shadowBlur = 12 * dpr;
-      ctx.strokeStyle = 'rgba(0,255,136,0.15)'; ctx.lineWidth = 4;
-      ctx.beginPath(); roundRect(ctx, x, nodeY, nodeW, nodeH, 8); ctx.stroke();
-      ctx.shadowBlur = 0;
-    }
+      // Outer halo pulse
+      ctx.globalAlpha = 0.04 + pulse * 0.07;
+      ctx.fillStyle = gColor;
+      roundRect(ctx, x - 5, y - 5, nodeW + 10, nodeH + 10, 12);
+      ctx.fill();
+      ctx.globalAlpha = 1;
 
-    // Icon
-    ctx.font = `16px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(node.icon, x + nodeW/2, nodeY + 16);
+      // Node fill
+      ctx.fillStyle = isWarn ? 'rgba(255,179,0,0.08)' : 'rgba(0,255,136,0.06)';
+      roundRect(ctx, x, y, nodeW, nodeH, 8); ctx.fill();
 
-    // Label
-    ctx.fillStyle = 'rgba(200,210,255,0.7)'; ctx.font = `${9}px IBM Plex Mono`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.fillText(node.label, x + nodeW/2, nodeY + 32);
+      // Node border (pulsing)
+      const borderAlpha = 0.28 + pulse * 0.28;
+      ctx.strokeStyle = isWarn ? `rgba(255,179,0,${borderAlpha})` : `rgba(0,255,136,${borderAlpha})`;
+      ctx.lineWidth = 1.5;
+      roundRect(ctx, x, y, nodeW, nodeH, 8); ctx.stroke();
 
-    // Status dot
-    ctx.beginPath(); ctx.arc(x + nodeW - 10, nodeY + 10, 4, 0, Math.PI * 2);
-    ctx.fillStyle = isWarn ? '#FFB300' : '#00FF88';
-    ctx.shadowColor = isWarn ? '#FFB300' : '#00FF88'; ctx.shadowBlur = 6 * dpr;
-    ctx.fill(); ctx.shadowBlur = 0;
-  });
+      // Micro corner brackets on each node
+      const b = 5;
+      ctx.strokeStyle = isWarn ? 'rgba(255,179,0,0.8)' : 'rgba(0,255,136,0.8)';
+      ctx.lineWidth = 1;
+      [[x, y, 1, 1], [x+nodeW, y, -1, 1], [x, y+nodeH, 1, -1], [x+nodeW, y+nodeH, -1, -1]].forEach(([cx, cy, sx, sy]) => {
+        ctx.beginPath();
+        ctx.moveTo(cx + sx * b, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + sy * b);
+        ctx.stroke();
+      });
+
+      // Status dot
+      ctx.beginPath(); ctx.arc(x + nodeW - 9, y + 9, 3, 0, Math.PI * 2);
+      ctx.fillStyle = gColor;
+      ctx.shadowColor = gColor; ctx.shadowBlur = 8 * dpr;
+      ctx.fill(); ctx.shadowBlur = 0;
+
+      // Icon
+      ctx.font = '13px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText(node.icon, x + nodeW / 2, y + 16);
+
+      // Label
+      ctx.fillStyle = 'rgba(180,210,255,0.75)'; ctx.font = '7.5px IBM Plex Mono';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      const label = translateLoose(node.label);
+      // Wrap long labels
+      const words = label.split(' ');
+      if (words.length > 1 && label.length > 10) {
+        const mid = Math.ceil(words.length / 2);
+        ctx.fillText(words.slice(0, mid).join(' '), x + nodeW / 2, y + 29);
+        ctx.fillText(words.slice(mid).join(' '), x + nodeW / 2, y + 38);
+      } else {
+        ctx.fillText(label, x + nodeW / 2, y + 31);
+      }
+    });
+
+    ctx.restore();
+    _pipelineAnimId = requestAnimationFrame(frame);
+  }
+
+  _pipelineAnimId = requestAnimationFrame(frame);
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -275,17 +417,22 @@ function renderFreshness(container) {
       <div style="display:flex;align-items:center;gap:8px;flex:1">
         <span style="width:6px;height:6px;border-radius:50%;background:${statusColor};flex-shrink:0"></span>
         <div>
-          <div style="font-size:11px;color:var(--text-primary);font-weight:500">${s.name}</div>
+          <div style="font-size:11px;color:var(--text-primary);font-weight:500">${translateLoose(s.name)}</div>
           <div style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">${s.type} · ${s.records} records</div>
         </div>
       </div>
       <div style="text-align:right">
-        <div style="font-size:10px;font-family:var(--f-mono);color:${statusColor}">${s.freshness} ago</div>
-        <div style="font-size:9px;color:var(--text-dim)">lag ${s.lag}</div>
+        <div style="font-size:10px;font-family:var(--f-mono);color:${statusColor}">${formatFreshness(s.freshness)}</div>
+        <div style="font-size:9px;color:var(--text-dim)">${formatLag(s.lag)}</div>
       </div>
-      <button class="btn btn-ghost btn-sm freshness-sync-btn" data-sid="${s.id}" style="padding:3px 8px;font-size:9px;margin-left:8px">Sync</button>
+      <button class="btn btn-ghost btn-sm freshness-sync-btn" data-sid="${s.id}" style="padding:3px 8px;font-size:9px;margin-left:8px">${translateLoose('Sync')}</button>
     </div>`;
   }).join('');
+
+  container.querySelectorAll('.freshness-row > div:first-child > div > div:last-child').forEach((el, index) => {
+    const source = SOURCES[index];
+    if (source) el.textContent = formatRecordsMeta(source.type, source.records);
+  });
 
   // Draw throughput chart after freshness renders
   setTimeout(() => drawThroughput(container), 50);
@@ -294,7 +441,7 @@ function renderFreshness(container) {
     const btn = e.target.closest('.freshness-sync-btn');
     if (!btn) return;
     const src = SOURCES.find(s => s.id === btn.dataset.sid);
-    if (src) toast.info('Sync triggered', src.name);
+    if (src) toast.info(translateLoose('Sync triggered'), translateLoose(src.name));
   });
 }
 
@@ -309,7 +456,7 @@ function drawThroughput(container) {
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#07070F'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = PIPE_BG(); ctx.fillRect(0, 0, W, H);
 
   const hours = 24;
   const data = Array.from({length: hours}, (_, i) => {
@@ -356,10 +503,10 @@ function bindEvents(container) {
   container.querySelector('#sync-btn').addEventListener('click', () => startSync(container));
   container.querySelector('#btn-refresh-all').addEventListener('click', () => {
     renderFreshness(container);
-    toast.info('Data sources refreshed');
+    toast.info(translateLoose('Data sources refreshed'));
   });
   container.querySelector('#btn-clear-log').addEventListener('click', () => {
-    container.querySelector('#ingestion-log').innerHTML = '<span style="color:var(--text-dim)">Log cleared.</span>';
+    container.querySelector('#ingestion-log').innerHTML = `<span style="color:var(--text-dim)">${translateLoose('Log cleared.')}</span>`;
   });
 
   container.querySelector('#source-select-chips').addEventListener('click', e => {
@@ -372,7 +519,7 @@ function bindEvents(container) {
 /* ── Sync ── */
 async function startSync(container) {
   const btn = container.querySelector('#sync-btn');
-  btn.disabled = true; btn.textContent = '● Starting…';
+  btn.disabled = true; btn.textContent = translateLoose('● Starting…');
 
   const companies = container.querySelector('#sync-companies').value.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
   const forceRefresh = container.querySelector('#sync-force').checked;
@@ -390,7 +537,7 @@ async function startSync(container) {
     simulateMockSync(container, mockJob, companies);
     toast.error('API error', err.message + ' — running mock sync');
   } finally {
-    btn.disabled = false; btn.textContent = '▶ Start Sync';
+    btn.disabled = false; btn.textContent = translateLoose('▶ Start Sync');
   }
 }
 
@@ -403,7 +550,7 @@ function simulateMockSync(container, job, companies) {
       job.status = 'completed';
       clearInterval(timer);
       appendLog(container, `✓ Sync ${job.job_id} completed — ${companies.length} companies updated`);
-      toast.success('Sync complete', `${companies.length} companies refreshed`);
+      toast.success(translateLoose('Sync complete'), translateLoose(`${companies.length} companies refreshed`));
     }
     job.progress = Math.min(progress, 100);
     renderJobStatus(container, job);
@@ -418,7 +565,7 @@ function pollStatus(container, jobId) {
       renderJobStatus(container, status);
       if (status.status?.startsWith('completed')) {
         window.clearInterval(_pollTimer); _pollTimer = null;
-        toast.success('Sync complete', jobId);
+        toast.success(translateLoose('Sync complete'), jobId);
       }
     } catch {
       window.clearInterval(_pollTimer); _pollTimer = null;
@@ -432,7 +579,7 @@ function renderJobStatus(container, job) {
   const progress = Math.round(job.progress || 0);
   const isDone = job.status === 'completed';
   const color = isDone ? 'var(--green)' : 'var(--amber)';
-  countEl.textContent = isDone ? '' : '1 active';
+  countEl.textContent = isDone ? '' : translateLoose('1 active');
 
   jobsEl.innerHTML = `
   <div style="padding:12px 16px;display:flex;flex-direction:column;gap:10px">
@@ -452,6 +599,6 @@ function renderJobStatus(container, job) {
 
 function appendLog(container, msg) {
   const log = container.querySelector('#ingestion-log');
-  const ts = new Date().toLocaleTimeString();
+  const ts = new Date().toLocaleTimeString(getLocale());
   log.innerHTML = `<span style="color:var(--green)">[${ts}]</span> ${msg}<br>` + log.innerHTML;
 }

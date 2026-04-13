@@ -1,5 +1,6 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
+import { getLang, getLocale } from '../i18n.js?v=8';
 
 const CATALOG = [
   {
@@ -110,8 +111,44 @@ const CATEGORIES = [
   { key: 'statistical', label: 'Statistical Arb' },
 ];
 
+const MODEL_TERM_ZH = {
+  'XGBoost Ensemble': 'XGBoost 集成',
+  'Recurrent Neural Network': '循环神经网络',
+  'Hidden Markov Model': '隐马尔可夫模型',
+  'Graph Neural Network': '图神经网络',
+  'Reinforcement Learning': '强化学习',
+  'Cointegration Engine': '协整引擎',
+  'Risk Factor Model': '风险因子模型',
+  'Transformer (FinBERT)': 'Transformer（FinBERT）',
+  'Deep Learning': '深度学习',
+  Overlay: '叠加层',
+  'Cross-Sectional Momentum': '横截面动量',
+};
+
+const MODEL_DESC_ZH = {
+  'Gradient-boosted ranking model combining 47 ESG-adjusted factors. Primary signal generator in P1 stack.': '基于梯度提升的排序模型，融合 47 个 ESG 调整因子，是 P1 堆栈的核心信号生成器。',
+  'Sequence-to-sequence LSTM trained on 10 years of price/volume data with attention mechanism. Feeds into Alpha Ranker.': '基于注意力机制的序列到序列 LSTM，使用 10 年量价数据训练，并作为 Alpha 排序器的输入。',
+  '4-state HMM classifying market regime: Bull / Bear / Sideways / High-Vol. Used to modulate position sizing and factor weights.': '四状态 HMM 用于识别市场状态：牛市 / 熊市 / 震荡 / 高波动，用于调节仓位规模和因子权重。',
+  'Graph-based model encoding sector correlations and supply chain relationships. Powers P2 decision engine for position allocation.': '图结构模型编码板块相关性和供应链关系，为 P2 决策引擎提供仓位分配能力。',
+  'LinUCB bandit selecting execution strategy (aggressive / neutral / passive) conditioned on regime, liquidity, and urgency.': 'LinUCB 上下文老虎机根据市场状态、流动性和紧迫度选择执行策略（激进 / 中性 / 被动）。',
+  'Engle-Granger cointegration scanner across ESG peer groups. Identifies mean-reverting pairs for market-neutral positions.': '基于 Engle-Granger 的协整扫描器覆盖 ESG 同业分组，用于识别适合市场中性的均值回归配对。',
+  '9-factor model: Market, Size, Value, Momentum, Quality, Low-Vol, ESG Environmental, ESG Social, ESG Governance. Barra-style.': '九因子模型：市场、规模、价值、动量、质量、低波、ESG 环境、ESG 社会、ESG 治理，采用 Barra 风格框架。',
+  'Fine-tuned FinBERT on ESG news, earnings calls, and regulatory filings. Generates sentiment scores fed into Alpha Ranker as features.': '在 ESG 新闻、业绩电话会和监管文件上微调的 FinBERT，会生成情绪分数作为 Alpha 排序器的输入特征。',
+  'Classic 12-1 month cross-sectional momentum with ESG screening. Avoids ESG laggards in top-decile selection.': '经典 12-1 月横截面动量策略叠加 ESG 筛选，在高分位选股时规避 ESG 落后者。',
+};
+
 let _activeCategory = 'all';
 let _activeModelId   = null;
+
+function localizeTerm(value) {
+  if (getLang() !== 'zh' || !value) return value;
+  return MODEL_TERM_ZH[value] || value;
+}
+
+function localizeDescription(value) {
+  if (getLang() !== 'zh' || !value) return value;
+  return MODEL_DESC_ZH[value] || value;
+}
 
 export async function render(container) {
   container.innerHTML = buildShell();
@@ -268,20 +305,23 @@ function renderCatalog(container, search = '') {
 function buildModelCard(m) {
   const statusColor = m.status === 'live' ? 'var(--green)' : m.status === 'staging' ? 'var(--amber)' : 'var(--text-dim)';
   const statusLabel = m.status.toUpperCase();
+  const type = localizeTerm(m.type);
+  const description = localizeDescription(m.description);
+  const tags = m.tags.map(localizeTerm);
   return `
   <div class="model-catalog-card${_activeModelId === m.id ? ' active' : ''}" data-id="${m.id}">
     <div class="mcc-header">
       <div class="mcc-icon">${m.icon}</div>
       <div style="flex:1;min-width:0">
         <div class="mcc-name">${m.name}</div>
-        <div class="mcc-type">${m.type}</div>
+        <div class="mcc-type">${type}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <span style="font-size:9px;font-family:var(--f-mono);color:${statusColor};letter-spacing:0.08em">${statusLabel}</span>
         <span style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">${m.version}</span>
       </div>
     </div>
-    <div class="mcc-desc">${m.description}</div>
+    <div class="mcc-desc">${description}</div>
     <div class="mcc-metrics">
       <div class="mcc-metric">
         <div class="mcc-metric-val" style="color:${m.sharpe>=1.5?'var(--green)':m.sharpe>=1.0?'var(--amber)':'var(--red)'}">${m.sharpe.toFixed(2)}</div>
@@ -300,7 +340,7 @@ function buildModelCard(m) {
       </div>
     </div>
     <div class="mcc-tags">
-      ${m.tags.map(t => `<span class="mcc-tag">${t}</span>`).join('')}
+      ${tags.map(t => `<span class="mcc-tag">${t}</span>`).join('')}
     </div>
   </div>`;
 }
@@ -330,6 +370,9 @@ function showDetailPanel(container, model) {
 }
 
 function buildDetailPanel(m) {
+  const type = localizeTerm(m.type);
+  const description = localizeDescription(m.description);
+  const tags = m.tags.map(localizeTerm);
   const paramRows = Object.entries(m.params).map(([k,v]) => `
     <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border-subtle)">
       <span style="font-size:10px;color:var(--text-dim)">${k}</span>
@@ -348,7 +391,7 @@ function buildDetailPanel(m) {
       <div>
         <div style="font-size:20px;margin-bottom:4px">${m.icon}</div>
         <div style="font-family:var(--f-display);font-size:13px;font-weight:700;color:var(--text-primary)">${m.name}</div>
-        <div style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono);margin-top:2px">${m.type} · ${m.version}</div>
+        <div style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono);margin-top:2px">${type} · ${m.version}</div>
       </div>
       <button class="btn btn-ghost btn-sm" id="btn-detail-close" style="padding:4px 8px">✕</button>
     </div>
@@ -370,12 +413,12 @@ function buildDetailPanel(m) {
       <!-- Description -->
       <div>
         <div style="font-size:9px;color:var(--text-dim);letter-spacing:0.1em;margin-bottom:6px">DESCRIPTION</div>
-        <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">${m.description}</div>
+        <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">${description}</div>
       </div>
 
       <!-- Tags -->
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        ${m.tags.map(t => `<span class="mcc-tag">${t}</span>`).join('')}
+        ${tags.map(t => `<span class="mcc-tag">${t}</span>`).join('')}
       </div>
 
       <!-- Hyperparameters -->
@@ -661,6 +704,6 @@ async function loadExperiments(container) {
 
 function shortDate(iso) {
   if (!iso) return '';
-  try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+  try { return new Date(iso).toLocaleString(getLocale(), { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
   catch { return iso; }
 }

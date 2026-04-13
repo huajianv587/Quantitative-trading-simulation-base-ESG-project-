@@ -1,5 +1,6 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
+import { getLocale } from '../i18n.js?v=8';
 
 const REPORT_TYPES = [
   { value: 'daily',   label: 'Daily Digest',        desc: 'Top signals, score updates, alerts' },
@@ -203,7 +204,7 @@ async function loadLatest(container) {
 
 /* ── Mock ── */
 function mockReport(type, companies, id, title) {
-  const now = new Date().toLocaleString();
+  const now = new Date().toLocaleString(getLocale());
   const analyses = companies.map((c, i) => ({
     company_name: c, ticker: ['TSLA','MSFT','AAPL','NVDA'][i] || 'N/A',
     esg_score: [72.4, 81.2, 78.6, 76.1][i] || 70,

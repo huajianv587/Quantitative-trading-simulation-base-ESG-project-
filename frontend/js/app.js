@@ -1,8 +1,19 @@
 import { router, getAuthUser, clearAuth } from './router.js?v=8';
 import { api }    from './qtapi.js?v=8';
 import { initNav, updateHealth } from './components/nav.js?v=8';
-import { toast, initErrorListener } from './components/toast.js?v=8';
+import { toast, initErrorListener, clearAllToasts } from './components/toast.js?v=8';
 import { t, setLang, getLang, onLangChange } from './i18n.js?v=8';
+
+/* ── Theme (light / dark) ──────────────────────────────────── */
+function getTheme() { return localStorage.getItem('qt-theme') || 'dark'; }
+function setTheme(mode) {
+  localStorage.setItem('qt-theme', mode);
+  document.body.classList.toggle('light', mode === 'light');
+  // Update toggle button icon
+  const btn = document.getElementById('theme-toggle-btn');
+  if (btn) btn.textContent = mode === 'light' ? '🌙' : '☀';
+}
+function initTheme() { setTheme(getTheme()); }
 
 /* ── Chart.js global defaults ─ */
 if (window.Chart) {
@@ -29,7 +40,10 @@ function buildTopbarActions() {
   if (!actions) return;
   const lang = getLang();
   const user = getAuthUser();
+  const theme = getTheme();
   actions.innerHTML = `
+    <!-- Theme toggle -->
+    <button class="theme-toggle" id="theme-toggle-btn" title="Toggle light/dark mode">${theme === 'light' ? '🌙' : '☀'}</button>
     <!-- Language toggle -->
     <div class="topbar-lang-toggle">
       <button class="lang-btn${lang==='zh'?' active':''}" id="tb-lang-zh" data-lang="zh">中</button>
@@ -49,6 +63,12 @@ function buildTopbarActions() {
     </div>`}
   `;
 
+  // Theme toggle
+  actions.querySelector('#theme-toggle-btn')?.addEventListener('click', () => {
+    const next = getTheme() === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+  });
+
   // Lang toggle
   actions.querySelector('#tb-lang-zh')?.addEventListener('click', () => { setLang('zh'); buildTopbarActions(); });
   actions.querySelector('#tb-lang-en')?.addEventListener('click', () => { setLang('en'); buildTopbarActions(); });
@@ -62,12 +82,16 @@ function buildTopbarActions() {
 }
 
 async function init() {
+  initTheme();
   initNav();
   initErrorListener();
 
   const root = document.getElementById('app-root');
   buildTopbarActions();
-  onLangChange(() => buildTopbarActions());
+  onLangChange(() => {
+    clearAllToasts();
+    buildTopbarActions();
+  });
 
   router.init(root);
 
@@ -78,7 +102,7 @@ async function init() {
     toast.success(t('common.backend_online'));
   } catch {
     updateHealth(false);
-    toast.error(t('common.backend_offline'), 'Some features may be unavailable');
+    toast.error(t('common.backend_offline'), t('common.features_limited'));
   }
 
   /* periodic health ping */

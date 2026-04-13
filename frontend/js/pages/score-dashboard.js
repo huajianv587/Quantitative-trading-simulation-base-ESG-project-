@@ -1,5 +1,6 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
+import { getLang, onLangChange, translateLoose } from '../i18n.js?v=8';
 
 const PEERS_DEFAULT = { TSLA: ['F','GM','NIO'], AAPL: ['MSFT','GOOGL','META'], NVDA: ['AMD','INTC','AVGO'] };
 
@@ -15,11 +16,28 @@ const SUB_SCORES = {
   governance:  ['Board Independence','CEO Pay Ratio','Audit Quality','Shareholder Rights','Anti-corruption'],
 };
 
+let _currentContainer = null;
+let _lastScoreResponse = null;
+let _langCleanup = null;
+
 export function render(container) {
+  _currentContainer = container;
   container.innerHTML = buildShell();
   bindEvents(container);
+  _langCleanup ||= onLangChange(() => {
+    if (_currentContainer?.isConnected && _lastScoreResponse) {
+      renderScore(_currentContainer, _lastScoreResponse);
+    }
+  });
   // Auto-render mock data for the default company
   renderScore(container, mockEsgResult('Tesla', 'TSLA'));
+}
+
+export function destroy() {
+  _currentContainer = null;
+  _lastScoreResponse = null;
+  _langCleanup?.();
+  _langCleanup = null;
 }
 
 /* ── Shell ── */
@@ -195,6 +213,7 @@ function mockEsgResult(company, ticker) {
 
 /* ── Render Results ── */
 function renderScore(container, response) {
+  _lastScoreResponse = response;
   const report = response.esg_report || {};
   const overall = firstDef(report.overall_score, report.overall, 72.4);
   const eScore  = firstDef(report.e_score, report.environment_score, 68.1);
@@ -207,13 +226,16 @@ function renderScore(container, response) {
 
   // Update hero
   container.querySelector('#esg-company-name').textContent = company;
-  container.querySelector('#esg-ticker-val').textContent = `${ticker} · ${report.industry || 'Equity'} · Rating: ${rating}`;
+  container.querySelector('#esg-ticker-val').textContent =
+    getLang() === 'zh'
+      ? `${ticker} · ${translateLoose(report.industry || 'Equity')} · 评级：${rating}`
+      : `${ticker} · ${report.industry || 'Equity'} · Rating: ${rating}`;
 
   const verdictEl = container.querySelector('#esg-verdict-tag');
   verdictEl.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
       <span style="background:rgba(0,255,136,0.15);color:var(--green);font-family:var(--f-mono);font-size:10px;padding:3px 10px;border-radius:4px;letter-spacing:0.08em">${rating} RATING</span>
-      <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">Top ${100-pct}th percentile in industry</span>
+      <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${translateLoose(`Top ${100-pct}th percentile in industry`)}</span>
     </div>`;
 
   // Ring gauge
@@ -231,7 +253,7 @@ function renderScore(container, response) {
   ].map(([l,v,c]) => `
     <div style="text-align:center;min-width:70px">
       <div style="font-family:var(--f-display);font-size:22px;font-weight:800;color:${c}">${Number(v).toFixed(1)}</div>
-      <div style="font-size:9px;color:var(--text-dim);letter-spacing:0.1em;font-family:var(--f-mono);margin-top:3px">${l === 'E' ? 'ENVIRON' : l === 'S' ? 'SOCIAL' : 'GOVERN'}</div>
+      <div style="font-size:9px;color:var(--text-dim);letter-spacing:0.1em;font-family:var(--f-mono);margin-top:3px">${l === 'E' ? translateLoose('ENVIRON') : l === 'S' ? translateLoose('SOCIAL') : translateLoose('GOVERN')}</div>
       <div style="margin-top:6px;width:60px;height:4px;border-radius:2px;background:rgba(255,255,255,0.07);overflow:hidden">
         <div style="width:${v}%;height:100%;background:${c};border-radius:2px"></div>
       </div>
@@ -413,14 +435,14 @@ function drawRadar(container, allScores, e, s, g) {
     const lx = cx + Math.cos(a)*lr, ly = cy + Math.sin(a)*lr;
     ctx.fillStyle = 'rgba(200,210,255,0.65)'; ctx.font = `9px IBM Plex Mono`;
     ctx.textAlign = Math.cos(a) > 0.2 ? 'left' : Math.cos(a) < -0.2 ? 'right' : 'center';
-    ctx.fillText(ax.label, lx, ly);
+    ctx.fillText(translateLoose(ax.label), lx, ly);
   });
 
   // Legend
   if (legendEl) {
     legendEl.innerHTML = axes.map(ax => `
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
-        <span style="font-size:10px;color:var(--text-dim)">${ax.label}</span>
+        <span style="font-size:10px;color:var(--text-dim)">${translateLoose(ax.label)}</span>
         <span style="font-family:var(--f-mono);font-size:11px;color:${scoreColor(ax.val)}">${Number(ax.val).toFixed(1)}</span>
       </div>`).join('');
   }
@@ -473,7 +495,7 @@ function drawTrendLine(canvas, trend) {
   data.forEach((_,i) => {
     if (i%3===0) {
       ctx.fillStyle='rgba(140,160,220,0.35)'; ctx.font=`8px IBM Plex Mono`; ctx.textAlign='center';
-      ctx.fillText(months[i]||'', px(i), H-padB+12);
+      ctx.fillText(translateLoose(months[i] || ''), px(i), H-padB+12);
     }
   });
 }

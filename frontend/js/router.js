@@ -1,5 +1,5 @@
 const VER = 'v8';
-import { applyLangToPage } from './i18n.js?v=8';
+import { applyLangToPage, onLangChange, t } from './i18n.js?v=8';
 
 // ── Auth guard helpers ────────────────────────────────────────────
 function getAuthToken() {
@@ -20,25 +20,25 @@ function clearAuth() {
 const PUBLIC_ROUTES = new Set(['/login', '/register', '/reset-password']);
 
 export const ROUTES = {
-  '/login':          { module: () => import(`./pages/login.js?${VER}`),          label: 'Sign In',     icon: 'lock',         group: 'auth',     hidden: true, noShell: true },
-  '/register':       { module: () => import(`./pages/register.js?${VER}`),       label: 'Register',    icon: 'user-plus',    group: 'auth',     hidden: true, noShell: true },
-  '/reset-password': { module: () => import(`./pages/reset-password.js?${VER}`), label: 'Reset PW',    icon: 'key',          group: 'auth',     hidden: true, noShell: true },
+  '/login':          { module: () => import(`./pages/login.js?${VER}`),          labelKey: 'page.login',         icon: 'lock',           group: 'auth',     hidden: true, noShell: true },
+  '/register':       { module: () => import(`./pages/register.js?${VER}`),       labelKey: 'page.register_auth', icon: 'user-plus',      group: 'auth',     hidden: true, noShell: true },
+  '/reset-password': { module: () => import(`./pages/reset-password.js?${VER}`), labelKey: 'page.reset_pw',      icon: 'key',            group: 'auth',     hidden: true, noShell: true },
 
-  '/dashboard': { module: () => import(`./pages/dashboard.js?${VER}`), label: 'Dashboard', icon: 'grid', group: 'core' },
-  '/overview':  { module: () => import(`./pages/dashboard.js?${VER}`), label: 'Overview',  icon: 'grid', group: 'core', hidden: true },
-  '/research':  { module: () => import(`./pages/research.js?${VER}`),  label: 'Research',  icon: 'search', group: 'quant' },
-  '/portfolio': { module: () => import(`./pages/portfolio.js?${VER}`), label: 'Portfolio', icon: 'pie',    group: 'quant' },
-  '/backtest':  { module: () => import(`./pages/backtest.js?${VER}`),  label: 'Backtest',  icon: 'chart',  group: 'quant' },
-  '/backtests': { module: () => import(`./pages/backtests.js?${VER}`), label: 'Backtests', icon: 'chart',  group: 'quant', hidden: true },
-  '/execution': { module: () => import(`./pages/execution.js?${VER}`), label: 'Execution', icon: 'zap',    group: 'quant' },
-  '/validation':     { module: () => import(`./pages/validation.js?${VER}`),     label: 'Validation',  icon: 'shield',       group: 'research' },
-  '/models':         { module: () => import(`./pages/models.js?${VER}`),         label: 'Models',      icon: 'cpu',          group: 'research' },
-  '/chat':           { module: () => import(`./pages/chat.js?${VER}`),           label: 'Chat',        icon: 'message-square', group: 'research' },
-  '/score':          { module: () => import(`./pages/score-dashboard.js?${VER}`),label: 'ESG Score',   icon: 'bar-chart-3',  group: 'research' },
-  '/reports':        { module: () => import(`./pages/reports.js?${VER}`),        label: 'Reports',     icon: 'file-text',    group: 'ops' },
-  '/data-management':{ module: () => import(`./pages/data-management.js?${VER}`),label: 'Data Sync',   icon: 'database',     group: 'ops' },
-  '/push-rules':     { module: () => import(`./pages/push-rules.js?${VER}`),     label: 'Push Rules',  icon: 'bell',         group: 'ops' },
-  '/subscriptions':  { module: () => import(`./pages/subscriptions.js?${VER}`),  label: 'Subscriptions',icon: 'users',       group: 'ops' },
+  '/dashboard': { module: () => import(`./pages/dashboard.js?${VER}`), labelKey: 'page.dashboard', icon: 'grid', group: 'core' },
+  '/overview':  { module: () => import(`./pages/dashboard.js?${VER}`), labelKey: 'page.dashboard', icon: 'grid', group: 'core', hidden: true },
+  '/research':  { module: () => import(`./pages/research.js?${VER}`),  labelKey: 'page.research',  icon: 'search', group: 'quant' },
+  '/portfolio': { module: () => import(`./pages/portfolio.js?${VER}`), labelKey: 'page.portfolio', icon: 'pie',    group: 'quant' },
+  '/backtest':  { module: () => import(`./pages/backtest.js?${VER}`),  labelKey: 'page.backtest',  icon: 'chart',  group: 'quant' },
+  '/backtests': { module: () => import(`./pages/backtests.js?${VER}`), labelKey: 'page.backtest',  icon: 'chart',  group: 'quant', hidden: true },
+  '/execution': { module: () => import(`./pages/execution.js?${VER}`), labelKey: 'page.execution', icon: 'zap',    group: 'quant' },
+  '/validation':     { module: () => import(`./pages/validation.js?${VER}`),      labelKey: 'page.validation', icon: 'shield',         group: 'research' },
+  '/models':         { module: () => import(`./pages/models.js?${VER}`),          labelKey: 'page.models',     icon: 'cpu',            group: 'research' },
+  '/chat':           { module: () => import(`./pages/chat.js?${VER}`),            labelKey: 'page.chat',       icon: 'message-square', group: 'research' },
+  '/score':          { module: () => import(`./pages/score-dashboard.js?${VER}`), labelKey: 'page.score',      icon: 'bar-chart-3',    group: 'research' },
+  '/reports':        { module: () => import(`./pages/reports.js?${VER}`),         labelKey: 'page.reports',    icon: 'file-text',      group: 'ops' },
+  '/data-management':{ module: () => import(`./pages/data-management.js?${VER}`), labelKey: 'page.data',       icon: 'database',       group: 'ops' },
+  '/push-rules':     { module: () => import(`./pages/push-rules.js?${VER}`),      labelKey: 'page.push',       icon: 'bell',           group: 'ops' },
+  '/subscriptions':  { module: () => import(`./pages/subscriptions.js?${VER}`),   labelKey: 'page.subs',       icon: 'users',          group: 'ops' },
 };
 
 const DEFAULT = '/dashboard';
@@ -53,6 +53,7 @@ class Router {
   init(container) {
     this._container = container;
     window.addEventListener('hashchange', () => this._go());
+    onLangChange(() => this._applyTitle(this.getCurrentPath()));
     this._go();
   }
 
@@ -63,6 +64,13 @@ class Router {
 
   async navigate(path) {
     window.location.hash = `#${path}`;
+  }
+
+  _applyTitle(path) {
+    const config = ROUTES[path];
+    const titleEl = document.getElementById('page-title');
+    if (!titleEl || !config) return;
+    titleEl.textContent = config.labelKey ? t(config.labelKey) : config.label;
   }
 
   async _go() {
@@ -86,8 +94,7 @@ class Router {
     if (this._mod && this._mod.destroy) await this._mod.destroy();
     this._current = path;
 
-    const titleEl = document.getElementById('page-title');
-    if (titleEl) titleEl.textContent = config.label;
+    this._applyTitle(path);
 
     // ── Shell visibility ──
     const shell = document.querySelector('.app-shell');

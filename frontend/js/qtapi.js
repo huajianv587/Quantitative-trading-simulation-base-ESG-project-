@@ -1,7 +1,7 @@
 /* Quant Terminal - API Client */
 
 var BASE = window.__ESG_API_BASE_URL__ || '';
-var Q = BASE + '/api/v1/quant';
+var Q = '/api/v1/quant';
 
 function _apiKeyForScope(scope) {
   if (scope === 'admin') return window.__ESG_ADMIN_API_KEY__ || window.__ESG_API_KEY__ || '';
