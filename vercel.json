@@ -1,12 +1,5 @@
 {
   "version": 2,
   "buildCommand": "npm run build:static",
-  "outputDirectory": "dist",
-  "redirects": [
-    {
-      "source": "/",
-      "destination": "/app/",
-      "permanent": false
-    }
-  ]
+  "outputDirectory": "dist"
 }

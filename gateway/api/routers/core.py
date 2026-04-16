@@ -20,7 +20,7 @@ def _product_site_entry() -> Path | None:
     project_root = Path(__file__).resolve().parents[3]
     candidates = [
         project_root / "esg_quant_landing_v2.html",
-        project_root / "site" / "index.html",
+        project_root / "dist" / "index.html",
     ]
     for candidate in candidates:
         if candidate.exists():

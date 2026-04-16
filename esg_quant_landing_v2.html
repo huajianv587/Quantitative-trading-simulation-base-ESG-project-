@@ -845,14 +845,26 @@ eqEl.style.height='134px';
 drawEq(eqEl, 0);
 
 const DASHBOARD_ENTRY = '/app/#/dashboard';
-const DASHBOARD_OVERVIEW_ENDPOINT = '/api/v1/quant/platform/overview';
+
+function resolveDashboardOverviewEndpoint() {
+  const path = '/api/v1/quant/platform/overview';
+  if (!window.location || !window.location.origin) return path;
+  const url = new URL(path, window.location.origin);
+  if (window.location.port === '9000') {
+    url.port = '8000';
+  }
+  return url.toString();
+}
+
+const DASHBOARD_OVERVIEW_ENDPOINT = resolveDashboardOverviewEndpoint();
 
 function warmDashboardOverview() {
   if (warmDashboardOverview.done || !window.fetch) return;
   warmDashboardOverview.done = true;
   fetch(DASHBOARD_OVERVIEW_ENDPOINT, {
     headers: { 'Accept': 'application/json' },
-    credentials: 'same-origin',
+    credentials: window.location.port === '9000' ? 'omit' : 'same-origin',
+    mode: 'cors',
   }).catch(() => null);
 }
 

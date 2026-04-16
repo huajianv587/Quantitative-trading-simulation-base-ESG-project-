@@ -14,18 +14,15 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
 const frontendDir = join(projectRoot, 'frontend');
-const siteDir = join(projectRoot, 'site');
 const distDir = join(projectRoot, 'dist');
 const distAppDir = join(distDir, 'app');
-const distSiteDir = join(distDir, 'site');
+const landingEntryPath = resolveLandingEntry();
 
 const apiBaseUrl = String(process.env.ESG_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
 rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distAppDir, { recursive: true });
-mkdirSync(distSiteDir, { recursive: true });
 copyDirectory(frontendDir, distAppDir);
-copyDirectory(siteDir, distSiteDir);
 
 writeFileSync(
   join(distAppDir, 'app-config.js'),
@@ -35,7 +32,7 @@ writeFileSync(
 
 writeFileSync(
   join(distDir, 'index.html'),
-  readText(join(siteDir, 'index.html')),
+  readText(landingEntryPath),
   'utf8',
 );
 
@@ -45,6 +42,7 @@ if (!existsSync(join(distAppDir, 'app-config.js'))) {
 
 console.log(`Static frontend bundle generated in ${distDir}`);
 console.log(`ESG_API_BASE_URL=${apiBaseUrl || '(same-origin)'}`);
+console.log(`Landing page source=${landingEntryPath}`);
 
 function copyDirectory(sourceDir, targetDir) {
   mkdirSync(targetDir, { recursive: true });
@@ -66,4 +64,16 @@ function copyDirectory(sourceDir, targetDir) {
 
 function readText(path) {
   return readFileSync(path, 'utf8');
+}
+
+function resolveLandingEntry() {
+  const candidates = [join(projectRoot, 'esg_quant_landing_v2.html')];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Unable to locate landing entry. Checked: ${candidates.join(', ')}`);
 }
