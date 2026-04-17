@@ -139,6 +139,7 @@ class MovingAverageCrossSignalEngine:
             s_score=round(s_score, 2),
             g_score=round(g_score, 2),
             signal_source="momentum_engine",
+            market_data_source=bars_result.provider,
             factor_scores=factor_scores,
             catalysts=[
                 f"Crossover state: {crossover}",

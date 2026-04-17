@@ -69,6 +69,11 @@ export var api = {
 
   platform: {
     overview: function() { return _get(Q + '/platform/overview'); },
+    dashboardChart: function(symbol, timeframe) {
+      var query = '?timeframe=' + encodeURIComponent(timeframe || '1D');
+      if (symbol) query += '&symbol=' + encodeURIComponent(symbol);
+      return _get(Q + '/dashboard/chart' + query);
+    },
     universe: function() { return _get(Q + '/universe/default'); },
   },
 
@@ -100,8 +105,11 @@ export var api = {
     paper: function(payload) { return _post(Q + '/execution/paper', payload, { scope: 'execution' }); },
     run: function(payload) { return _post(Q + '/execution/run', payload, { scope: 'execution' }); },
     brokers: function() { return _get(Q + '/execution/brokers', { scope: 'execution' }); },
-    account: function(broker) {
-      return _get(Q + '/execution/account?broker=' + encodeURIComponent(broker || 'alpaca'), { scope: 'execution' });
+    account: function(broker, mode) {
+      return _get(
+        Q + '/execution/account?broker=' + encodeURIComponent(broker || 'alpaca') + '&mode=' + encodeURIComponent(mode || 'paper'),
+        { scope: 'execution' }
+      );
     },
     controls: function() { return _get(Q + '/execution/controls', { scope: 'execution' }); },
     killSwitch: function(enabled, reason) {
@@ -111,16 +119,19 @@ export var api = {
         { scope: 'execution' }
       );
     },
-    monitor: function(broker, executionId, limit) {
-      var query = '?broker=' + encodeURIComponent(broker || 'alpaca') + '&limit=' + encodeURIComponent(limit || 20);
+    monitor: function(broker, executionId, limit, mode) {
+      var query = '?broker=' + encodeURIComponent(broker || 'alpaca')
+        + '&limit=' + encodeURIComponent(limit || 20)
+        + '&mode=' + encodeURIComponent(mode || 'paper');
       if (executionId) query += '&execution_id=' + encodeURIComponent(executionId);
       return _get(Q + '/execution/monitor' + query, { scope: 'execution' });
     },
-    orders: function(broker, status, limit) {
+    orders: function(broker, status, limit, mode) {
       return _get(
         Q + '/execution/orders?broker=' + encodeURIComponent(broker || 'alpaca')
           + '&status=' + encodeURIComponent(status || 'all')
-          + '&limit=' + encodeURIComponent(limit || 50),
+          + '&limit=' + encodeURIComponent(limit || 50)
+          + '&mode=' + encodeURIComponent(mode || 'paper'),
         { scope: 'execution' }
       );
     },
@@ -136,13 +147,27 @@ export var api = {
     syncJournal: function(executionId, broker) {
       return _post(Q + '/execution/journal/' + executionId + '/sync', { broker: broker }, { scope: 'execution' });
     },
-    positions: function(broker) {
-      return _get(Q + '/execution/positions?broker=' + encodeURIComponent(broker || 'alpaca'), { scope: 'execution' });
+    positions: function(broker, mode) {
+      return _get(
+        Q + '/execution/positions?broker=' + encodeURIComponent(broker || 'alpaca') + '&mode=' + encodeURIComponent(mode || 'paper'),
+        { scope: 'execution' }
+      );
     },
   },
 
   validation: {
     run: function(payload) { return _post(Q + '/validation/run', payload, { scope: 'execution' }); },
+  },
+
+  quantRL: {
+    overview: function() { return _get(Q + '/rl/overview'); },
+    runs: function() { return _get(Q + '/rl/runs'); },
+    buildDataset: function(payload) { return _post(Q + '/rl/datasets/build', payload); },
+    buildRecipeDataset: function(payload) { return _post(Q + '/rl/recipes/build', payload); },
+    search: function(payload) { return _post(Q + '/rl/search', payload); },
+    buildDemoDataset: function(payload) { return _post(Q + '/rl/datasets/demo', payload); },
+    train: function(payload) { return _post(Q + '/rl/train', payload); },
+    backtest: function(payload) { return _post(Q + '/rl/backtest', payload); },
   },
 
   experiments: {
@@ -197,9 +222,11 @@ export var api = {
   },
 };
 
-export function openExecutionWS(broker, executionId, limit, onMsg, onClose) {
+export function openExecutionWS(broker, executionId, limit, onMsg, onClose, mode) {
   var wsBase = (window.__ESG_API_BASE_URL__ || window.location.origin).replace(/^https?/, 'ws');
-  var url = wsBase + '/api/v1/quant/execution/live/ws?broker=' + encodeURIComponent(broker || 'alpaca') + '&limit=' + encodeURIComponent(limit || 20);
+  var url = wsBase + '/api/v1/quant/execution/live/ws?broker=' + encodeURIComponent(broker || 'alpaca')
+    + '&limit=' + encodeURIComponent(limit || 20)
+    + '&mode=' + encodeURIComponent(mode || 'paper');
   if (executionId) url += '&execution_id=' + encodeURIComponent(executionId);
 
   var apiKey = _apiKeyForScope('execution');

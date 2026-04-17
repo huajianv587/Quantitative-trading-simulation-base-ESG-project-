@@ -6,21 +6,18 @@
   <title>Quant Terminal</title>
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
 
-  <!-- Fonts: Orbitron (display) + IBM Plex Mono (data) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="/app/vendor/echarts/echarts.min.js?v=1"></script>
   <link rel="stylesheet" href="/app/css/app.css?v=7">
   <script>window.__APP_VER__ = 'v7';</script>
 </head>
 <body>
-  <!-- Custom cursor -->
   <div id="c-dot"></div>
   <div id="c-ring"></div>
 
-  <!-- Background canvas layers -->
   <div class="bg-aurora" aria-hidden="true">
     <div class="bg-aurora__spot bg-aurora__spot--1"></div>
     <div class="bg-aurora__spot bg-aurora__spot--2"></div>
@@ -29,7 +26,6 @@
   <div class="bg-grid" aria-hidden="true"></div>
 
   <div class="app-shell">
-    <!-- Sidebar -->
     <aside class="app-sidebar" id="sidebar">
       <div class="sidebar-logo">
         <div class="logo-mark">
@@ -49,13 +45,12 @@
       <div class="sidebar-status">
         <div class="status-row">
           <span class="status-dot" id="health-dot"></span>
-          <span id="health-text" class="status-label" data-i18n="common.connecting">Connecting…</span>
+          <span id="health-text" class="status-label">Connecting...</span>
         </div>
         <div class="status-version">v7 · 2026</div>
       </div>
     </aside>
 
-    <!-- Main -->
     <div class="app-main">
       <header class="app-topbar">
         <div class="topbar-crumb">
@@ -71,33 +66,46 @@
 
   <div id="toast-container"></div>
 
-  <!-- Cursor script -->
   <script>
     (function() {
-      const dot  = document.getElementById('c-dot');
+      const dot = document.getElementById('c-dot');
       const ring = document.getElementById('c-ring');
-      let mx=0, my=0, rx=0, ry=0;
-      document.addEventListener('mousemove', function(e) {
-        mx = e.clientX; my = e.clientY;
-        dot.style.left = mx + 'px'; dot.style.top = my + 'px';
+      let mx = 0;
+      let my = 0;
+      let rx = 0;
+      let ry = 0;
+      document.addEventListener('mousemove', function(event) {
+        mx = event.clientX;
+        my = event.clientY;
+        dot.style.left = mx + 'px';
+        dot.style.top = my + 'px';
       });
       (function lerp() {
-        rx += (mx - rx) * 0.1; ry += (my - ry) * 0.1;
-        ring.style.left = rx + 'px'; ring.style.top = ry + 'px';
+        rx += (mx - rx) * 0.1;
+        ry += (my - ry) * 0.1;
+        ring.style.left = rx + 'px';
+        ring.style.top = ry + 'px';
         requestAnimationFrame(lerp);
       })();
-      document.addEventListener('mouseover', function(e) {
-        var t = e.target && e.target.closest('a,button,input,select,textarea,[role=button],.nav-item,.btn');
-        document.body.classList.toggle('c-hover', !!t);
+      document.addEventListener('mouseover', function(event) {
+        const interactive = event.target && event.target.closest('a,button,input,select,textarea,[role=button],.nav-item,.btn');
+        document.body.classList.toggle('c-hover', !!interactive);
       });
     })();
   </script>
 
   <script src="/app/app-config.js?v=5"></script>
   <script>
-    window.addEventListener('error', function(e) {
-      var r = document.getElementById('app-root');
-      if (r) r.innerHTML = '<div style="padding:32px;color:#FF3D57;font-family:\'IBM Plex Mono\',monospace;font-size:12px;line-height:1.8"><b>Error:</b> ' + e.message + '<br><span style="opacity:.5">' + (e.filename||'') + ':' + e.lineno + '</span></div>';
+    window.addEventListener('error', function(event) {
+      const root = document.getElementById('app-root');
+      if (!root) return;
+      root.innerHTML = `
+        <div style="padding:32px;color:#FF3D57;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.8">
+          <b>Error:</b> ${event.message}
+          <br>
+          <span style="opacity:.5">${event.filename || ''}:${event.lineno}</span>
+        </div>
+      `;
     });
   </script>
   <script type="module" src="/app/js/app.js?v=5"></script>

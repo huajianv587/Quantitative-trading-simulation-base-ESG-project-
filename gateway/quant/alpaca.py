@@ -14,20 +14,38 @@ class AlpacaPaperClient:
     def __init__(self) -> None:
         self.key_id = getattr(settings, "ALPACA_API_KEY", "")
         self.secret_key = getattr(settings, "ALPACA_API_SECRET", "")
-        self.base_url = (
+        self.paper_base_url = (
             getattr(settings, "ALPACA_PAPER_BASE_URL", "")
             or "https://paper-api.alpaca.markets"
         ).rstrip("/")
+        self.live_base_url = (
+            getattr(settings, "ALPACA_LIVE_BASE_URL", "")
+            or "https://api.alpaca.markets"
+        ).rstrip("/")
         self.timeout = int(getattr(settings, "ALPACA_API_TIMEOUT", 20) or 20)
+        self.runtime_mode = "paper"
 
     def configured(self) -> bool:
-        return bool(self.key_id and self.secret_key and self.base_url)
+        return bool(self.key_id and self.secret_key and self.paper_base_url)
 
-    def connection_status(self) -> dict[str, Any]:
+    def set_runtime_mode(self, mode: str | None) -> str:
+        normalized = "live" if str(mode or "").strip().lower() == "live" else "paper"
+        self.runtime_mode = normalized
+        return self.runtime_mode
+
+    def _base_url_for_mode(self, mode: str | None = None) -> str:
+        normalized = "live" if str(mode or self.runtime_mode or "").strip().lower() == "live" else "paper"
+        return self.live_base_url if normalized == "live" else self.paper_base_url
+
+    def connection_status(self, mode: str | None = None) -> dict[str, Any]:
+        normalized = "live" if str(mode or self.runtime_mode or "").strip().lower() == "live" else "paper"
         return {
             "configured": self.configured(),
-            "broker": "alpaca-paper",
-            "base_url": self.base_url,
+            "broker": "alpaca",
+            "mode": normalized,
+            "base_url": self._base_url_for_mode(normalized),
+            "paper_base_url": self.paper_base_url,
+            "live_base_url": self.live_base_url,
         }
 
     def get_account(self) -> dict[str, Any]:
@@ -75,11 +93,12 @@ class AlpacaPaperClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        mode: str | None = None,
     ) -> Any:
         if not self.configured():
             raise RuntimeError("Alpaca paper trading credentials are not configured")
 
-        url = f"{self.base_url}{path}"
+        url = f"{self._base_url_for_mode(mode)}{path}"
         response = requests.request(
             method=method.upper(),
             url=url,

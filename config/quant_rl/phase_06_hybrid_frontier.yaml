@@ -1,0 +1,4 @@
+algorithm: hybrid_frontier
+action_type: continuous
+phase: phase_06_hybrid_frontier
+total_steps: 6000

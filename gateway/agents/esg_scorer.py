@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
 from gateway.config import settings
+from gateway.quant.esg_house_score import FORMULA_VERSION, compute_house_score
 from gateway.utils.llm_client import chat
 from gateway.utils.cache import get_cache, set_cache
 from gateway.utils.logger import get_logger
@@ -66,6 +67,16 @@ class ESGScoreReport(BaseModel):
     data_sources: List[str]
     confidence_score: float  # 0-1
     historical_data: Optional[Dict[str, Any]] = None
+    house_score: float = 0.0
+    house_grade: str = "CCC"
+    formula_version: str = FORMULA_VERSION
+    pillar_breakdown: Dict[str, float] = {}
+    disclosure_confidence: float = 0.0
+    controversy_penalty: float = 0.0
+    data_gap_penalty: float = 0.0
+    materiality_adjustment: float = 0.0
+    trend_bonus: float = 0.0
+    house_explanation: str = ""
 
 
 # ── ESG 评分框架 ──────────────────────────────────────────────────────────
@@ -547,6 +558,24 @@ class ESGScoringFramework:
         recommendations.append(f"Prioritize additional data collection for the {weakest} dimension.")
         return recommendations
 
+    @staticmethod
+    def _metric_coverage_ratio(scores_data: Dict[str, Any]) -> float:
+        total = 0
+        populated = 0
+        for dimension_key in ("e_scores", "s_scores", "g_scores"):
+            metric_scores = (scores_data.get(dimension_key) or {}).get("metrics", {}) or {}
+            for metric_payload in metric_scores.values():
+                total += 1
+                if isinstance(metric_payload, dict) and (
+                    metric_payload.get("score") is not None
+                    or metric_payload.get("reasoning")
+                    or metric_payload.get("data_source")
+                ):
+                    populated += 1
+        if total <= 0:
+            return 0.0
+        return populated / total
+
     def _build_report(self, company_name: str, esg_data: Dict[str, Any],
                      scores_data: Dict[str, Any]) -> ESGScoreReport:
         """构建ESGScoreReport对象"""
@@ -569,6 +598,23 @@ class ESGScoringFramework:
             self.G_METRICS
         )
 
+        metric_coverage_ratio = self._metric_coverage_ratio(scores_data)
+        house_breakdown = compute_house_score(
+            company_name=company_name,
+            sector=esg_data.get("sector"),
+            industry=esg_data.get("industry"),
+            e_score=e_metrics.overall_score,
+            s_score=s_metrics.overall_score,
+            g_score=g_metrics.overall_score,
+            data_sources=list(esg_data.get("data_sources") or []),
+            data_lineage=list(esg_data.get("data_lineage") or []),
+            recent_news=list(esg_data.get("recent_news") or []),
+            controversy_hints=list(esg_data.get("controversies") or scores_data.get("key_weaknesses") or []),
+            esg_delta=esg_data.get("esg_delta"),
+            historical_data=esg_data.get("historical_data"),
+            metric_coverage_ratio=metric_coverage_ratio,
+        ).as_dict()
+
         return ESGScoreReport(
             company_name=company_name,
             ticker=esg_data.get("ticker"),
@@ -586,7 +632,17 @@ class ESGScoringFramework:
             assessment_date=datetime.now(),
             data_sources=esg_data.get("data_sources", []),
             confidence_score=min(0.95, 0.7 + len(esg_data.get("data_sources", [])) * 0.1),
-            historical_data=esg_data.get("historical_data")
+            historical_data=esg_data.get("historical_data"),
+            house_score=float(house_breakdown["house_score"]),
+            house_grade=str(house_breakdown["house_grade"]),
+            formula_version=str(house_breakdown["formula_version"]),
+            pillar_breakdown=dict(house_breakdown["pillar_breakdown"]),
+            disclosure_confidence=float(house_breakdown["disclosure_confidence"]),
+            controversy_penalty=float(house_breakdown["controversy_penalty"]),
+            data_gap_penalty=float(house_breakdown["data_gap_penalty"]),
+            materiality_adjustment=float(house_breakdown["materiality_adjustment"]),
+            trend_bonus=float(house_breakdown["trend_bonus"]),
+            house_explanation=str(house_breakdown["house_explanation"]),
         )
 
     def _build_dimension_scores(self, dimension: str, scores_data: Dict,
@@ -645,6 +701,47 @@ ESG 评分报告 - {report.company_name}
 ━ 对标信息:
 行业位置: {report.industry_position or "未知"}
 信心度: {report.confidence_score*100:.0f}%
+"""
+
+    def get_score_explanation(self, report: ESGScoreReport) -> str:
+        """生成易读的评分解释。"""
+        strengths = chr(10).join("  - " + s for s in report.key_strengths) or "  - No standout strengths captured."
+        weaknesses = chr(10).join("  - " + w for w in report.key_weaknesses) or "  - No explicit weaknesses captured."
+        recommendations = chr(10).join("  " + str(i + 1) + ". " + r for i, r in enumerate(report.recommendations)) or "  1. No recommendation generated."
+        return f"""
+ESG 评分报告 - {report.company_name}
+{'=' * 50}
+
+综合评分: {report.overall_score:.1f}/100 ({self._get_rating_text(report.overall_score)})
+趋势: {report.overall_trend}
+JHJ House Score: {report.house_score:.1f}/100 ({report.house_grade}) [{report.formula_version}]
+披露可信度: {report.disclosure_confidence * 100:.0f}% · 实质性修正 {report.materiality_adjustment:+.1f}
+趋势奖励 {report.trend_bonus:+.1f} · 争议惩罚 {report.controversy_penalty:+.1f} · 数据缺口 {report.data_gap_penalty:+.1f}
+
+━ 环境维度 (E): {report.e_scores.overall_score:.1f}/100
+{report.e_scores.summary}
+
+━ 社会维度 (S): {report.s_scores.overall_score:.1f}/100
+{report.s_scores.summary}
+
+━ 治理维度 (G): {report.g_scores.overall_score:.1f}/100
+{report.g_scores.summary}
+
+━ 核心优势:
+{strengths}
+
+━ 主要改进方向:
+{weaknesses}
+
+━ 建议行动:
+{recommendations}
+
+━ 对标信息:
+行业位置: {report.industry_position or "未知"}
+信心度: {report.confidence_score * 100:.0f}%
+
+House 解释:
+{report.house_explanation}
 """
 
     @staticmethod

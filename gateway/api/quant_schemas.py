@@ -58,6 +58,8 @@ class QuantExecutionRequest(BaseModel):
     time_in_force: str = "day"
     extended_hours: bool = False
     allow_duplicates: bool = False
+    live_confirmed: bool = False
+    operator_confirmation: str | None = None
 
 
 class QuantOrderActionRequest(BaseModel):

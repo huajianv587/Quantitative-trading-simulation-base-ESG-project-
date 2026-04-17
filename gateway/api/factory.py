@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from gateway.api.routers import admin, agent, auth, core, ops, quant, reports, scheduler, user
+from gateway.api.routers import admin, agent, auth, core, ops, quant, quant_rl, reports, scheduler, user
 from gateway.app_runtime import RuntimeContext, runtime
 from gateway.ops.security import authorize_request
 from gateway.utils.logger import get_logger
@@ -72,6 +72,7 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
     app.include_router(user.router)
     app.include_router(scheduler.router)
     app.include_router(quant.router)
+    app.include_router(quant_rl.router)
     app.include_router(ops.router)
 
     frontend_path = Path(__file__).resolve().parents[2] / "frontend"

@@ -1,0 +1,5 @@
+algorithm: dqn
+action_type: discrete
+phase: phase_01_discrete_dqn
+episodes: 100
+total_steps: 2000

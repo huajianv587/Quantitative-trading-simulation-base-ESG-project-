@@ -1,0 +1,13 @@
+project: esg-quant-rl
+storage_dir: storage/quant
+api_prefix: /api/v1/quant/rl
+feature_mode: technical+portfolio
+reward:
+  turnover_penalty: 0.001
+  drawdown_penalty: 0.2
+  position_penalty: 0.0005
+risk:
+  max_abs_position: 1.0
+  max_turnover_per_step: 0.35
+  max_drawdown: 0.35
+  min_equity_ratio: 0.50

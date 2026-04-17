@@ -1,0 +1,4 @@
+algorithm: decision_transformer
+action_type: continuous
+phase: phase_04_sequence_policy
+total_steps: 3000

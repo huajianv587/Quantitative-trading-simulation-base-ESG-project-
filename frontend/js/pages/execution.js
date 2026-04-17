@@ -1,414 +1,533 @@
 import { api, openExecutionWS } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
-import { getLocale, onLangChange, translateLoose } from '../i18n.js?v=8';
+import { getLocale, onLangChange } from '../i18n.js?v=8';
 
-let _ws        = null;
-let _orders    = [];
-let _killArmed = false;
+let _ws = null;
+let _orders = [];
 let _currentContainer = null;
 let _langCleanup = null;
+let _killArmed = false;
 
-export function render(container) {
-  _currentContainer = container;
-  _ws?.close(); _ws = null;
-  container.innerHTML = buildShell();
-  bindEvents(container);
-  applyPrefill(container);
-  loadOrders(container);
-  loadPositions(container);
-  connectWS(container);
-  _langCleanup ||= onLangChange(() => {
-    if (_currentContainer?.isConnected) render(_currentContainer);
-  });
+function currentMode(container = _currentContainer) {
+  return container?.querySelector('#ex-mode')?.value || 'paper';
 }
 
-export function destroy() {
-  _ws?.close(); _ws = null;
-  _orders    = [];
-  _killArmed = false;
-  _currentContainer = null;
-  _langCleanup?.();
-  _langCleanup = null;
+function currentBroker(container = _currentContainer) {
+  return container?.querySelector('#ex-broker')?.value || 'alpaca';
+}
+
+function fmtMoney(value) {
+  const number = Number(value || 0);
+  return `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function fmtSignedMoney(value) {
+  const number = Number(value || 0);
+  return `${number >= 0 ? '+' : '-'}$${Math.abs(number).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function fmtPct(value) {
+  const number = Number(value || 0);
+  return `${number >= 0 ? '+' : ''}${(number * 100).toFixed(2)}%`;
+}
+
+function shortTime(value) {
+  if (!value) return '--';
+  try {
+    return new Date(value).toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {
+    return String(value);
+  }
+}
+
+function statusClass(status) {
+  if (status === 'filled') return 'filled';
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled' || status === 'canceled') return 'neutral';
+  return 'pending';
 }
 
 function applyPrefill(container) {
   try {
     const raw = window.sessionStorage.getItem('qt.execution.prefill');
     if (!raw) return;
-    const p = JSON.parse(raw);
-    if (p.universe) container.querySelector('#ex-universe').value = p.universe;
-    if (p.capital)  container.querySelector('#ex-capital').value  = p.capital;
-    if (p.broker)   container.querySelector('#ex-broker').value   = p.broker;
+    const payload = JSON.parse(raw);
+    if (payload.universe) container.querySelector('#ex-universe').value = payload.universe;
+    if (payload.capital) container.querySelector('#ex-capital').value = payload.capital;
+    if (payload.broker) container.querySelector('#ex-broker').value = payload.broker;
     window.sessionStorage.removeItem('qt.execution.prefill');
-  } catch (_) { window.sessionStorage.removeItem('qt.execution.prefill'); }
+  } catch {
+    window.sessionStorage.removeItem('qt.execution.prefill');
+  }
 }
 
-/* ════════════════════════════════════════════ SHELL */
 function buildShell() {
   return `
-  <!-- Header status bar -->
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;margin-bottom:16px;background:rgba(7,7,15,0.7);border:1px solid var(--border-subtle);border-radius:12px;backdrop-filter:blur(24px)">
-    <div>
-      <span style="font-family:var(--f-display);font-size:14px;font-weight:700;letter-spacing:0.06em">EXECUTION MONITOR</span>
+    <div class="execution-monitor">
+      <div class="execution-monitor__title-wrap">
+        <div class="execution-monitor__title">执行监控</div>
+        <div class="execution-monitor__sub" id="execution-monitor-sub">Real broker account sync</div>
+      </div>
+      <div class="execution-monitor__stats">
+        <span id="ws-pill" class="live-pill live-pill--off">DISCONNECTED</span>
+        <span id="monitor-mode" class="badge badge-neutral">PAPER</span>
+        <span id="session-pnl" class="execution-monitor__value">$0.00</span>
+      </div>
+      <div class="execution-monitor__meta">
+        <span id="execution-clock">--</span>
+        <span id="execution-broker-meta">Alpaca · paper</span>
+      </div>
     </div>
-    <div style="display:flex;align-items:center;gap:16px">
-      <span id="ws-pill" class="live-pill live-pill--off">DISCONNECTED</span>
-      <span id="session-pnl" style="font-family:var(--f-display);font-size:16px;font-weight:700;color:var(--green)">$0.00</span>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <span style="font-family:var(--f-mono);font-size:10px;color:var(--text-dim)">Alpaca Paper · NYSE</span>
-      <button class="kill-switch" id="btn-kill-header" style="padding:6px 16px;font-size:8.5px" disabled>⚠ KILL SWITCH</button>
-    </div>
-  </div>
 
-  <div class="grid-sidebar" style="align-items:start">
-    <!-- LEFT -->
-    <div style="display:flex;flex-direction:column;gap:14px">
-      <!-- Submit panel -->
-      <div class="run-panel">
-        <div class="run-panel__header">
-          <div class="run-panel__title">Submit Execution Plan</div>
-          <div class="run-panel__sub">Alpaca Paper Trading</div>
-        </div>
-        <div class="run-panel__body">
-          <div class="form-group">
-            <label class="form-label">Universe</label>
-            <input class="form-input" id="ex-universe" placeholder="AAPL, MSFT… (blank = default)">
+    <div class="grid-sidebar execution-grid">
+      <div class="execution-left">
+        <div class="run-panel">
+          <div class="run-panel__header">
+            <div class="run-panel__title">提交执行计划</div>
+            <div class="run-panel__sub">统一走服务器已配置的 Alpaca 凭证</div>
           </div>
-          <div class="form-row">
+          <div class="run-panel__body">
             <div class="form-group">
-              <label class="form-label">Capital ($)</label>
-              <input class="form-input" id="ex-capital" type="number" value="1000000">
+              <label class="form-label">股票池</label>
+              <input class="form-input" id="ex-universe" placeholder="AAPL, MSFT, NVDA, GOOGL (留空则用默认池)">
             </div>
-            <div class="form-group">
-              <label class="form-label">Broker</label>
-              <select class="form-select" id="ex-broker">
-                <option value="alpaca">Alpaca Paper</option>
-                <option value="alpaca_live" disabled>Alpaca Live</option>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">资金规模 ($)</label>
+                <input class="form-input" id="ex-capital" type="number" value="1000000">
+              </div>
+              <div class="form-group">
+                <label class="form-label">券商</label>
+                <select class="form-select" id="ex-broker">
+                  <option value="alpaca">Alpaca</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">模式</label>
+                <select class="form-select" id="ex-mode">
+                  <option value="paper">Paper</option>
+                  <option value="live">Live</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">提交到券商</label>
+                <label class="toggle execution-toggle">
+                  <input type="checkbox" id="ex-submit" checked>
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="broker-status-card" id="broker-status-card">
+              <div class="broker-status-card__title">Broker Status</div>
+              <div class="broker-status-card__body">
+                <div><span class="text-muted">Account:</span> <span id="account-id">--</span></div>
+                <div><span class="text-muted">Clock:</span> <span id="account-clock">--</span></div>
+                <div><span class="text-muted">Warnings:</span> <span id="account-warning-count">0</span></div>
+              </div>
+              <div class="broker-status-card__note" id="broker-status-note">Server-side broker credentials active.</div>
+            </div>
+          </div>
+          <div class="run-panel__foot">
+            <button class="btn btn-primary btn-lg" id="btn-run-exec" style="flex:1">运行执行计划</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">账户资金</span>
+            <button class="btn btn-ghost btn-sm" id="btn-refresh-account">刷新</button>
+          </div>
+          <div class="card-body">
+            <div class="execution-account-grid">
+              <div class="execution-account-card"><span>Equity</span><strong id="account-equity">$0.00</strong></div>
+              <div class="execution-account-card"><span>Buying Power</span><strong id="account-buying-power">$0.00</strong></div>
+              <div class="execution-account-card"><span>Cash</span><strong id="account-cash">$0.00</strong></div>
+              <div class="execution-account-card"><span>Daily Change</span><strong id="account-daily-change">$0.00</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="border-color:rgba(255,64,96,0.22)">
+          <div class="card-header" style="background:rgba(255,61,87,0.05)">
+            <span class="card-title" style="color:var(--red)">紧急控制</span>
+          </div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+            <div class="text-muted text-sm">Kill switch 会立即取消当前挂单，并阻止新的券商提交。</div>
+            <button class="kill-switch" id="btn-kill" style="width:100%;padding:10px" disabled>启用熔断开关</button>
+            <div id="kill-confirm" style="display:none;flex-direction:column;gap:8px">
+              <div style="font-family:var(--f-mono);font-size:11px;color:var(--red);text-align:center;padding:4px 0">确认暂停当前执行链路</div>
+              <div style="display:flex;gap:8px">
+                <button class="btn btn-ghost btn-sm" id="btn-kill-cancel" style="flex:1">取消</button>
+                <button class="btn btn-sm" id="btn-kill-confirm" style="flex:1;background:var(--red);color:#fff;border:none">确认熔断</button>
+              </div>
+            </div>
+            <div id="kill-activated" style="display:none;padding:12px;border-radius:8px;background:rgba(255,61,87,0.12);border:1px solid rgba(255,61,87,0.4);text-align:center">
+              <div style="font-family:var(--f-display);font-size:11px;font-weight:700;color:var(--red)">KILL SWITCH ACTIVATED</div>
+              <div style="font-family:var(--f-mono);font-size:10px;color:var(--red);opacity:0.7;margin-top:4px">All pending orders cancelled · No new orders</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">实时持仓</span>
+            <button class="btn btn-ghost btn-sm" id="btn-refresh-pos">刷新</button>
+          </div>
+          <div id="positions-body" class="card-body">
+            <div class="text-muted text-sm">Loading...</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="execution-right">
+        <div class="results-panel">
+          <div class="results-panel__header">
+            <span class="card-title">订单流</span>
+            <div style="display:flex;gap:10px;align-items:center">
+              <span id="order-count" class="text-xs text-muted font-mono">0 orders</span>
+              <select class="form-select" id="filter-status" style="padding:3px 8px;font-size:11px;height:auto;width:auto">
+                <option value="all">All</option>
+                <option value="filled">Filled</option>
+                <option value="pending">Pending</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="canceled">Canceled</option>
               </select>
+              <button class="btn btn-ghost btn-sm" id="btn-refresh-orders">刷新</button>
             </div>
           </div>
+          <div class="results-panel__body" id="orders-body">
+            <div class="loading-overlay" style="min-height:120px"><div class="spinner"></div><span>Loading orders...</span></div>
+          </div>
+        </div>
 
-          <!-- Alpaca API credentials (stored locally) -->
-          <div class="alpaca-key-section">
-            <div class="alpaca-key-header">
-              <span style="color:var(--amber);font-size:11px">🔑</span>
-              <span style="font-family:var(--f-display);font-size:10px;font-weight:600;letter-spacing:0.06em">ALPACA API CREDENTIALS</span>
-              <span id="alpaca-key-status" class="alpaca-key-badge" style="display:none">✓ SET</span>
-            </div>
-            <div class="form-group" style="margin-bottom:8px">
-              <label class="form-label">API Key ID</label>
-              <input class="form-input" id="ex-alpaca-key" type="password" placeholder="PKXXXXX… (optional, stored locally)" autocomplete="off">
-            </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label">Secret Key</label>
-              <input class="form-input" id="ex-alpaca-secret" type="password" placeholder="Enter secret key…" autocomplete="off">
-            </div>
-            <div style="font-family:var(--f-mono);font-size:9px;color:var(--text-dim);margin-top:6px;line-height:1.5">
-              Credentials stored in browser only · Never sent to third parties · Used by backend to connect Alpaca Paper Trading
-            </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">实时流</span>
+            <span id="feed-status" class="text-xs text-muted font-mono">connecting...</span>
           </div>
-
-          <div class="form-group" style="display:flex;align-items:center;gap:10px">
-            <label class="form-label" style="margin:0;flex:1">Submit Orders to Broker</label>
-            <label class="toggle">
-              <input type="checkbox" id="ex-submit" checked>
-              <span class="toggle-track"></span>
-            </label>
+          <div id="feed-log" style="padding:12px 16px;height:220px;overflow-y:auto;display:flex;flex-direction:column-reverse;gap:0">
+            <div class="text-muted text-sm">Waiting for broker events...</div>
           </div>
-        </div>
-        <div class="run-panel__foot">
-          <button class="btn btn-primary btn-lg" id="btn-run-exec" style="flex:1">▶ Run Execution Plan</button>
-        </div>
-      </div>
-
-      <!-- Emergency controls -->
-      <div class="card" style="border-color:rgba(255,64,96,0.22)">
-        <div class="card-header" style="background:rgba(255,61,87,0.05)">
-          <span class="card-title" style="color:var(--red)">⚠ Emergency Controls</span>
-        </div>
-        <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
-          <div style="font-family:var(--f-mono);font-size:11px;color:var(--text-dim);line-height:1.6">
-            Kill switch immediately cancels all pending orders and halts new submissions for the current execution plan.
-          </div>
-          <button class="kill-switch" id="btn-kill" style="width:100%;padding:10px" disabled>
-            ☠ ARM KILL SWITCH
-          </button>
-          <div id="kill-confirm" style="display:none;flex-direction:column;gap:8px">
-            <div style="font-family:var(--f-mono);font-size:11px;color:var(--red);text-align:center;padding:4px 0">
-              ⚠ CONFIRM TO HALT ALL TRADING
-            </div>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-ghost btn-sm" id="btn-kill-cancel" style="flex:1">Cancel</button>
-              <button class="btn btn-sm" id="btn-kill-confirm" style="flex:1;background:var(--red);color:#fff;border:none">⚡ CONFIRM KILL</button>
-            </div>
-          </div>
-          <div id="kill-activated" style="display:none;padding:12px;border-radius:8px;background:rgba(255,61,87,0.12);border:1px solid rgba(255,61,87,0.4);text-align:center">
-            <div style="font-family:var(--f-display);font-size:11px;font-weight:700;color:var(--red)">KILL SWITCH ACTIVATED</div>
-            <div style="font-family:var(--f-mono);font-size:10px;color:var(--red);opacity:0.7;margin-top:4px">All orders cancelled · No new orders</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Live positions mini -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Live Positions</span>
-          <button class="btn btn-ghost btn-sm" id="btn-refresh-pos">Refresh</button>
-        </div>
-        <div id="positions-body" class="card-body">
-          <div class="text-muted text-sm">Loading…</div>
         </div>
       </div>
     </div>
 
-    <!-- RIGHT -->
-    <div style="display:flex;flex-direction:column;gap:16px">
-      <!-- Order stream -->
-      <div class="results-panel">
-        <div class="results-panel__header">
-          <span class="card-title">Order Stream</span>
-          <div style="display:flex;gap:10px;align-items:center">
-            <span id="order-count" class="text-xs text-muted font-mono">0 orders</span>
-            <select class="form-select" id="filter-status" style="padding:3px 8px;font-size:11px;height:auto;width:auto">
-              <option value="all">All</option>
-              <option value="filled">Filled</option>
-              <option value="pending">Pending</option>
-              <option value="failed">Failed</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-            <button class="btn btn-ghost btn-sm" id="btn-refresh-orders">Refresh</button>
-          </div>
-        </div>
-        <div class="results-panel__body" id="orders-body">
-          <div class="loading-overlay" style="min-height:100px"><div class="spinner"></div><span>Loading orders…</span></div>
-        </div>
-      </div>
-
-      <!-- Live feed -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Live Feed</span>
-          <span id="feed-status" class="text-xs text-muted font-mono">connecting…</span>
-        </div>
-        <div id="feed-log" style="padding:12px 16px;height:200px;overflow-y:auto;display:flex;flex-direction:column-reverse;gap:0">
-          <div class="text-muted text-sm">Waiting for events…</div>
+    <div class="live-confirm-modal" id="live-confirm-modal" hidden>
+      <div class="live-confirm-modal__backdrop" data-live-close></div>
+      <div class="live-confirm-modal__panel">
+        <div class="live-confirm-modal__title">确认 Live 下单</div>
+        <div class="live-confirm-modal__body" id="live-confirm-body"></div>
+        <div class="live-confirm-modal__actions">
+          <button class="btn btn-ghost" id="btn-live-cancel">取消</button>
+          <button class="btn btn-primary" id="btn-live-confirm">确认提交 Live</button>
         </div>
       </div>
     </div>
-  </div>`;
+  `;
 }
 
-/* ════════════════════════════════════════════ EVENTS */
+export function render(container) {
+  _currentContainer = container;
+  _ws?.close();
+  _ws = null;
+  _orders = [];
+  _killArmed = false;
+  container.innerHTML = buildShell();
+  applyPrefill(container);
+  bindEvents(container);
+  loadRuntime(container);
+  _langCleanup ||= onLangChange(() => {
+    if (_currentContainer?.isConnected) render(_currentContainer);
+  });
+}
+
+export function destroy() {
+  _ws?.close();
+  _ws = null;
+  _orders = [];
+  _killArmed = false;
+  _currentContainer = null;
+  _langCleanup?.();
+  _langCleanup = null;
+}
+
 function bindEvents(container) {
-  container.querySelector('#btn-run-exec').addEventListener('click', () => runExecution(container));
-  container.querySelector('#btn-refresh-orders').addEventListener('click', () => loadOrders(container));
-  container.querySelector('#btn-refresh-pos').addEventListener('click', () => loadPositions(container));
-  container.querySelector('#filter-status').addEventListener('change', () => renderOrders(container));
-
-  /* Alpaca API key persistence */
-  const keyEl    = container.querySelector('#ex-alpaca-key');
-  const secretEl = container.querySelector('#ex-alpaca-secret');
-  const statusEl = container.querySelector('#alpaca-key-status');
-  const syncKeyStatus = () => {
-    const hasKey = !!(localStorage.getItem('qt.alpaca.key'));
-    if (statusEl) statusEl.style.display = hasKey ? 'inline' : 'none';
-  };
-  if (keyEl) {
-    keyEl.value = localStorage.getItem('qt.alpaca.key') || '';
-    keyEl.addEventListener('change', () => {
-      if (keyEl.value) localStorage.setItem('qt.alpaca.key', keyEl.value);
-      else localStorage.removeItem('qt.alpaca.key');
-      syncKeyStatus();
-      if (keyEl.value) toast.success(translateLoose('API key saved'), translateLoose('Stored locally in browser'));
-    });
-  }
-  if (secretEl) {
-    secretEl.value = localStorage.getItem('qt.alpaca.secret') || '';
-    secretEl.addEventListener('change', () => {
-      if (secretEl.value) localStorage.setItem('qt.alpaca.secret', secretEl.value);
-      else localStorage.removeItem('qt.alpaca.secret');
-    });
-  }
-  syncKeyStatus();
-
-  /* Kill switch */
-  const killBtn = container.querySelector('#btn-kill');
-  const killHeader = container.querySelector('#btn-kill-header');
-  [killBtn, killHeader].forEach(btn => {
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      _killArmed = !_killArmed;
-      const cfm = container.querySelector('#kill-confirm');
-      if (_killArmed) {
-        killBtn.textContent = '⚠ ARMED — confirm below';
-        killBtn.classList.add('armed');
-        if (cfm) cfm.style.display = 'flex';
-      } else { disarmKill(container); }
-    });
+  container.querySelector('#btn-run-exec')?.addEventListener('click', () => requestExecution(container));
+  container.querySelector('#btn-refresh-orders')?.addEventListener('click', () => loadOrders(container));
+  container.querySelector('#btn-refresh-pos')?.addEventListener('click', () => loadPositions(container));
+  container.querySelector('#btn-refresh-account')?.addEventListener('click', () => loadAccount(container));
+  container.querySelector('#filter-status')?.addEventListener('change', () => renderOrders(container));
+  container.querySelector('#ex-mode')?.addEventListener('change', async () => {
+    updateModeBadge(container);
+    await loadRuntime(container);
   });
 
-  container.querySelector('#btn-kill-cancel')?.addEventListener('click', () => disarmKill(container));
+  const killButton = container.querySelector('#btn-kill');
+  killButton?.addEventListener('click', () => {
+    _killArmed = !_killArmed;
+    container.querySelector('#kill-confirm').style.display = _killArmed ? 'flex' : 'none';
+    killButton.textContent = _killArmed ? '等待确认...' : '启用熔断开关';
+  });
+  container.querySelector('#btn-kill-cancel')?.addEventListener('click', () => {
+    _killArmed = false;
+    container.querySelector('#kill-confirm').style.display = 'none';
+    killButton.textContent = '启用熔断开关';
+  });
   container.querySelector('#btn-kill-confirm')?.addEventListener('click', async () => {
-    disarmKill(container);
     try {
       await api.execution.killSwitch(true, 'Manual operator trigger');
-      toast.warning(translateLoose('Kill switch activated'), translateLoose('All pending orders cancelled'));
+      toast.warning('Kill switch activated', 'All pending broker orders were halted.');
+      container.querySelector('#kill-confirm').style.display = 'none';
       container.querySelector('#kill-activated').style.display = '';
-      loadOrders(container);
-    } catch (e) { toast.error('Kill switch failed', e.message); }
+      killButton.textContent = '熔断已激活';
+    } catch (error) {
+      toast.error('Kill switch failed', error.message || 'Unknown error');
+    }
+  });
+
+  container.querySelector('#btn-live-cancel')?.addEventListener('click', hideLiveConfirm);
+  container.querySelector('#btn-live-confirm')?.addEventListener('click', async () => {
+    hideLiveConfirm();
+    await submitExecution(container, true);
+  });
+  container.querySelectorAll('[data-live-close]')?.forEach((node) => {
+    node.addEventListener('click', hideLiveConfirm);
   });
 }
 
-function disarmKill(container) {
-  _killArmed = false;
-  const btn = container.querySelector('#btn-kill');
-  const cfm = container.querySelector('#kill-confirm');
-  if (btn) { btn.textContent = '☠ ARM KILL SWITCH'; btn.classList.remove('armed'); }
-  if (cfm) cfm.style.display = 'none';
+async function loadRuntime(container) {
+  updateModeBadge(container);
+  await loadAccount(container);
+  await loadOrders(container);
+  await loadPositions(container);
+  connectWS(container);
 }
 
-/* ════════════════════════════════════════════ RUN */
-async function runExecution(container) {
-  const btn = container.querySelector('#btn-run-exec');
-  btn.disabled = true; btn.textContent = 'Submitting…';
+function updateModeBadge(container) {
+  const mode = currentMode(container);
+  const modeBadge = container.querySelector('#monitor-mode');
+  const brokerMeta = container.querySelector('#execution-broker-meta');
+  if (modeBadge) {
+    modeBadge.textContent = mode.toUpperCase();
+    modeBadge.className = `badge ${mode === 'live' ? 'badge-failed' : 'badge-neutral'}`;
+  }
+  if (brokerMeta) brokerMeta.textContent = `Alpaca · ${mode}`;
+}
 
-  const uTxt         = container.querySelector('#ex-universe').value.trim();
-  const universe     = uTxt ? uTxt.split(/[,\s]+/).filter(Boolean).map(s => s.toUpperCase()) : [];
-  const capital      = Number(container.querySelector('#ex-capital').value) || 1000000;
-  const broker       = container.querySelector('#ex-broker').value;
+async function loadAccount(container) {
+  const broker = currentBroker(container);
+  const mode = currentMode(container);
+  try {
+    const payload = await api.execution.account(broker, mode);
+    const account = payload.account || {};
+    const warnings = payload.warnings || [];
+    const clock = payload.market_clock || {};
+
+    container.querySelector('#account-id').textContent = account.account_id || '--';
+    container.querySelector('#account-clock').textContent = clock.is_open ? 'MARKET OPEN' : (clock.next_open ? `Closed · next ${shortTime(clock.next_open)}` : 'Closed');
+    container.querySelector('#account-warning-count').textContent = String(warnings.length);
+    container.querySelector('#broker-status-note').textContent = warnings[0] || 'Server-side broker credentials active.';
+    container.querySelector('#account-equity').textContent = fmtMoney(account.equity);
+    container.querySelector('#account-buying-power').textContent = fmtMoney(account.buying_power);
+    container.querySelector('#account-cash').textContent = fmtMoney(account.cash);
+    container.querySelector('#account-daily-change').textContent = `${fmtSignedMoney(account.daily_change)} · ${fmtPct(account.daily_change_pct)}`;
+    container.querySelector('#execution-clock').textContent = clock.is_open ? 'Market Open' : 'Market Closed';
+    container.querySelector('#session-pnl').textContent = fmtSignedMoney(account.daily_change);
+    container.querySelector('#session-pnl').style.color = Number(account.daily_change || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+    container.querySelector('#execution-monitor-sub').textContent = `${payload.connected ? 'Real broker account sync' : 'Broker unavailable'} · ${payload.mode || mode}`;
+    container.querySelector('#btn-kill').disabled = !payload.connected;
+  } catch (error) {
+    container.querySelector('#broker-status-note').textContent = error.message || 'Could not load broker account.';
+    toast.error('Account sync failed', error.message || 'Unknown error');
+  }
+}
+
+async function requestExecution(container) {
+  const mode = currentMode(container);
   const submitOrders = container.querySelector('#ex-submit').checked;
-
-  try {
-    const res = await api.execution.paper({ universe, capital_base: capital, broker, mode: 'paper', submit_orders: submitOrders });
-    toast.success(translateLoose('Execution plan submitted'), translateLoose(`${res.orders?.length || 0} orders`));
-    [container.querySelector('#btn-kill'), container.querySelector('#btn-kill-header')].forEach(b => { if(b) b.disabled = false; });
-    await loadOrders(container);
-    _ws?.close(); connectWS(container, res.execution_id);
-  } catch (e) { toast.error('Execution failed', e.message); }
-  finally { btn.disabled = false; btn.textContent = '▶ Run Execution Plan'; }
+  if (mode === 'live' && submitOrders) {
+    openLiveConfirm(container);
+    return;
+  }
+  await submitExecution(container, false);
 }
 
-/* ════════════════════════════════════════════ ORDERS */
-async function loadOrders(container) {
-  const broker = container.querySelector('#ex-broker')?.value || 'alpaca';
+function openLiveConfirm(container) {
+  const modal = container.querySelector('#live-confirm-modal');
+  const capital = Number(container.querySelector('#ex-capital').value || 0);
+  const universe = container.querySelector('#ex-universe').value.trim() || 'default universe';
+  const body = container.querySelector('#live-confirm-body');
+  body.innerHTML = `
+    <div>Mode: <strong>LIVE</strong></div>
+    <div>Broker: <strong>${currentBroker(container)}</strong></div>
+    <div>Universe: <strong>${universe}</strong></div>
+    <div>Capital Base: <strong>${fmtMoney(capital)}</strong></div>
+    <div>Guardrail: <strong>Medium gate</strong></div>
+    <div style="color:var(--amber)">This submission will require server-side live routing permission and will be fully audited.</div>
+  `;
+  modal.hidden = false;
+}
+
+function hideLiveConfirm() {
+  _currentContainer?.querySelector('#live-confirm-modal')?.setAttribute('hidden', '');
+}
+
+async function submitExecution(container, liveConfirmed) {
+  const button = container.querySelector('#btn-run-exec');
+  button.disabled = true;
+  button.textContent = 'Submitting...';
+
+  const universeInput = container.querySelector('#ex-universe').value.trim();
+  const payload = {
+    universe: universeInput ? universeInput.split(/[,\s]+/).filter(Boolean).map((value) => value.toUpperCase()) : [],
+    capital_base: Number(container.querySelector('#ex-capital').value || 1000000),
+    broker: currentBroker(container),
+    mode: currentMode(container),
+    submit_orders: container.querySelector('#ex-submit').checked,
+    allow_duplicates: true,
+    live_confirmed: !!liveConfirmed,
+    operator_confirmation: liveConfirmed ? 'front_end_live_confirm_modal' : '',
+  };
+
   try {
-    const data = await api.execution.orders(broker, 'all', 100);
+    const response = await api.execution.paper(payload);
+    toast.success('Execution plan submitted', `${response.orders?.length || 0} orders staged`);
+    if (response.mode === 'live' && !response.submitted && response.broker_status === 'awaiting_live_confirmation') {
+      toast.warning('Live routing still gated', (response.warnings || [])[0] || 'Confirmation required.');
+    }
+    await loadRuntime(container);
+    connectWS(container, response.execution_id);
+  } catch (error) {
+    toast.error('Execution failed', error.message || 'Unknown error');
+  } finally {
+    button.disabled = false;
+    button.textContent = '运行执行计划';
+  }
+}
+
+async function loadOrders(container) {
+  const broker = currentBroker(container);
+  const mode = currentMode(container);
+  try {
+    const data = await api.execution.orders(broker, 'all', 100, mode);
     _orders = data.orders || [];
     renderOrders(container);
-  } catch (e) {
-    container.querySelector('#orders-body').innerHTML =
-      `<div class="empty-state" style="min-height:100px"><div class="empty-state__title">${translateLoose('Could not load orders')}</div><div class="empty-state__text">${e.message}</div></div>`;
+  } catch (error) {
+    container.querySelector('#orders-body').innerHTML = `
+      <div class="empty-state" style="min-height:120px">
+        <div class="empty-state__title">无法加载订单</div>
+        <div class="empty-state__text">${error.message || 'Unknown error'}</div>
+      </div>
+    `;
   }
 }
 
 function renderOrders(container) {
-  const body    = container.querySelector('#orders-body');
-  const filter  = container.querySelector('#filter-status')?.value || 'all';
-  const countEl = container.querySelector('#order-count');
-  const filtered = filter === 'all' ? _orders : _orders.filter(o => o.status === filter);
-  if (countEl) countEl.textContent = translateLoose(`${filtered.length} orders`);
+  const body = container.querySelector('#orders-body');
+  const filter = container.querySelector('#filter-status')?.value || 'all';
+  const filtered = filter === 'all' ? _orders : _orders.filter((item) => item.status === filter);
+  container.querySelector('#order-count').textContent = `${filtered.length} orders`;
 
   if (!filtered.length) {
-    body.innerHTML = `<div class="empty-state" style="min-height:100px">
-      <div class="empty-state__icon">📋</div>
-      <div class="empty-state__title">${translateLoose('No orders')}</div>
-      <div class="empty-state__text">${translateLoose('Submit an execution plan to see orders here.')}</div>
-    </div>`;
+    body.innerHTML = `
+      <div class="empty-state" style="min-height:120px">
+        <div class="empty-state__title">当前没有订单</div>
+        <div class="empty-state__text">订单为空时显示空状态，不再显示 File not found。</div>
+      </div>
+    `;
     return;
   }
 
-  const rows = filtered.map(o => `
-    <tr>
-      <td class="cell-symbol">${o.symbol}</td>
-      <td><span class="badge badge-${o.side==='buy'?'long':'short'}">${(o.side||'').toUpperCase()}</span></td>
-      <td class="cell-num">${o.qty || o.quantity || '—'}</td>
-      <td><span class="badge badge-${statusClass(o.status)}">${(o.status||'').toUpperCase()}</span></td>
-      <td class="cell-num">${o.fill_price ? '$'+Number(o.fill_price).toFixed(2) : '—'}</td>
-      <td class="cell-num">${o.limit_price ? '$'+Number(o.limit_price).toFixed(2) : '—'}</td>
-      <td class="text-dim text-sm">${o.order_type || ''}</td>
-      <td class="text-dim text-sm" style="font-size:10px">${shortTime(o.submitted_at || o.created_at)}</td>
-    </tr>`).join('');
-
-  body.innerHTML = `<div class="tbl-wrap"><table>
-    <thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Status</th><th>Fill $</th><th>Limit $</th><th>Type</th><th>Time</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
+  body.innerHTML = `
+    <div class="tbl-wrap"><table>
+      <thead>
+        <tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Status</th><th>Fill</th><th>Limit</th><th>Type</th><th>Time</th></tr>
+      </thead>
+      <tbody>
+        ${filtered.map((order) => `
+          <tr>
+            <td class="cell-symbol">${order.symbol || '--'}</td>
+            <td><span class="badge badge-${order.side === 'buy' ? 'long' : 'short'}">${String(order.side || '').toUpperCase()}</span></td>
+            <td class="cell-num">${order.qty || order.quantity || '--'}</td>
+            <td><span class="badge badge-${statusClass(order.status)}">${String(order.status || '').toUpperCase()}</span></td>
+            <td class="cell-num">${order.fill_price ? fmtMoney(order.fill_price) : '--'}</td>
+            <td class="cell-num">${order.limit_price ? fmtMoney(order.limit_price) : '--'}</td>
+            <td class="text-dim text-sm">${order.order_type || order.type || '--'}</td>
+            <td class="text-dim text-sm">${shortTime(order.submitted_at || order.created_at)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table></div>
+  `;
 }
 
-/* ════════════════════════════════════════════ POSITIONS */
 async function loadPositions(container) {
-  const broker = container.querySelector('#ex-broker')?.value || 'alpaca';
-  const el = container.querySelector('#positions-body');
+  const broker = currentBroker(container);
+  const mode = currentMode(container);
+  const target = container.querySelector('#positions-body');
   try {
-    const data = await api.execution.positions(broker);
-    const positions = data.positions || [];
-    if (!positions.length) { el.innerHTML = `<div class="text-muted text-sm">${translateLoose('No open positions')}</div>`; return; }
-    el.innerHTML = positions.map(p => {
-      const pnl = p.unrealized_pl ?? p.unrealized_pnl;
-      const cls = (pnl ?? 0) >= 0 ? 'pos' : 'neg';
-      return `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.02)">
-        <div>
-          <span class="cell-symbol" style="font-size:12px">${p.symbol}</span>
-          <span style="margin-left:8px;color:var(--text-dim);font-family:var(--f-mono);font-size:10px">${translateLoose(`${p.qty} shares`)}</span>
-        </div>
-        <div style="text-align:right">
-          <div style="font-family:var(--f-mono);font-size:11px">${p.current_price ? '$'+Number(p.current_price).toFixed(2) : '—'}</div>
-          <div class="${cls}" style="font-family:var(--f-display);font-size:11px;font-weight:700">${pnl != null ? (pnl>=0?'+':'')+Number(pnl).toFixed(2) : '—'}</div>
-        </div>
-      </div>`;
-    }).join('');
-  } catch (e) { el.innerHTML = `<div class="text-muted text-sm">${e.message}</div>`; }
+    const payload = await api.execution.positions(broker, mode);
+    const positions = payload.positions || [];
+    if (!positions.length) {
+      target.innerHTML = `<div class="empty-state" style="min-height:100px"><div class="empty-state__title">当前无持仓</div><div class="empty-state__text">空仓时显示空状态。</div></div>`;
+      return;
+    }
+    target.innerHTML = `
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Side</th><th>Market Value</th><th>P&L</th></tr></thead>
+        <tbody>
+          ${positions.map((position) => {
+            const pnl = Number(position.unrealized_pl || 0);
+            return `
+              <tr>
+                <td class="cell-symbol">${position.symbol || '--'}</td>
+                <td>${position.qty || '--'}</td>
+                <td>${position.side || 'long'}</td>
+                <td>${position.market_value ? fmtMoney(position.market_value) : '--'}</td>
+                <td class="${pnl >= 0 ? 'pos' : 'neg'}">${position.unrealized_pl ? fmtSignedMoney(position.unrealized_pl) : '--'}</td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table></div>
+    `;
+  } catch (error) {
+    target.innerHTML = `<div class="empty-state" style="min-height:100px"><div class="empty-state__title">持仓读取失败</div><div class="empty-state__text">${error.message || 'Unknown error'}</div></div>`;
+  }
 }
 
-/* ════════════════════════════════════════════ WS */
 function connectWS(container, executionId = null) {
-  const pill    = container.querySelector('#ws-pill');
+  const broker = currentBroker(container);
+  const mode = currentMode(container);
+  const pill = container.querySelector('#ws-pill');
   const feedLog = container.querySelector('#feed-log');
-  const status  = container.querySelector('#feed-status');
+  const status = container.querySelector('#feed-status');
   _ws?.close();
 
-  _ws = openExecutionWS('alpaca', executionId, 20, (msg) => {
-    if (pill) { pill.textContent = 'LIVE'; pill.className = 'live-pill'; }
+  _ws = openExecutionWS(broker, executionId, 20, (msg) => {
+    if (pill) {
+      pill.textContent = 'LIVE';
+      pill.className = 'live-pill';
+    }
     if (status) status.textContent = 'live';
     if (feedLog) {
       const entry = document.createElement('div');
+      const eventStatus = String(msg.status || '').toUpperCase();
       entry.style.cssText = 'padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03);font-family:var(--f-mono);font-size:11px';
-      const t = msg.timestamp ? shortTime(msg.timestamp) : '';
-      const st = msg.status || '';
-      const col = st === 'filled' ? 'var(--green)' : st === 'failed' ? 'var(--red)' : 'var(--text-secondary)';
-      entry.innerHTML = `<span style="color:var(--text-dim)">${t}</span> <span style="color:${col}">${msg.symbol || msg.type || '—'}</span> <span style="color:${col}">${st.toUpperCase()}</span>${msg.fill_price ? ` <span style="color:var(--text-dim)">@ $${Number(msg.fill_price).toFixed(2)}</span>` : ''}`;
+      entry.innerHTML = `<span style="color:var(--text-dim)">${shortTime(msg.timestamp)}</span> <span>${msg.symbol || msg.type || '--'}</span> <span style="color:${eventStatus === 'FILLED' ? 'var(--green)' : eventStatus === 'FAILED' ? 'var(--red)' : 'var(--text-secondary)'}">${eventStatus || '--'}</span>`;
       feedLog.prepend(entry);
-      if (msg.order_id) {
-        const idx = _orders.findIndex(o => o.order_id === msg.order_id);
-        if (idx >= 0) _orders[idx] = { ..._orders[idx], ...msg };
-        else _orders.unshift(msg);
-        renderOrders(container);
-      }
-    }
-    /* Update session P&L display */
-    const pnlEl = container.querySelector('#session-pnl');
-    if (pnlEl && msg.unrealized_pl != null) {
-      const v = Number(msg.unrealized_pl);
-      pnlEl.textContent = (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
-      pnlEl.style.color = v >= 0 ? 'var(--green)' : 'var(--red)';
     }
   }, () => {
-    if (pill) { pill.textContent = 'DISCONNECTED'; pill.className = 'live-pill live-pill--off'; }
+    if (pill) {
+      pill.textContent = 'DISCONNECTED';
+      pill.className = 'live-pill live-pill--off';
+    }
     if (status) status.textContent = 'disconnected';
-  });
-}
-
-/* ════════════════════════════════════════════ HELPERS */
-function statusClass(s) {
-  if (s === 'filled')    return 'filled';
-  if (s === 'failed')    return 'failed';
-  if (s === 'cancelled') return 'neutral';
-  return 'pending';
-}
-
-function shortTime(iso) {
-  if (!iso) return '';
-  try { return new Date(iso).toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
-  catch { return iso; }
+  }, mode);
 }

@@ -5,21 +5,29 @@ import { t, getLang, onLangChange } from '../i18n.js?v=8';
 export function render(container) {
   container.innerHTML = buildShell();
   bindEvents(container);
-  onLangChange(() => { container.innerHTML = buildShell(); bindEvents(container); });
+  onLangChange(() => {
+    container.innerHTML = buildShell();
+    bindEvents(container);
+  });
 }
 
 function buildShell() {
   const lang = getLang();
+  const homeLabel = lang === 'zh' ? '返回首页' : 'Back Home';
   const zhLabel = lang === 'en' ? 'CH' : '中';
   return `
   <div class="auth-split auth-split--reversed">
-    <!-- RIGHT: Form -->
     <div class="auth-form-panel">
       <div class="auth-form-wrap">
-        <!-- Lang toggle -->
-        <div style="position:absolute;top:20px;right:24px;display:flex;gap:0" data-no-autotranslate="true" translate="no">
-          <button class="lang-btn${lang==='zh'?' active':''}" data-lang="zh" data-no-autotranslate="true" translate="no">${zhLabel}</button>
-          <button class="lang-btn${lang==='en'?' active':''}" data-lang="en" data-no-autotranslate="true" translate="no">EN</button>
+        <div class="auth-utility-row">
+          <a href="#/dashboard" class="auth-home-btn" id="auth-home-link">
+            <span class="auth-home-btn__icon"><-</span>
+            <span class="auth-home-btn__label">${homeLabel}</span>
+          </a>
+          <div style="display:flex;gap:0" data-no-autotranslate="true" translate="no">
+            <button class="lang-btn${lang === 'zh' ? ' active' : ''}" data-lang="zh" data-no-autotranslate="true" translate="no">${zhLabel}</button>
+            <button class="lang-btn${lang === 'en' ? ' active' : ''}" data-lang="en" data-no-autotranslate="true" translate="no">EN</button>
+          </div>
         </div>
 
         <div class="auth-form-title">${t('auth.register')}</div>
@@ -28,20 +36,17 @@ function buildShell() {
         <form id="register-form" class="auth-form" autocomplete="on">
           <div class="auth-field">
             <label class="auth-label">${t('auth.name')}</label>
-            <input class="auth-input" id="reg-name" type="text" autocomplete="name"
-              placeholder="${t('auth.enter_name')}">
+            <input class="auth-input" id="reg-name" type="text" autocomplete="name" placeholder="${t('auth.enter_name')}">
           </div>
           <div class="auth-field">
             <label class="auth-label">${t('auth.email')}</label>
-            <input class="auth-input" id="reg-email" type="email" autocomplete="email"
-              placeholder="${t('auth.enter_email')}" required>
+            <input class="auth-input" id="reg-email" type="email" autocomplete="email" placeholder="${t('auth.enter_email')}" required>
           </div>
           <div class="auth-field">
             <label class="auth-label">${t('auth.password')}</label>
             <div style="position:relative">
-              <input class="auth-input" id="reg-password" type="password"
-                placeholder="${t('auth.enter_password')}" required minlength="6">
-              <button type="button" class="auth-eye-btn" id="toggle-pw1" tabindex="-1">👁</button>
+              <input class="auth-input" id="reg-password" type="password" placeholder="${t('auth.enter_password')}" required minlength="6">
+              <button type="button" class="auth-eye-btn" id="toggle-pw1" tabindex="-1">Show</button>
             </div>
             <div id="pw-strength" style="height:3px;border-radius:2px;margin-top:6px;background:rgba(255,255,255,0.08);overflow:hidden">
               <div id="pw-strength-bar" style="height:100%;width:0;transition:all 0.3s;border-radius:2px"></div>
@@ -51,9 +56,8 @@ function buildShell() {
           <div class="auth-field">
             <label class="auth-label">${t('auth.confirm_pw')}</label>
             <div style="position:relative">
-              <input class="auth-input" id="reg-confirm" type="password"
-                placeholder="${t('auth.enter_password')}" required>
-              <button type="button" class="auth-eye-btn" id="toggle-pw2" tabindex="-1">👁</button>
+              <input class="auth-input" id="reg-confirm" type="password" placeholder="${t('auth.enter_password')}" required>
+              <button type="button" class="auth-eye-btn" id="toggle-pw2" tabindex="-1">Show</button>
             </div>
           </div>
 
@@ -73,12 +77,11 @@ function buildShell() {
           <a href="#/login" class="auth-link">${t('auth.sign_in')}</a>
         </div>
 
-        <!-- Benefits -->
         <div class="auth-benefits">
           ${[
-            ['📊', t('auth.benefit1')],
-            ['🤖', t('auth.benefit2')],
-            ['⚡', t('auth.benefit3')],
+            ['DATA', t('auth.benefit1')],
+            ['AI', t('auth.benefit2')],
+            ['RISK', t('auth.benefit3')],
           ].map(([icon, text]) => `
             <div class="auth-benefit-item">
               <span>${icon}</span><span>${text}</span>
@@ -87,7 +90,6 @@ function buildShell() {
       </div>
     </div>
 
-    <!-- LEFT: Visual panel -->
     <div class="auth-visual auth-visual--right">
       <div class="auth-visual-content">
         <div class="auth-logo">
@@ -100,7 +102,6 @@ function buildShell() {
         <div class="auth-headline">${t('auth.headline_register').replace('\n', '<br>')}</div>
         <div class="auth-tagline">${t('auth.tagline_register').replace('\n', '<br>')}</div>
 
-        <!-- Rotating metrics -->
         <div class="auth-metric-showcase" id="metric-showcase">
           <div class="auth-showcase-card">
             <div class="auth-showcase-val">1.84</div>
@@ -125,92 +126,95 @@ function buildShell() {
 }
 
 function bindEvents(container) {
-  // Lang toggle
-  container.querySelectorAll('.lang-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      import('../i18n.js?v=8').then(m => m.setLang(btn.dataset.lang));
+  container.querySelectorAll('.lang-btn').forEach((button) => {
+    button.addEventListener('click', () => {
+      import('../i18n.js?v=8').then((module) => module.setLang(button.dataset.lang));
     });
   });
 
-  // Password toggles
   container.querySelector('#toggle-pw1')?.addEventListener('click', () => {
-    const pw = container.querySelector('#reg-password');
-    pw.type = pw.type === 'password' ? 'text' : 'password';
+    togglePasswordField(container.querySelector('#reg-password'), container.querySelector('#toggle-pw1'));
   });
   container.querySelector('#toggle-pw2')?.addEventListener('click', () => {
-    const pw = container.querySelector('#reg-confirm');
-    pw.type = pw.type === 'password' ? 'text' : 'password';
+    togglePasswordField(container.querySelector('#reg-confirm'), container.querySelector('#toggle-pw2'));
   });
 
-  // Password strength meter
-  container.querySelector('#reg-password').addEventListener('input', e => {
-    const val = e.target.value;
+  container.querySelector('#reg-password')?.addEventListener('input', (event) => {
+    const value = event.target.value;
     const bar = container.querySelector('#pw-strength-bar');
-    const lbl = container.querySelector('#pw-strength-label');
-    const strength = getPasswordStrength(val);
-    bar.style.width = strength.pct + '%';
+    const label = container.querySelector('#pw-strength-label');
+    const strength = getPasswordStrength(value);
+    bar.style.width = `${strength.pct}%`;
     bar.style.background = strength.color;
-    lbl.textContent = val ? strength.label : '';
-    lbl.style.color = strength.color;
+    label.textContent = value ? strength.label : '';
+    label.style.color = strength.color;
   });
 
-  // Form submit
-  container.querySelector('#register-form').addEventListener('submit', async e => {
-    e.preventDefault();
+  container.querySelector('#register-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
     await doRegister(container);
   });
 }
 
-function getPasswordStrength(pw) {
-  if (!pw || pw.length < 3) return { pct: 10, color: 'var(--red)', label: t('auth.pw_too_short') };
+function togglePasswordField(input, button) {
+  const nextType = input.type === 'password' ? 'text' : 'password';
+  input.type = nextType;
+  button.textContent = nextType === 'text' ? 'Hide' : 'Show';
+}
+
+function getPasswordStrength(password) {
+  if (!password || password.length < 3) {
+    return { pct: 10, color: 'var(--red)', label: t('auth.pw_too_short') };
+  }
   let score = 0;
-  if (pw.length >= 8) score++;
-  if (pw.length >= 12) score++;
-  if (/[A-Z]/.test(pw)) score++;
-  if (/[0-9]/.test(pw)) score++;
-  if (/[^A-Za-z0-9]/.test(pw)) score++;
+  if (password.length >= 8) score += 1;
+  if (password.length >= 12) score += 1;
+  if (/[A-Z]/.test(password)) score += 1;
+  if (/[0-9]/.test(password)) score += 1;
+  if (/[^A-Za-z0-9]/.test(password)) score += 1;
   const levels = [
-    { min: 0, pct: 20, color: 'var(--red)',   label: t('auth.pw_weak') },
-    { min: 2, pct: 45, color: 'var(--amber)',  label: t('auth.pw_fair') },
-    { min: 3, pct: 70, color: '#F0A500',       label: t('auth.pw_good') },
-    { min: 4, pct: 100,color: 'var(--green)',  label: t('auth.pw_strong') },
+    { min: 0, pct: 20, color: 'var(--red)', label: t('auth.pw_weak') },
+    { min: 2, pct: 45, color: 'var(--amber)', label: t('auth.pw_fair') },
+    { min: 3, pct: 70, color: '#F0A500', label: t('auth.pw_good') },
+    { min: 4, pct: 100, color: 'var(--green)', label: t('auth.pw_strong') },
   ];
-  return levels.filter(l => score >= l.min).pop() || levels[0];
+  return levels.filter((item) => score >= item.min).pop() || levels[0];
 }
 
 async function doRegister(container) {
-  const btn     = container.querySelector('#reg-btn');
-  const errEl   = container.querySelector('#reg-error');
-  const name    = container.querySelector('#reg-name').value.trim();
-  const email   = container.querySelector('#reg-email').value.trim();
-  const pw      = container.querySelector('#reg-password').value;
+  const button = container.querySelector('#reg-btn');
+  const errorEl = container.querySelector('#reg-error');
+  const name = container.querySelector('#reg-name').value.trim();
+  const email = container.querySelector('#reg-email').value.trim();
+  const password = container.querySelector('#reg-password').value;
   const confirm = container.querySelector('#reg-confirm').value;
 
-  errEl.style.display = 'none';
+  errorEl.style.display = 'none';
 
-  if (pw !== confirm) {
-    errEl.textContent = t('auth.pw_mismatch');
-    errEl.style.display = 'block';
+  if (password !== confirm) {
+    errorEl.textContent = t('auth.pw_mismatch');
+    errorEl.style.display = 'block';
     return;
   }
-  if (pw.length < 6) {
-    errEl.textContent = t('auth.pw_min_len');
-    errEl.style.display = 'block';
+  if (password.length < 6) {
+    errorEl.textContent = t('auth.pw_min_len');
+    errorEl.style.display = 'block';
     return;
   }
 
-  btn.disabled = true; btn.textContent = t('common.loading');
+  button.disabled = true;
+  button.textContent = t('common.loading');
 
   try {
-    const res = await api.auth.register({ email, password: pw, name });
-    sessionStorage.setItem('qt-token', res.token);
-    sessionStorage.setItem('qt-user', JSON.stringify(res.user));
-    toast.success(t('auth.register_success'), res.user?.name || email);
+    const response = await api.auth.register({ email, password, name });
+    sessionStorage.setItem('qt-token', response.token);
+    sessionStorage.setItem('qt-user', JSON.stringify(response.user));
+    toast.success(t('auth.register_success'), response.user?.name || email);
     window.location.hash = '#/dashboard';
-  } catch(err) {
-    errEl.textContent = err.message;
-    errEl.style.display = 'block';
-    btn.disabled = false;
-    btn.textContent = t('auth.sign_up');
+  } catch (error) {
+    errorEl.textContent = error.message;
+    errorEl.style.display = 'block';
+    button.disabled = false;
+    button.textContent = t('auth.sign_up');
   }
 }

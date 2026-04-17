@@ -65,16 +65,33 @@ export function updateHealth(online) {
   text.textContent = online ? t('common.backend_online') : t('common.backend_offline');
 }
 
+function syncHealthLabel() {
+  const dot = document.getElementById('health-dot');
+  const text = document.getElementById('health-text');
+  if (!dot || !text) return;
+
+  if (dot.classList.contains('online')) {
+    updateHealth(true);
+    return;
+  }
+
+  if (dot.classList.contains('degraded')) {
+    updateHealth(false);
+    return;
+  }
+
+  text.textContent = t('common.connecting');
+}
+
 export function initNav() {
   renderNav();
-  window.addEventListener('route-change', renderNav);
+  syncHealthLabel();
+  window.addEventListener('route-change', () => {
+    renderNav();
+    requestAnimationFrame(syncHealthLabel);
+  });
   onLangChange(() => {
     renderNav();
-    const dot = document.getElementById('health-dot');
-    const text = document.getElementById('health-text');
-    if (!dot || !text) return;
-    if (dot.classList.contains('online')) updateHealth(true);
-    else if (dot.classList.contains('degraded')) updateHealth(false);
-    else text.textContent = t('common.connecting');
+    syncHealthLabel();
   });
 }

@@ -14,6 +14,7 @@ import requests
 from pydantic import BaseModel
 
 from gateway.config import settings
+from gateway.quant.esg_house_score import compute_house_score
 from gateway.quant.alpha_ranker import AlphaRankerRuntime
 from gateway.quant.alpaca import AlpacaPaperClient
 from gateway.quant.brokers import BrokerRegistry
@@ -33,6 +34,7 @@ from gateway.quant.models import (
     OrderLifecycleRecord,
     PortfolioPosition,
     PortfolioSummary,
+    ProjectionScenario,
     ResearchSignal,
     RiskAlert,
     TrainingPlan,
@@ -68,6 +70,11 @@ def _as_dict(model: BaseModel | dict[str, Any]) -> dict[str, Any]:
     return dict(model)
 
 
+def _safe_mean(values: list[float]) -> float:
+    cleaned = [float(value) for value in values if value is not None]
+    return float(statistics.mean(cleaned)) if cleaned else 0.0
+
+
 class QuantSystemService:
     def __init__(self, get_client: Any | None = None) -> None:
         self.storage = QuantStorageGateway(get_client=get_client)
@@ -83,17 +90,273 @@ class QuantSystemService:
         self.default_universe_name = getattr(settings, "QUANT_DEFAULT_UNIVERSE", "ESG_US_LARGE_CAP")
         self.default_broker = getattr(settings, "QUANT_BROKER_DEFAULT", "alpaca")
 
-    def get_default_universe(self, symbols: list[str] | None = None) -> list[UniverseMember]:
-        base_universe = [
-            UniverseMember(symbol="AAPL", company_name="Apple", sector="Technology", industry="Consumer Electronics", benchmark_weight=0.068),
-            UniverseMember(symbol="MSFT", company_name="Microsoft", sector="Technology", industry="Software", benchmark_weight=0.072),
-            UniverseMember(symbol="TSLA", company_name="Tesla", sector="Consumer Discretionary", industry="EV Manufacturing", benchmark_weight=0.021),
-            UniverseMember(symbol="NVDA", company_name="NVIDIA", sector="Technology", industry="Semiconductors", benchmark_weight=0.064),
-            UniverseMember(symbol="JPM", company_name="JPMorgan Chase", sector="Financials", industry="Banks", benchmark_weight=0.013),
-            UniverseMember(symbol="NEE", company_name="NextEra Energy", sector="Utilities", industry="Renewables", benchmark_weight=0.004),
-            UniverseMember(symbol="PG", company_name="Procter & Gamble", sector="Consumer Staples", industry="Household Products", benchmark_weight=0.007),
-            UniverseMember(symbol="UNH", company_name="UnitedHealth", sector="Health Care", industry="Managed Care", benchmark_weight=0.011),
+    @staticmethod
+    def _normalize_broker_mode(mode: str | None) -> str:
+        return "live" if str(mode or "").strip().lower() == "live" else "paper"
+
+    def _prepare_broker_adapter(self, broker: str | None, mode: str | None = None):
+        adapter = self._resolve_broker(broker)
+        normalized_mode = self._normalize_broker_mode(mode)
+        if adapter.broker_id == "alpaca" and hasattr(self.alpaca, "set_runtime_mode"):
+            self.alpaca.set_runtime_mode(normalized_mode)
+        return adapter, normalized_mode
+
+    @staticmethod
+    def _market_surface_catalog() -> list[dict[str, Any]]:
+        return [
+            {"symbol": "AAPL", "company_name": "Apple", "sector": "Technology", "industry": "Consumer Electronics", "benchmark_weight": 0.068},
+            {"symbol": "MSFT", "company_name": "Microsoft", "sector": "Technology", "industry": "Software", "benchmark_weight": 0.072},
+            {"symbol": "NVDA", "company_name": "NVIDIA", "sector": "Technology", "industry": "Semiconductors", "benchmark_weight": 0.064},
+            {"symbol": "GOOGL", "company_name": "Alphabet", "sector": "Communication Services", "industry": "Internet Services", "benchmark_weight": 0.041},
+            {"symbol": "META", "company_name": "Meta", "sector": "Communication Services", "industry": "Internet Content", "benchmark_weight": 0.027},
+            {"symbol": "AMZN", "company_name": "Amazon", "sector": "Consumer Discretionary", "industry": "E-Commerce", "benchmark_weight": 0.038},
+            {"symbol": "TSLA", "company_name": "Tesla", "sector": "Consumer Discretionary", "industry": "EV Manufacturing", "benchmark_weight": 0.021},
+            {"symbol": "WMT", "company_name": "Walmart", "sector": "Consumer Staples", "industry": "Retail", "benchmark_weight": 0.011},
+            {"symbol": "COST", "company_name": "Costco", "sector": "Consumer Staples", "industry": "Retail", "benchmark_weight": 0.009},
+            {"symbol": "PG", "company_name": "Procter & Gamble", "sector": "Consumer Staples", "industry": "Household Products", "benchmark_weight": 0.007},
+            {"symbol": "JPM", "company_name": "JPMorgan Chase", "sector": "Financials", "industry": "Banks", "benchmark_weight": 0.013},
+            {"symbol": "BAC", "company_name": "Bank of America", "sector": "Financials", "industry": "Banks", "benchmark_weight": 0.008},
+            {"symbol": "BRK.B", "company_name": "Berkshire Hathaway", "sector": "Financials", "industry": "Diversified Financials", "benchmark_weight": 0.017},
+            {"symbol": "XOM", "company_name": "Exxon Mobil", "sector": "Energy", "industry": "Integrated Oil & Gas", "benchmark_weight": 0.012},
+            {"symbol": "CVX", "company_name": "Chevron", "sector": "Energy", "industry": "Integrated Oil & Gas", "benchmark_weight": 0.009},
+            {"symbol": "NEE", "company_name": "NextEra Energy", "sector": "Utilities", "industry": "Renewables", "benchmark_weight": 0.004},
+            {"symbol": "DUK", "company_name": "Duke Energy", "sector": "Utilities", "industry": "Utilities", "benchmark_weight": 0.003},
+            {"symbol": "LLY", "company_name": "Eli Lilly", "sector": "Health Care", "industry": "Biopharma", "benchmark_weight": 0.013},
+            {"symbol": "UNH", "company_name": "UnitedHealth", "sector": "Health Care", "industry": "Managed Care", "benchmark_weight": 0.011},
+            {"symbol": "JNJ", "company_name": "Johnson & Johnson", "sector": "Health Care", "industry": "Pharma", "benchmark_weight": 0.008},
+            {"symbol": "CAT", "company_name": "Caterpillar", "sector": "Industrials", "industry": "Machinery", "benchmark_weight": 0.004},
+            {"symbol": "GE", "company_name": "GE Aerospace", "sector": "Industrials", "industry": "Aerospace", "benchmark_weight": 0.005},
+            {"symbol": "LIN", "company_name": "Linde", "sector": "Materials", "industry": "Industrial Gases", "benchmark_weight": 0.004},
+            {"symbol": "SHW", "company_name": "Sherwin-Williams", "sector": "Materials", "industry": "Chemicals", "benchmark_weight": 0.002},
+            {"symbol": "PLD", "company_name": "Prologis", "sector": "Real Estate", "industry": "Industrial REITs", "benchmark_weight": 0.003},
+            {"symbol": "AMT", "company_name": "American Tower", "sector": "Real Estate", "industry": "Specialized REITs", "benchmark_weight": 0.003},
         ]
+
+    def _safe_live_account_snapshot(self, mode: str = "paper") -> dict[str, Any] | None:
+        try:
+            account_payload = self.get_execution_account(broker="alpaca", mode=mode)
+        except Exception:
+            return None
+        if not account_payload.get("connected"):
+            return None
+        return account_payload
+
+    def _extract_position_symbols(self, mode: str = "paper") -> list[str]:
+        try:
+            positions_payload = self.list_execution_positions(broker="alpaca", mode=mode)
+        except Exception:
+            return []
+        symbols = []
+        for position in positions_payload.get("positions", []):
+            symbol = str(position.get("symbol") or "").upper().strip()
+            if symbol:
+                symbols.append(symbol)
+        return sorted(dict.fromkeys(symbols))
+
+    def _build_market_surface(self, watchlist_signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        signal_lookup = {str(item.get("symbol") or "").upper(): item for item in watchlist_signals}
+        nodes: list[dict[str, Any]] = []
+        for item in self._market_surface_catalog():
+            symbol = item["symbol"]
+            signal = signal_lookup.get(symbol)
+            provider = str(signal.get("market_data_source") or "") if signal else "unavailable"
+            change = float(signal.get("expected_return") or 0.0) if signal else 0.0
+            confidence = float(signal.get("confidence") or 0.0) if signal else 0.45
+            house_score = float(signal.get("house_score") or signal.get("overall_score") or 72.0) if signal else 72.0
+            try:
+                bars = self.market_data.get_daily_bars(symbol, limit=12)
+                provider = bars.provider or provider or "unavailable"
+                frame = bars.bars
+                if len(frame.index) >= 2:
+                    closes = frame["close"].astype(float).tolist()
+                    prev_close = closes[-2]
+                    last_close = closes[-1]
+                    if prev_close:
+                        change = (last_close - prev_close) / prev_close
+            except Exception:
+                provider = provider or "unavailable"
+
+            weight = max(24.0, float(item.get("benchmark_weight") or 0.0) * 1800.0)
+            risk_level = "high" if change <= -0.015 else "positive" if change >= 0.015 else "neutral"
+            nodes.append(
+                {
+                    "symbol": symbol,
+                    "name": symbol,
+                    "company_name": item["company_name"],
+                    "sector": item["sector"],
+                    "industry": item["industry"],
+                    "value": round(weight, 2),
+                    "weight": round(weight, 2),
+                    "change": round(change, 6),
+                    "score": round(house_score, 2),
+                    "confidence": round(confidence, 4),
+                    "source": provider,
+                    "risk_level": risk_level,
+                }
+            )
+        nodes.sort(key=lambda node: node["value"], reverse=True)
+        return nodes
+
+    def _resolve_market_data_source(self, signal: ResearchSignal) -> str:
+        source = str(signal.market_data_source or "").strip().lower()
+        if source:
+            return source
+
+        lineage = " ".join(signal.data_lineage or []).lower()
+        if "synthetic" in lineage or "fallback" in lineage:
+            return "synthetic"
+        if "yfinance" in lineage:
+            return "yfinance"
+        if "alpaca" in lineage:
+            return "alpaca"
+        return "synthetic" if "fallback" in str(signal.signal_source or "").lower() else "unknown"
+
+    def _projection_basis_return(self, signal: ResearchSignal) -> float:
+        expected = float(signal.expected_return or 0.0)
+        predicted = float(signal.predicted_return_5d or 0.0)
+        regime = str(signal.regime_label or "neutral").lower()
+        action = str(signal.action or "neutral").lower()
+
+        if action == "long":
+            return round(max(abs(expected), abs(predicted), 0.01), 6)
+        if action == "short":
+            return round(-max(abs(expected), abs(predicted), 0.01), 6)
+        if regime == "risk_off":
+            return round(-max(abs(expected), abs(predicted) * 0.55, 0.006), 6)
+        if regime == "risk_on" and expected > 0:
+            return round(max(expected * 0.45, 0.003), 6)
+        if expected < 0:
+            return round(expected, 6)
+        if predicted < 0:
+            return round(max(predicted, -0.01), 6)
+        return 0.0
+
+    def _build_projection_scenarios(self, signal: ResearchSignal) -> dict[str, Any]:
+        source = self._resolve_market_data_source(signal)
+        has_model_coverage = all(
+            value is not None
+            for value in (
+                signal.predicted_return_5d,
+                signal.predicted_volatility_10d,
+                signal.predicted_drawdown_20d,
+            )
+        )
+        if source in {"synthetic", "unknown"} or not has_model_coverage:
+            return {
+                "market_data_source": source,
+                "prediction_mode": "unavailable",
+                "projection_basis_return": None,
+                "projection_scenarios": {},
+            }
+
+        center = self._projection_basis_return(signal)
+        volatility = max(float(signal.predicted_volatility_10d or 0.0), 0.03)
+        drawdown = max(float(signal.predicted_drawdown_20d or 0.0), 0.03)
+        atr_proxy = max(abs(center) * 0.35, volatility * 0.22, 0.012)
+        upside_band = max(volatility * 0.55, atr_proxy)
+        downside_band = max(drawdown * 0.45, atr_proxy)
+        confidence = round(min(0.99, float(signal.decision_confidence or signal.confidence or 0.0)), 6)
+
+        return {
+            "market_data_source": source,
+            "prediction_mode": "model",
+            "projection_basis_return": round(center, 6),
+            "projection_scenarios": {
+                "upper": ProjectionScenario(
+                    label="Bull Case",
+                    expected_return=round(center + upside_band, 6),
+                    confidence=confidence,
+                    band_source="volatility_plus_atr_proxy",
+                ),
+                "center": ProjectionScenario(
+                    label="Base Case",
+                    expected_return=round(center, 6),
+                    confidence=confidence,
+                    band_source="signed_expected_return",
+                ),
+                "lower": ProjectionScenario(
+                    label="Risk Floor",
+                    expected_return=round(center - downside_band, 6),
+                    confidence=round(max(0.01, float(signal.regime_probability or signal.confidence or 0.0)), 6),
+                    band_source="drawdown_plus_atr_proxy",
+                ),
+            },
+        }
+
+    def _build_house_score_payload(self, signal: ResearchSignal) -> dict[str, Any]:
+        if signal.house_score is not None and signal.house_grade and signal.formula_version:
+            return {
+                "house_score": float(signal.house_score),
+                "house_grade": signal.house_grade,
+                "formula_version": signal.formula_version,
+                "pillar_breakdown": dict(signal.pillar_breakdown or {}),
+                "disclosure_confidence": float(signal.disclosure_confidence or 0.0),
+                "controversy_penalty": float(signal.controversy_penalty or 0.0),
+                "data_gap_penalty": float(signal.data_gap_penalty or 0.0),
+                "materiality_adjustment": float(signal.materiality_adjustment or 0.0),
+                "trend_bonus": float(signal.trend_bonus or 0.0),
+                "house_explanation": str(signal.house_explanation or ""),
+            }
+
+        lineage = list(signal.data_lineage or [])
+        metric_coverage = 1.0 if signal.factor_scores else 0.72
+        house = compute_house_score(
+            company_name=signal.company_name,
+            sector=signal.sector,
+            industry=signal.sector,
+            e_score=float(signal.e_score or 0.0),
+            s_score=float(signal.s_score or 0.0),
+            g_score=float(signal.g_score or 0.0),
+            data_sources=lineage,
+            data_lineage=lineage,
+            controversy_hints=list(signal.catalysts or []),
+            esg_delta=self._factor_value(_as_dict(signal), "esg_delta") / 100.0,
+            metric_coverage_ratio=metric_coverage,
+        ).as_dict()
+        return house
+
+    def _enrich_signal_house_score(self, signal: ResearchSignal) -> ResearchSignal:
+        return signal.model_copy(update=self._build_house_score_payload(signal))
+
+    def _build_sector_heatmap(self, signals: list[ResearchSignal]) -> list[dict[str, Any]]:
+        buckets: dict[str, list[ResearchSignal]] = {}
+        for signal in signals:
+            buckets.setdefault(signal.sector or "Unknown", []).append(signal)
+
+        heatmap: list[dict[str, Any]] = []
+        for sector, items in buckets.items():
+            average_return = _safe_mean([float(item.expected_return or 0.0) for item in items])
+            average_score = _safe_mean([float(item.house_score or item.overall_score or 0.0) for item in items])
+            weight = sum(max(float(item.confidence or 0.0), 0.05) for item in items)
+            heatmap.append(
+                {
+                    "name": sector,
+                    "value": round(weight * 100, 2),
+                    "score": round(average_score, 2),
+                    "change": round(average_return, 6),
+                    "symbols": [item.symbol for item in items],
+                    "market_data_sources": sorted({self._resolve_market_data_source(item) for item in items}),
+                    "children": [
+                        {
+                            "name": item.symbol,
+                            "value": round(max(float(item.confidence or 0.0), 0.05) * 100, 2),
+                            "score": round(float(item.house_score or item.overall_score or 0.0), 2),
+                            "change": round(float(item.expected_return or 0.0), 6),
+                            "action": item.action,
+                        }
+                        for item in items
+                    ],
+                }
+            )
+        heatmap.sort(key=lambda item: item["value"], reverse=True)
+        return heatmap
+
+    def _serialize_watchlist_signal(self, signal: ResearchSignal) -> dict[str, Any]:
+        enriched = self._enrich_signal_house_score(signal).model_copy(update=self._build_projection_scenarios(signal))
+        return _as_dict(enriched)
+
+    def get_default_universe(self, symbols: list[str] | None = None) -> list[UniverseMember]:
+        base_universe = [UniverseMember(**item) for item in self._market_surface_catalog()]
         if not symbols:
             return base_universe
 
@@ -115,12 +378,39 @@ class QuantSystemService:
             )
         return selected
 
-    def build_platform_overview(self) -> dict[str, Any]:
-        universe = self.get_default_universe()
+    def _build_watchlist_snapshot(self) -> dict[str, Any]:
+        position_symbols = self._extract_position_symbols(mode="paper")
+        preferred_watchlist = ["AAPL", "MSFT", "NVDA", "GOOGL", "NEE", "PG", "TSLA", "AMZN"]
+        universe = self.get_default_universe(position_symbols + preferred_watchlist)
         signals = self._build_signals(universe, "overview refresh", self.default_benchmark)
+        watchlist_signals = [self._serialize_watchlist_signal(signal) for signal in signals]
+        watchlist_signals.sort(
+            key=lambda item: (
+                item.get("action") != "long",
+                -float(item.get("house_score") or item.get("overall_score") or 0.0),
+                -float(item.get("confidence") or 0.0),
+            )
+        )
+        return {
+            "position_symbols": position_symbols,
+            "universe": universe,
+            "signals": signals,
+            "watchlist_signals": watchlist_signals,
+            "live_account_snapshot": self._safe_live_account_snapshot(mode="paper"),
+        }
+
+    def build_platform_overview(self) -> dict[str, Any]:
+        snapshot = self._build_watchlist_snapshot()
+        position_symbols = snapshot["position_symbols"]
+        universe = snapshot["universe"]
+        signals = snapshot["signals"]
+        watchlist_signals = snapshot["watchlist_signals"]
+        sector_heatmap = self._build_sector_heatmap(signals)
+        market_surface = self._build_market_surface(watchlist_signals)
         portfolio = self._build_portfolio(signals, self.default_capital, self.default_benchmark)
         backtests = self.storage.list_records("backtests")
         experiments = self.storage.list_records("experiments")
+        live_account_snapshot = snapshot["live_account_snapshot"]
         latest_backtest = backtests[0] if backtests else self._build_backtest(
             strategy_name="ESG Multi-Factor Long-Only",
             benchmark=self.default_benchmark,
@@ -159,7 +449,13 @@ class QuantSystemService:
                 "benchmark": self.default_benchmark,
                 "coverage": [member.symbol for member in universe],
             },
-            "top_signals": [_as_dict(signal) for signal in signals[:5]],
+            "top_signals": watchlist_signals[:5],
+            "watchlist_signals": watchlist_signals,
+            "position_symbols": position_symbols,
+            "live_account_snapshot": live_account_snapshot,
+            "sector_heatmap": sector_heatmap,
+            "market_surface": market_surface,
+            "heatmap_nodes": market_surface,
             "p1_signal_snapshot": {
                 "regime_counts": {
                     "risk_on": sum(1 for signal in signals if signal.regime_label == "risk_on"),
@@ -212,6 +508,239 @@ class QuantSystemService:
             "latest_backtest": latest_backtest,
             "experiments": experiments[:3],
             "training_plan": self._build_training_plan().model_dump(),
+        }
+
+    def _chart_limit_for_timeframe(self, timeframe: str) -> int:
+        return {
+            "1D": 120,
+            "1W": 90,
+            "1M": 72,
+            "3M": 56,
+            "1Y": 90,
+        }.get(str(timeframe or "1D").upper(), 120)
+
+    def _synthetic_chart_frame(self, signal: ResearchSignal, timeframe: str) -> pd.DataFrame:
+        limit = self._chart_limit_for_timeframe(timeframe)
+        anchor = max(float(signal.house_score or signal.overall_score or 60.0), 1.0)
+        close = anchor * 2.4
+        rows: list[dict[str, Any]] = []
+        for index in range(limit):
+            drift = float(signal.expected_return or 0.0) / max(limit / 8.0, 1.0)
+            wave = math.sin(index / 4.5) * 0.004 + math.cos(index / 9.0) * 0.002
+            open_price = close
+            close = max(4.0, close * (1.0 + drift + wave))
+            high = max(open_price, close) * 1.012
+            low = min(open_price, close) * 0.988
+            rows.append(
+                {
+                    "timestamp": (datetime.now(timezone.utc) - timedelta(days=limit - index)).date().isoformat(),
+                    "open": round(open_price, 2),
+                    "high": round(high, 2),
+                    "low": round(low, 2),
+                    "close": round(close, 2),
+                    "volume": 5_000_000 + (index % 11) * 180_000,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def _build_chart_indicators(self, frame: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:
+        if frame.empty:
+            return {"ma20": [], "ma60": [], "boll": [], "volume_ma20": []}
+
+        enriched = frame.copy()
+        enriched["ma20"] = enriched["close"].rolling(20, min_periods=1).mean()
+        enriched["ma60"] = enriched["close"].rolling(60, min_periods=1).mean()
+        rolling_std = enriched["close"].rolling(20, min_periods=1).std().fillna(0.0)
+        enriched["boll_upper"] = enriched["ma20"] + rolling_std * 2
+        enriched["boll_lower"] = enriched["ma20"] - rolling_std * 2
+        enriched["volume_ma20"] = enriched["volume"].rolling(20, min_periods=1).mean()
+        return {
+            "ma20": [{"date": row["timestamp"], "value": round(float(row["ma20"]), 4)} for _, row in enriched.iterrows()],
+            "ma60": [{"date": row["timestamp"], "value": round(float(row["ma60"]), 4)} for _, row in enriched.iterrows()],
+            "boll": [
+                {
+                    "date": row["timestamp"],
+                    "upper": round(float(row["boll_upper"]), 4),
+                    "middle": round(float(row["ma20"]), 4),
+                    "lower": round(float(row["boll_lower"]), 4),
+                }
+                for _, row in enriched.iterrows()
+            ],
+            "volume_ma20": [{"date": row["timestamp"], "value": round(float(row["volume_ma20"]), 4)} for _, row in enriched.iterrows()],
+        }
+
+    def build_dashboard_chart(self, symbol: str | None = None, timeframe: str = "1D") -> dict[str, Any]:
+        snapshot = self._build_watchlist_snapshot()
+        watchlist = snapshot.get("watchlist_signals") or []
+        if not watchlist:
+            return {
+                "symbol": symbol or "",
+                "timeframe": timeframe,
+                "candles": [],
+                "source": "unavailable",
+                "indicators": {},
+                "projection_scenarios": {},
+                "projection_explanations": {},
+                "projected_volume": [],
+                "viewport_defaults": {},
+                "click_targets": [],
+                "prediction_disabled_reason": "no_watchlist_signals",
+                "is_live_data": False,
+                "provider_status": {"available": False, "provider": "unavailable"},
+                "degraded_from": None,
+                "market_session": None,
+                "range_label": timeframe.upper(),
+                "positions_context": {"symbols": snapshot.get("position_symbols", [])},
+                "indicator_panels": [],
+            }
+
+        active = next((item for item in watchlist if item["symbol"] == (symbol or "").upper().strip()), watchlist[0])
+        active_symbol = active["symbol"]
+        limit = self._chart_limit_for_timeframe(timeframe)
+        signal = next((item for item in self._build_signals(self.get_default_universe([active_symbol]), "dashboard chart", self.default_benchmark) if item.symbol == active_symbol), None)
+        if signal is None:
+            signal = self._enrich_signal_house_score(
+                ResearchSignal(
+                    symbol=active_symbol,
+                    company_name=active["company_name"],
+                    sector=active["sector"],
+                    thesis=active["thesis"],
+                    action=active["action"],
+                    confidence=float(active["confidence"]),
+                    expected_return=float(active["expected_return"]),
+                    risk_score=float(active["risk_score"]),
+                    overall_score=float(active["overall_score"]),
+                    e_score=float(active["e_score"]),
+                    s_score=float(active["s_score"]),
+                    g_score=float(active["g_score"]),
+                    factor_scores=[FactorScore(**item) for item in active.get("factor_scores", [])],
+                    catalysts=list(active.get("catalysts", [])),
+                    data_lineage=list(active.get("data_lineage", [])),
+                    market_data_source=active.get("market_data_source"),
+                    prediction_mode=active.get("prediction_mode"),
+                    projection_basis_return=active.get("projection_basis_return"),
+                    projection_scenarios={key: ProjectionScenario(**value) for key, value in (active.get("projection_scenarios") or {}).items()},
+                )
+            )
+
+        source = str(active.get("market_data_source") or self._resolve_market_data_source(signal))
+        degraded_from = None
+        provider_status = {"available": False, "provider": source}
+        try:
+            bars_result = self.market_data.get_daily_bars(active_symbol, limit=limit)
+            source = bars_result.provider
+            provider_status = {
+                "available": True,
+                "provider": bars_result.provider,
+                "cache_hit": bool(getattr(bars_result, "cache_hit", False)),
+                "lookback_limit": int(limit),
+            }
+            frame = bars_result.bars.copy()
+            if str(active.get("market_data_source") or "").lower() == "alpaca" and bars_result.provider != "alpaca":
+                degraded_from = "alpaca"
+        except Exception as exc:
+            return {
+                "symbol": active_symbol,
+                "timeframe": timeframe.upper(),
+                "source": "unavailable",
+                "candles": [],
+                "indicators": {},
+                "projection_scenarios": {},
+                "projection_explanations": {},
+                "projected_volume": [],
+                "viewport_defaults": {
+                    "116%": {"visibleCount": 64, "projectionWidthRatio": 0.22, "pricePaddingRatio": 0.06},
+                    "352%": {"visibleCount": 32, "projectionWidthRatio": 0.28, "pricePaddingRatio": 0.08},
+                    "600%": {"visibleCount": 20, "projectionWidthRatio": 0.34, "pricePaddingRatio": 0.11},
+                },
+                "click_targets": ["symbol_chip", "timeframe_tab", "zoom_control", "projection_line", "heatmap_tile"],
+                "prediction_disabled_reason": "market_data_unavailable",
+                "signal": active,
+                "is_live_data": False,
+                "provider_status": {"available": False, "provider": "unavailable", "error": str(exc)},
+                "degraded_from": None,
+                "market_session": self._safe_get_clock(self._prepare_broker_adapter("alpaca", "paper")[0]),
+                "range_label": timeframe.upper(),
+                "positions_context": {"symbols": snapshot.get("position_symbols", [])},
+                "indicator_panels": [],
+            }
+
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True).dt.strftime("%Y-%m-%d")
+        indicators = self._build_chart_indicators(frame)
+        candles = [
+            {
+                "date": row["timestamp"],
+                "open": round(float(row["open"]), 4),
+                "high": round(float(row["high"]), 4),
+                "low": round(float(row["low"]), 4),
+                "close": round(float(row["close"]), 4),
+                "volume": round(float(row.get("volume") or 0.0), 4),
+            }
+            for _, row in frame.iterrows()
+        ]
+
+        projection_scenarios = active.get("projection_scenarios") or {}
+        projection_explanations = {}
+        for key, scenario in projection_scenarios.items():
+            expected_return = float((scenario or {}).get("expected_return") or 0.0)
+            direction = "upside" if expected_return > 0 else "downside" if expected_return < 0 else "range"
+            projection_explanations[key] = {
+                "title": (scenario or {}).get("label") or key.title(),
+                "direction": direction,
+                "expected_return": expected_return,
+                "confidence": float((scenario or {}).get("confidence") or active.get("confidence") or 0.0),
+                "drivers": [item.get("description") for item in active.get("factor_scores", [])[:3] if item.get("description")],
+                "why_not_opposite": (active.get("catalysts") or ["Decision stack rejected the opposite branch."])[-1],
+                "source": source,
+                "data_lineage": list(active.get("data_lineage") or []),
+                "house_explanation": active.get("house_explanation"),
+            }
+
+        last_volume = float(frame["volume"].iloc[-1]) if not frame.empty else 0.0
+        projected_volume = [
+            {
+                "scenario": key,
+                "points": [
+                    {
+                        "step": step,
+                        "value": round(last_volume * (1.0 + float((scenario or {}).get("expected_return") or 0.0) * 0.18 * step), 2),
+                    }
+                    for step in range(1, 6)
+                ],
+            }
+            for key, scenario in projection_scenarios.items()
+        ]
+
+        prediction_disabled_reason = None
+        if source in {"synthetic", "unavailable"}:
+            prediction_disabled_reason = "market_data_unavailable"
+        elif active.get("prediction_mode") != "model":
+            prediction_disabled_reason = "prediction_mode_unavailable"
+
+        return {
+            "symbol": active_symbol,
+            "timeframe": timeframe.upper(),
+            "source": source,
+            "candles": candles,
+            "indicators": indicators,
+            "projection_scenarios": projection_scenarios if prediction_disabled_reason is None else {},
+            "projection_explanations": projection_explanations if prediction_disabled_reason is None else {},
+            "projected_volume": projected_volume if prediction_disabled_reason is None else [],
+            "viewport_defaults": {
+                "116%": {"visibleCount": 64, "projectionWidthRatio": 0.22, "pricePaddingRatio": 0.06},
+                "352%": {"visibleCount": 32, "projectionWidthRatio": 0.28, "pricePaddingRatio": 0.08},
+                "600%": {"visibleCount": 20, "projectionWidthRatio": 0.34, "pricePaddingRatio": 0.11},
+            },
+            "click_targets": ["symbol_chip", "timeframe_tab", "zoom_control", "projection_line", "heatmap_tile"],
+            "prediction_disabled_reason": prediction_disabled_reason,
+            "signal": active,
+            "is_live_data": source == "alpaca",
+            "provider_status": provider_status,
+            "degraded_from": degraded_from,
+            "market_session": self._safe_get_clock(self._prepare_broker_adapter("alpaca", "paper")[0]),
+            "range_label": timeframe.upper(),
+            "positions_context": {"symbols": snapshot.get("position_symbols", [])},
+            "indicator_panels": ["main", "volume"],
         }
 
     def _should_use_live_market_data(self) -> bool:
@@ -269,7 +798,8 @@ class QuantSystemService:
             },
             "score_snapshot": {
                 "company": top_signal["company_name"],
-                "overall_score": round(top_signal["overall_score"]),
+                "overall_score": round(top_signal.get("house_score", top_signal["overall_score"])),
+                "house_grade": top_signal.get("house_grade"),
                 "confidence": top_signal["confidence"],
                 "dimensions": [
                     {"key": "E", "label": "环保", "score": round(top_signal["e_score"]), "trend": "up"},
@@ -277,7 +807,7 @@ class QuantSystemService:
                     {"key": "G", "label": "治理", "score": round(top_signal["g_score"]), "trend": "up"},
                 ],
                 "radar": [
-                    {"label": "ESG", "value": round(top_signal["overall_score"])},
+                    {"label": "House ESG", "value": round(top_signal.get("house_score", top_signal["overall_score"]))},
                     {"label": "质量", "value": round(self._factor_value(top_signal, "quality"))},
                     {"label": "价值", "value": round(self._factor_value(top_signal, "value"))},
                     {"label": "动量", "value": round(self._factor_value(top_signal, "momentum"))},
@@ -654,6 +1184,8 @@ class QuantSystemService:
             signal = signal_lookup.get(position.symbol)
             if signal is None:
                 return round(float(position.score or 0.0), 2)
+            if signal.house_score is not None:
+                return round(float(signal.house_score), 2)
             dimension_scores = [
                 float(signal.e_score or 0.0),
                 float(signal.s_score or 0.0),
@@ -822,7 +1354,7 @@ class QuantSystemService:
                 if signal and signal.predicted_volatility_10d is not None
                 else 0.18
             )
-            weighted_esg += position.weight * float(signal.overall_score if signal else 0.0)
+            weighted_esg += position.weight * float(signal.house_score if signal and signal.house_score is not None else signal.overall_score if signal else 0.0)
             holdings.append(
                 {
                     "symbol": position.symbol,
@@ -841,7 +1373,8 @@ class QuantSystemService:
                     "expected_fill_probability": position.expected_fill_probability,
                     "estimated_slippage_bps": position.estimated_slippage_bps,
                     "estimated_impact_bps": position.estimated_impact_bps,
-                    "esg_score": round(float(signal.overall_score), 2) if signal else None,
+                    "esg_score": round(float(signal.house_score if signal and signal.house_score is not None else signal.overall_score), 2) if signal else None,
+                    "house_grade": signal.house_grade if signal else None,
                     "e_score": round(float(signal.e_score), 2) if signal else None,
                     "s_score": round(float(signal.s_score), 2) if signal else None,
                     "g_score": round(float(signal.g_score), 2) if signal else None,
@@ -1443,6 +1976,10 @@ class QuantSystemService:
 
     @staticmethod
     def _summarize_alpaca_account(account: dict[str, Any]) -> dict[str, str | bool | None]:
+        equity = float(account.get("equity") or 0.0)
+        last_equity = float(account.get("last_equity") or 0.0)
+        daily_change = equity - last_equity if last_equity else 0.0
+        daily_change_pct = (daily_change / last_equity) if last_equity else 0.0
         return {
             "account_id": account.get("id"),
             "status": account.get("status"),
@@ -1451,6 +1988,9 @@ class QuantSystemService:
             "cash": account.get("cash"),
             "equity": account.get("equity"),
             "last_equity": account.get("last_equity"),
+            "portfolio_value": account.get("portfolio_value") or account.get("equity"),
+            "daily_change": round(daily_change, 2),
+            "daily_change_pct": round(daily_change_pct, 6),
             "trading_blocked": bool(account.get("trading_blocked")),
             "account_blocked": bool(account.get("account_blocked")),
             "transfers_blocked": bool(account.get("transfers_blocked")),
@@ -1536,12 +2076,14 @@ class QuantSystemService:
         broker: str | None = None,
         execution_id: str | None = None,
         order_limit: int = 20,
+        mode: str = "paper",
     ) -> dict[str, Any]:
         broker_id = (broker or self.default_broker).strip().lower()
         latest_execution = execution_id or self._latest_execution_id()
-        account = self.get_execution_account(broker=broker_id)
-        orders = self.list_execution_orders(broker=broker_id, status="all", limit=order_limit)
-        positions = self.list_execution_positions(broker=broker_id)
+        normalized_mode = self._normalize_broker_mode(mode)
+        account = self.get_execution_account(broker=broker_id, mode=normalized_mode)
+        orders = self.list_execution_orders(broker=broker_id, status="all", limit=order_limit, mode=normalized_mode)
+        positions = self.list_execution_positions(broker=broker_id, mode=normalized_mode)
         journal = None
         if latest_execution:
             try:
@@ -1564,6 +2106,7 @@ class QuantSystemService:
         return {
             "generated_at": _iso_now(),
             "broker_id": broker_id,
+            "mode": normalized_mode,
             "execution_id": latest_execution,
             "controls": self.get_execution_controls(),
             "account": account,
@@ -1584,13 +2127,14 @@ class QuantSystemService:
             "healthcheck": healthcheck,
         }
 
-    def get_execution_account(self, broker: str | None = None) -> dict[str, Any]:
-        adapter = self._resolve_broker(broker)
+    def get_execution_account(self, broker: str | None = None, mode: str = "paper") -> dict[str, Any]:
+        adapter, normalized_mode = self._prepare_broker_adapter(broker, mode)
         status = adapter.connection_status()
         descriptor = adapter.descriptor().model_dump()
         if not status.get("configured"):
             return {
                 "connected": False,
+                "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": status,
                 "warnings": [f"{adapter.label} credentials are not configured for the current runtime."],
@@ -1599,9 +2143,11 @@ class QuantSystemService:
         try:
             account = adapter.get_account()
             account_snapshot = self._summarize_broker_account(adapter.broker_id, account)
+            account_snapshot["account_mode"] = normalized_mode
             clock_snapshot = self._safe_get_clock(adapter)
             return {
                 "connected": True,
+                "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": status,
                 "account": account_snapshot,
@@ -1616,6 +2162,7 @@ class QuantSystemService:
             logger.warning(f"Failed to load {adapter.label} account status: {exc}")
             return {
                 "connected": False,
+                "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": status,
                 "warnings": [str(exc)],
@@ -1626,17 +2173,19 @@ class QuantSystemService:
         broker: str | None = None,
         status: str = "all",
         limit: int = 20,
+        mode: str = "paper",
     ) -> dict[str, Any]:
-        adapter = self._resolve_broker(broker)
+        adapter, normalized_mode = self._prepare_broker_adapter(broker, mode)
         connection = adapter.connection_status()
         descriptor = adapter.descriptor().model_dump()
         if not connection.get("configured"):
-            return {"connected": False, "orders": [], "broker": descriptor, "broker_connection": connection}
+            return {"connected": False, "mode": normalized_mode, "orders": [], "broker": descriptor, "broker_connection": connection}
 
         try:
             orders = adapter.list_orders(status=status, limit=limit)
             return {
                 "connected": True,
+                "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": connection,
                 "orders": [self._summarize_broker_order(adapter.broker_id, item) for item in orders],
@@ -1645,6 +2194,7 @@ class QuantSystemService:
             logger.warning(f"Failed to list {adapter.label} orders: {exc}")
             return {
                 "connected": False,
+                "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": connection,
                 "orders": [],
@@ -1660,7 +2210,7 @@ class QuantSystemService:
         journal = self._load_execution_journal(execution_id)
         record = self._find_journal_record(journal, order_id) if journal else None
         broker_id = broker or (journal or {}).get("broker_id") or self.default_broker
-        adapter = self._resolve_broker(broker_id)
+        adapter, normalized_mode = self._prepare_broker_adapter(broker_id, (journal or {}).get("mode", "paper"))
         connection = adapter.connection_status()
         descriptor = adapter.descriptor().model_dump()
 
@@ -1680,6 +2230,7 @@ class QuantSystemService:
 
         return {
             "connected": bool(connection.get("configured")),
+            "mode": normalized_mode,
             "broker": descriptor,
             "broker_connection": connection,
             "order": summary,
@@ -1687,17 +2238,18 @@ class QuantSystemService:
             "warnings": warnings,
         }
 
-    def list_execution_positions(self, broker: str | None = None) -> dict[str, Any]:
-        adapter = self._resolve_broker(broker)
+    def list_execution_positions(self, broker: str | None = None, mode: str = "paper") -> dict[str, Any]:
+        adapter, normalized_mode = self._prepare_broker_adapter(broker, mode)
         connection = adapter.connection_status()
         descriptor = adapter.descriptor().model_dump()
         if not connection.get("configured"):
-            return {"connected": False, "positions": [], "broker": descriptor, "broker_connection": connection}
+            return {"connected": False, "mode": normalized_mode, "positions": [], "broker": descriptor, "broker_connection": connection}
 
         try:
             positions = adapter.list_positions()
             return {
                 "connected": True,
+                "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": connection,
                 "positions": [self._summarize_broker_position(adapter.broker_id, item) for item in positions],
@@ -1706,6 +2258,7 @@ class QuantSystemService:
             logger.warning(f"Failed to list {adapter.label} positions: {exc}")
             return {
                 "connected": False,
+                "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": connection,
                 "positions": [],
@@ -1726,11 +2279,13 @@ class QuantSystemService:
         time_in_force: str = "day",
         extended_hours: bool = False,
         allow_duplicates: bool = False,
+        live_confirmed: bool = False,
+        operator_confirmation: str | None = None,
     ) -> dict[str, Any]:
         benchmark = benchmark or self.default_benchmark
         capital_base = capital_base or self.default_capital
         broker_id = (broker or self.default_broker).strip().lower()
-        adapter = self._resolve_broker(broker_id)
+        adapter, normalized_mode = self._prepare_broker_adapter(broker_id, mode)
         signals = self._build_signals(self.get_default_universe(universe_symbols), "execution plan", benchmark)
         portfolio = self._build_portfolio(signals, capital_base, benchmark)
         execution_id = f"execution-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
@@ -1790,7 +2345,7 @@ class QuantSystemService:
         plan = ExecutionPlan(
             execution_id=execution_id,
             broker=adapter.label,
-            mode="paper" if mode != "live" else "live",
+            mode=normalized_mode,
             ready=ready,
             estimated_slippage_bps=average_slippage
             or float(getattr(settings, "EXECUTION_DEFAULT_SLIPPAGE_BPS", 8.0) or 8.0),
@@ -1814,6 +2369,8 @@ class QuantSystemService:
         payload["time_in_force"] = normalized_tif
         payload["extended_hours"] = bool(extended_hours)
         payload["allow_duplicates"] = bool(allow_duplicates)
+        payload["live_confirmed"] = bool(live_confirmed)
+        payload["operator_confirmation"] = operator_confirmation or ""
         payload["submitted_orders"] = []
         payload["broker_errors"] = []
         payload["cancelable_order_ids"] = []
@@ -1838,15 +2395,22 @@ class QuantSystemService:
         payload["canary_summary"] = canary_summary
         payload["model_registry"] = self.build_model_registry()
 
+        live_enabled = bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False))
         if payload["mode"] == "live":
-            payload["ready"] = False
-            payload["broker_status"] = "blocked"
-            if broker_id == "alpaca" and not bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False)):
-                payload["warnings"].append("Live trading is disabled. Alpaca is configured for paper-first validation only.")
-            else:
-                payload["warnings"].append("Live routing is scaffolded but remains blocked until broker-specific production controls are completed.")
+            if broker_id != "alpaca":
+                payload["ready"] = False
+                payload["broker_status"] = "blocked"
+                payload["warnings"].append("Live routing is currently only enabled for Alpaca.")
+            elif not live_enabled:
+                payload["ready"] = False
+                payload["broker_status"] = "blocked"
+                payload["warnings"].append("Live trading is disabled in server settings. Keep validating in Alpaca Paper first.")
+            elif not bool(live_confirmed):
+                payload["ready"] = False
+                payload["broker_status"] = "awaiting_live_confirmation"
+                payload["warnings"].append("Live order routing requires an explicit operator confirmation before submission.")
 
-        if submit_orders and payload["mode"] == "paper" and payload["ready"]:
+        if submit_orders and payload["ready"] and (payload["mode"] == "paper" or (payload["mode"] == "live" and live_enabled and live_confirmed)):
             self._submit_broker_orders(
                 adapter=adapter,
                 payload=payload,
@@ -1890,7 +2454,7 @@ class QuantSystemService:
         broker: str | None = None,
     ) -> dict[str, Any]:
         journal = self._require_execution_journal(execution_id)
-        adapter = self._resolve_broker(broker or journal.get("broker_id"))
+        adapter, normalized_mode = self._prepare_broker_adapter(broker or journal.get("broker_id"), journal.get("mode", "paper"))
         connection = adapter.connection_status()
         if not connection.get("configured"):
             raise ValueError(f"{adapter.label} is not configured in the current runtime")
@@ -1952,6 +2516,7 @@ class QuantSystemService:
         )
         return {
             "execution_id": journal["execution_id"],
+            "mode": normalized_mode,
             "broker": adapter.descriptor().model_dump(),
             "records_synced": records_synced,
             "state_transitions": state_transitions,
@@ -1976,7 +2541,7 @@ class QuantSystemService:
         if record is None:
             raise ValueError("Order was not found in the execution journal")
 
-        adapter = self._resolve_broker(broker or journal.get("broker_id"))
+        adapter, normalized_mode = self._prepare_broker_adapter(broker or journal.get("broker_id"), journal.get("mode", "paper"))
         connection = adapter.connection_status()
         if not connection.get("configured"):
             raise ValueError(f"{adapter.label} is not configured in the current runtime")
@@ -2033,7 +2598,7 @@ class QuantSystemService:
         if not self._can_retry_state(record.get("current_state")):
             raise ValueError(f"Order state {record.get('current_state')} is not retryable.")
 
-        adapter = self._resolve_broker(broker or journal.get("broker_id"))
+        adapter, normalized_mode = self._prepare_broker_adapter(broker or journal.get("broker_id"), journal.get("mode", "paper"))
         connection = adapter.connection_status()
         if not connection.get("configured"):
             raise ValueError(f"{adapter.label} is not configured in the current runtime")
@@ -2335,7 +2900,7 @@ class QuantSystemService:
             f"Duplicate-order suppression window is {int(getattr(settings, 'EXECUTION_DUPLICATE_ORDER_WINDOW_MINUTES', 90) or 90)} minutes"
         )
         if mode == "live":
-            warnings.append(f"{broker_id} live routing remains gated behind production controls.")
+            warnings.append(f"{broker_id} live routing requires explicit confirmation and stays subject to runtime guardrails.")
         return checks, warnings, ready
 
     def _build_execution_orders(
@@ -4422,7 +4987,7 @@ class QuantSystemService:
         if len(market_data_signals) == len(universe):
             ranked = self.alpha_ranker.rerank(market_data_signals)
             p1_enriched = self.p1_suite.enrich_and_rerank(ranked)
-            return self._apply_p2_stack(p1_enriched)
+            return [self._enrich_signal_house_score(signal) for signal in self._apply_p2_stack(p1_enriched)]
 
         fallback_signals = self._build_synthetic_signals(universe, research_question, benchmark)
         fallback_lookup = {signal.symbol: signal for signal in fallback_signals}
@@ -4438,7 +5003,7 @@ class QuantSystemService:
         blended.sort(key=lambda item: (item.action != "long", -item.overall_score, -item.confidence))
         ranked = self.alpha_ranker.rerank(blended)
         p1_enriched = self.p1_suite.enrich_and_rerank(ranked)
-        return self._apply_p2_stack(p1_enriched)
+        return [self._enrich_signal_house_score(signal) for signal in self._apply_p2_stack(p1_enriched)]
 
     def _apply_p2_stack(self, signals: list[ResearchSignal]) -> list[ResearchSignal]:
         if not signals or not self.p2_stack.available():
@@ -4494,6 +5059,8 @@ class QuantSystemService:
                     e_score=round(e_score, 2),
                     s_score=round(s_score, 2),
                     g_score=round(g_score, 2),
+                    signal_source="synthetic_fallback",
+                    market_data_source="synthetic",
                     factor_scores=[
                         FactorScore(name="momentum", value=momentum, contribution=0.18, description="Trend continuation proxy"),
                         FactorScore(name="quality", value=quality, contribution=0.22, description="Quality and balance-sheet proxy"),

@@ -29,6 +29,13 @@ class FactorScore(BaseModel):
     description: str
 
 
+class ProjectionScenario(BaseModel):
+    label: str
+    expected_return: float
+    confidence: float | None = None
+    band_source: str | None = None
+
+
 class ResearchSignal(BaseModel):
     symbol: str
     company_name: str
@@ -83,6 +90,20 @@ class ResearchSignal(BaseModel):
     factor_scores: list[FactorScore] = Field(default_factory=list)
     catalysts: list[str] = Field(default_factory=list)
     data_lineage: list[str] = Field(default_factory=list)
+    market_data_source: str | None = None
+    prediction_mode: Literal["model", "unavailable"] | None = None
+    projection_basis_return: float | None = None
+    projection_scenarios: dict[str, ProjectionScenario] = Field(default_factory=dict)
+    house_score: float | None = None
+    house_grade: str | None = None
+    formula_version: str | None = None
+    pillar_breakdown: dict[str, float] = Field(default_factory=dict)
+    disclosure_confidence: float | None = None
+    controversy_penalty: float | None = None
+    data_gap_penalty: float | None = None
+    materiality_adjustment: float | None = None
+    trend_bonus: float | None = None
+    house_explanation: str | None = None
 
 
 class PortfolioPosition(BaseModel):

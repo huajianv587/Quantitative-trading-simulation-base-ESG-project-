@@ -48,12 +48,19 @@ def _run_execution_request(req: QuantExecutionRequest):
         time_in_force=req.time_in_force,
         extended_hours=req.extended_hours,
         allow_duplicates=req.allow_duplicates,
+        live_confirmed=req.live_confirmed,
+        operator_confirmation=req.operator_confirmation,
     )
 
 
 @router.get("/platform/overview")
 def get_platform_overview():
     return _quant_service().build_platform_overview()
+
+
+@router.get("/dashboard/chart")
+def get_dashboard_chart(symbol: str | None = None, timeframe: str = "1D"):
+    return _quant_service().build_dashboard_chart(symbol=symbol, timeframe=timeframe)
 
 
 @router.get("/universe/default")
@@ -162,8 +169,8 @@ def list_execution_brokers():
 
 
 @router.get("/execution/account")
-def get_execution_account(broker: str = "alpaca"):
-    return _quant_service().get_execution_account(broker=broker)
+def get_execution_account(broker: str = "alpaca", mode: str = "paper"):
+    return _quant_service().get_execution_account(broker=broker, mode=mode)
 
 
 @router.get("/execution/controls")
@@ -177,8 +184,8 @@ def set_execution_kill_switch(req: QuantKillSwitchRequest):
 
 
 @router.get("/execution/monitor")
-def get_execution_monitor(broker: str = "alpaca", execution_id: str | None = None, limit: int = 20):
-    return _quant_service().build_execution_monitor(broker=broker, execution_id=execution_id, order_limit=limit)
+def get_execution_monitor(broker: str = "alpaca", execution_id: str | None = None, limit: int = 20, mode: str = "paper"):
+    return _quant_service().build_execution_monitor(broker=broker, execution_id=execution_id, order_limit=limit, mode=mode)
 
 
 @router.websocket("/execution/live/ws")
@@ -187,6 +194,7 @@ async def execution_live_stream(
     broker: str = "alpaca",
     execution_id: str | None = None,
     limit: int = 20,
+    mode: str = "paper",
 ):
     presented = (
         websocket.query_params.get("api_key")
@@ -213,6 +221,7 @@ async def execution_live_stream(
                 broker=broker,
                 execution_id=execution_id,
                 order_limit=limit,
+                mode=mode,
             )
             await websocket.send_json(payload)
             await asyncio.sleep(refresh_seconds)
@@ -221,8 +230,8 @@ async def execution_live_stream(
 
 
 @router.get("/execution/orders")
-def list_execution_orders(broker: str = "alpaca", status: str = "all", limit: int = 20):
-    return _quant_service().list_execution_orders(broker=broker, status=status, limit=limit)
+def list_execution_orders(broker: str = "alpaca", status: str = "all", limit: int = 20, mode: str = "paper"):
+    return _quant_service().list_execution_orders(broker=broker, status=status, limit=limit, mode=mode)
 
 
 @router.get("/execution/orders/{order_id}")
@@ -278,8 +287,8 @@ def sync_execution_journal(execution_id: str, broker: str | None = None):
 
 
 @router.get("/execution/positions")
-def list_execution_positions(broker: str = "alpaca"):
-    return _quant_service().list_execution_positions(broker=broker)
+def list_execution_positions(broker: str = "alpaca", mode: str = "paper"):
+    return _quant_service().list_execution_positions(broker=broker, mode=mode)
 
 
 @router.post("/validation/run")

@@ -3,15 +3,13 @@
 # 支持多渠道推送：邮件、应用内通知、webhook 等
 
 import json
-import smtplib
 from datetime import datetime, timezone
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
 from gateway.utils.logger import get_logger
 from gateway.config import settings
 from gateway.db.supabase_client import get_client
+from gateway.utils.email_delivery import send_email_message
 
 logger = get_logger(__name__)
 
@@ -97,17 +95,6 @@ View full analysis: https://esg-dashboard.example.com/events/{event.get('id')}
             成功返回 True，失败返回 False
         """
         try:
-            # 构建邮件
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = notification["title"]
-            msg["From"] = settings.EMAIL_FROM or "noreply@esg-system.com"
-            msg["To"] = user_email
-
-            # 纯文本部分
-            text_part = MIMEText(notification["content"], "plain", "utf-8")
-            msg.attach(text_part)
-
-            # HTML 部分（可选，便于美化）
             html_content = f"""
             <html>
               <body>
@@ -117,21 +104,19 @@ View full analysis: https://esg-dashboard.example.com/events/{event.get('id')}
               </body>
             </html>
             """
-            html_part = MIMEText(html_content, "html", "utf-8")
-            msg.attach(html_part)
+            result = send_email_message(
+                recipient=user_email,
+                subject=notification["title"],
+                text_body=notification["content"],
+                html_body=html_content,
+                sender=settings.EMAIL_FROM or "noreply@esg-system.com",
+            )
+            if result.get("ok"):
+                logger.info(f"[Notifier] Email sent to {user_email}")
+                return True
 
-            # 发送邮件（实际实现需要配置 SMTP）
-            # 这里留作示例，真实环境需要配置 SMTP 服务器
-            logger.info(f"[Notifier] Email notification prepared for {user_email}")
-            return True
-
-            # 实际发送代码（需要 SMTP 配置）：
-            # with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-            #     server.starttls()
-            #     server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            #     server.send_message(msg)
-            # logger.info(f"[Notifier] Email sent to {user_email}")
-            # return True
+            logger.error(f"[Notifier] Email send failed for {user_email}: {result.get('detail')}")
+            return False
 
         except Exception as e:
             logger.error(f"[Notifier] Failed to send email to {user_email}: {e}")

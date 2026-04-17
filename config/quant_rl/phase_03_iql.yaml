@@ -1,0 +1,4 @@
+algorithm: iql
+action_type: continuous
+phase: phase_03_offline_iql
+total_steps: 4000

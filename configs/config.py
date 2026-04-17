@@ -165,6 +165,11 @@ class Settings:
             "ALPACA_TRADING_BASE_URL",
             default="https://paper-api.alpaca.markets",
         )
+        self.ALPACA_LIVE_BASE_URL = _first_env(
+            "ALPACA_LIVE_BASE_URL",
+            "ALPACA_LIVE_TRADING_BASE_URL",
+            default="https://api.alpaca.markets",
+        )
         self.ALPACA_API_TIMEOUT = _env_int("ALPACA_API_TIMEOUT", default=20)
         self.ALPACA_DEFAULT_TEST_NOTIONAL = _env_float("ALPACA_DEFAULT_TEST_NOTIONAL", default=1.0)
         self.ALPACA_MAX_TEST_ORDERS = _env_int("ALPACA_MAX_TEST_ORDERS", default=2)

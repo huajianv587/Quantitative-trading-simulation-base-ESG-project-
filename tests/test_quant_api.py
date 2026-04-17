@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 
 import gateway.main as main_module
 from gateway.config import settings
+from gateway.quant.models import PortfolioSummary, ResearchSignal
+from gateway.quant.service import QuantSystemService
 
 
 EXECUTION_HEADERS = {"x-api-key": settings.EXECUTION_API_KEY}
@@ -19,11 +21,163 @@ def test_quant_platform_overview_is_available():
     assert data["platform_name"] == "ESG Quant Intelligence System"
     assert data["storage"]["mode"] in {"local_fallback", "hybrid_cloud"}
     assert data["top_signals"]
+    assert data["watchlist_signals"]
     assert data["portfolio_preview"]["positions"]
     assert "p1_suite" in data
     assert "p1_signal_snapshot" in data
     assert "p2_stack" in data
     assert "p2_decision_snapshot" in data
+    first_signal = data["watchlist_signals"][0]
+    assert "market_data_source" in first_signal
+    assert first_signal["prediction_mode"] in {"model", "unavailable"}
+    assert "projection_scenarios" in first_signal
+    assert "factor_scores" in first_signal
+    assert "catalysts" in first_signal
+    assert "data_lineage" in first_signal
+    assert "house_score" in first_signal
+    assert "house_grade" in first_signal
+    assert "house_explanation" in first_signal
+    assert data["sector_heatmap"]
+    if first_signal["market_data_source"] == "synthetic":
+        assert first_signal["prediction_mode"] == "unavailable"
+
+
+def test_quant_dashboard_chart_contract_is_available():
+    client = TestClient(main_module.app)
+
+    response = client.get("/api/v1/quant/dashboard/chart?symbol=NVDA&timeframe=1D")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["symbol"] == "NVDA"
+    assert data["timeframe"] == "1D"
+    assert "candles" in data
+    assert "indicators" in data
+    assert "viewport_defaults" in data
+    assert "click_targets" in data
+    assert "signal" in data
+    if data["source"] == "synthetic" or data["signal"].get("prediction_mode") != "model":
+        assert data["projection_scenarios"] == {}
+        assert data["prediction_disabled_reason"] in {"synthetic_market_data", "prediction_mode_unavailable"}
+
+
+def test_platform_overview_watchlist_projection_respects_signed_decision(monkeypatch):
+    service = QuantSystemService()
+    signals = [
+        ResearchSignal(
+            symbol="NEE",
+            company_name="NextEra Energy",
+            sector="Utilities",
+            thesis="Risk-off and drawdown filters keep the name in a cautious regime.",
+            action="neutral",
+            confidence=0.78,
+            expected_return=-0.012,
+            risk_score=41.0,
+            overall_score=74.0,
+            e_score=79.0,
+            s_score=72.0,
+            g_score=77.0,
+            predicted_return_5d=0.064,
+            predicted_volatility_10d=0.118,
+            predicted_drawdown_20d=0.094,
+            regime_label="risk_off",
+            regime_probability=0.83,
+            decision_confidence=0.76,
+            market_data_source="yfinance",
+            factor_scores=[],
+            catalysts=["Short-term rebound branch exists but regime remains defensive."],
+            data_lineage=["L0: yfinance daily bars", "L2: P1/P2 stacked decision"],
+        )
+    ]
+
+    monkeypatch.setattr(service, "_build_signals", lambda *args, **kwargs: signals)
+    monkeypatch.setattr(
+        service,
+        "_build_portfolio",
+        lambda *args, **kwargs: PortfolioSummary(
+            strategy_name="Test",
+            benchmark="SPY",
+            capital_base=1_000_000,
+            gross_exposure=0.0,
+            net_exposure=0.0,
+            turnover_estimate=0.0,
+            expected_alpha=0.0,
+            positions=[],
+            constraints={},
+        ),
+    )
+    monkeypatch.setattr(
+        service.storage,
+        "list_records",
+        lambda kind: [{"metrics": {"sharpe": 1.0}, "risk_alerts": []}] if kind == "backtests" else [],
+    )
+
+    overview = service.build_platform_overview()
+    signal = overview["watchlist_signals"][0]
+
+    assert signal["prediction_mode"] == "model"
+    assert set(signal["projection_scenarios"]) == {"upper", "center", "lower"}
+    assert signal["projection_basis_return"] < 0
+    assert signal["projection_scenarios"]["center"]["expected_return"] < 0
+    assert signal["projection_scenarios"]["upper"]["expected_return"] > signal["projection_scenarios"]["center"]["expected_return"]
+    assert signal["projection_scenarios"]["lower"]["expected_return"] < signal["projection_scenarios"]["center"]["expected_return"]
+
+
+def test_platform_overview_marks_synthetic_watchlist_items_unavailable(monkeypatch):
+    service = QuantSystemService()
+    signals = [
+        ResearchSignal(
+            symbol="AAPL",
+            company_name="Apple",
+            sector="Technology",
+            thesis="Synthetic fallback signal for offline testing.",
+            action="long",
+            confidence=0.82,
+            expected_return=0.034,
+            risk_score=31.0,
+            overall_score=80.0,
+            e_score=79.0,
+            s_score=76.0,
+            g_score=78.0,
+            predicted_return_5d=0.041,
+            predicted_volatility_10d=0.102,
+            predicted_drawdown_20d=0.086,
+            market_data_source="synthetic",
+            factor_scores=[],
+            catalysts=[],
+            data_lineage=["L0: synthetic fallback factor proxies"],
+        )
+    ]
+
+    monkeypatch.setattr(service, "_build_signals", lambda *args, **kwargs: signals)
+    monkeypatch.setattr(
+        service,
+        "_build_portfolio",
+        lambda *args, **kwargs: PortfolioSummary(
+            strategy_name="Test",
+            benchmark="SPY",
+            capital_base=1_000_000,
+            gross_exposure=0.0,
+            net_exposure=0.0,
+            turnover_estimate=0.0,
+            expected_alpha=0.0,
+            positions=[],
+            constraints={},
+        ),
+    )
+    monkeypatch.setattr(
+        service.storage,
+        "list_records",
+        lambda kind: [{"metrics": {"sharpe": 1.0}, "risk_alerts": []}] if kind == "backtests" else [],
+    )
+
+    overview = service.build_platform_overview()
+    signal = overview["watchlist_signals"][0]
+
+    assert signal["market_data_source"] == "synthetic"
+    assert signal["prediction_mode"] == "unavailable"
+    assert signal["projection_basis_return"] is None
+    assert signal["projection_scenarios"] == {}
 
 
 def test_quant_research_backtest_and_execution_flow():

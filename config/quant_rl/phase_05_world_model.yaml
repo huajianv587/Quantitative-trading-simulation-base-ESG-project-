@@ -1,0 +1,4 @@
+algorithm: world_model
+action_type: continuous
+phase: phase_05_world_model_research
+total_steps: 3000
