@@ -1,0 +1,447 @@
+import { api } from '../qtapi.js?v=8';
+import { toast } from '../components/toast.js?v=8';
+import { router } from '../router.js?v=8';
+import { getLang, onLangChange } from '../i18n.js?v=8';
+import {
+  emptyState,
+  esc,
+  metric,
+  pct,
+  num,
+  readSymbol,
+  readUniverse,
+  renderError,
+  renderEvidenceItems,
+  renderFactorCards,
+  renderSimulationResult,
+  setLoading,
+} from './workbench-utils.js?v=8';
+
+let _container = null;
+let _langCleanup = null;
+let _latest = {
+  evidence: null,
+  decision: null,
+  audit: null,
+};
+
+const COPY = {
+  en: {
+    title: 'Decision Cockpit',
+    subtitle: 'Evidence chain, critic checks, risk triggers, and shadow-mode decisions',
+    refresh: 'Refresh',
+    setupTitle: 'Shadow Decision Setup',
+    setupSub: 'Research support only. Broker execution remains gated elsewhere.',
+    symbol: 'Symbol',
+    horizon: 'Horizon Days',
+    universe: 'Universe',
+    query: 'Research Question',
+    queryValue: 'Explain the current evidence, risk, and model disagreement before any action.',
+    scan: 'Scan Evidence',
+    explain: 'Explain Decision',
+    openFactor: 'Open Factor Lab',
+    openSimulation: 'Open Simulation',
+    decisionSummary: 'Decision Report',
+    decisionEmpty: 'No decision report yet',
+    decisionHint: 'Run Explain Decision to generate evidence-backed guidance.',
+    evidence: 'Evidence Feed',
+    counter: 'Counter Evidence',
+    audit: 'Audit Trail',
+    workbenches: 'Connected Workbenches',
+    factorTitle: 'Factor Lab',
+    factorDesc: 'Discover candidates, gate IC/RankIC, and review FactorCards.',
+    simTitle: 'Simulation',
+    simDesc: 'Replay shocks, Monte Carlo paths, and historical analogs.',
+    loadAudit: 'Load Audit',
+    scanning: 'Scanning evidence...',
+    explaining: 'Building decision report...',
+    auditLoading: 'Loading audit trail...',
+    noCounter: 'No counter evidence in the latest report.',
+    noAudit: 'No audit records yet',
+    noAuditHint: 'Generate a decision report to start the shadow log.',
+    ready: 'shadow mode',
+  },
+  zh: {
+    title: '智能决策驾驶舱',
+    subtitle: '证据链、反方检查、风险触发与影子模式决策',
+    refresh: '刷新',
+    setupTitle: '影子决策设置',
+    setupSub: '仅用于研究支持，实盘执行仍由执行层门控。',
+    symbol: '股票代码',
+    horizon: '预测天数',
+    universe: '股票池',
+    query: '研究问题',
+    queryValue: '解释当前证据、风险和模型分歧，再给出任何动作建议。',
+    scan: '扫描证据',
+    explain: '解释决策',
+    openFactor: '打开因子实验室',
+    openSimulation: '打开情景模拟',
+    decisionSummary: '决策报告',
+    decisionEmpty: '暂无决策报告',
+    decisionHint: '点击解释决策，生成带证据链的建议。',
+    evidence: '证据流',
+    counter: '反方证据',
+    audit: '审计追踪',
+    workbenches: '关联工作台',
+    factorTitle: '因子实验室',
+    factorDesc: '发现候选因子，检查 IC/RankIC，并复核因子卡。',
+    simTitle: '情景模拟',
+    simDesc: '回放冲击、Monte Carlo 路径和历史相似事件。',
+    loadAudit: '加载审计',
+    scanning: '正在扫描证据...',
+    explaining: '正在生成决策报告...',
+    auditLoading: '正在加载审计追踪...',
+    noCounter: '最新报告中暂无反方证据。',
+    noAudit: '暂无审计记录',
+    noAuditHint: '生成一次决策报告后会进入影子日志。',
+    ready: '影子模式',
+  },
+};
+
+export async function render(container) {
+  _container = container;
+  container.innerHTML = buildShell();
+  bindEvents(container);
+  _langCleanup ||= onLangChange(() => {
+    if (_container?.isConnected) {
+      _container.innerHTML = buildShell();
+      bindEvents(_container);
+      renderCached(_container);
+    }
+  });
+  await refreshEvidence(container, false);
+}
+
+export function destroy() {
+  _container = null;
+  _latest = { evidence: null, decision: null, audit: null };
+  _langCleanup?.();
+  _langCleanup = null;
+}
+
+function c(key) {
+  const current = getLang() === 'zh' ? 'zh' : 'en';
+  return COPY[current][key] || COPY.en[key] || key;
+}
+
+function t(en, zh) {
+  return getLang() === 'zh' ? zh : en;
+}
+
+function buildShell() {
+  return `
+  <div class="workbench-page decision-cockpit-page" data-no-autotranslate="true">
+    <div class="page-header">
+      <div>
+        <div class="page-header__title">${c('title')}</div>
+        <div class="page-header__sub">${c('subtitle')}</div>
+      </div>
+      <div class="page-header__actions">
+        <button class="btn btn-ghost btn-sm" id="btn-refresh-intelligence">${c('refresh')}</button>
+      </div>
+    </div>
+
+    <div class="grid-2 workbench-top-grid">
+      <section class="run-panel">
+        <div class="run-panel__header">
+          <div class="run-panel__title">${c('setupTitle')}</div>
+          <div class="run-panel__sub">${c('setupSub')}</div>
+        </div>
+        <div class="run-panel__body">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">${c('symbol')}</label>
+              <input class="form-input" id="intel-symbol" value="AAPL" autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label class="form-label">${c('horizon')}</label>
+              <input class="form-input" id="intel-horizon" type="number" value="20" min="1" max="252">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">${c('universe')}</label>
+            <input class="form-input" id="intel-universe" value="AAPL, MSFT, NVDA, NEE">
+          </div>
+          <div class="form-group">
+            <label class="form-label">${c('query')}</label>
+            <textarea class="form-textarea" id="intel-query" rows="3">${c('queryValue')}</textarea>
+          </div>
+        </div>
+        <div class="run-panel__foot workbench-action-grid intelligence-action-grid">
+          <button class="btn btn-primary workbench-action-btn intelligence-action-btn" id="btn-intel-scan">${c('scan')}</button>
+          <button class="btn btn-primary workbench-action-btn intelligence-action-btn" id="btn-decision-explain">${c('explain')}</button>
+          <button class="btn btn-ghost workbench-action-btn intelligence-action-btn" id="btn-open-factor-lab">${c('openFactor')}</button>
+          <button class="btn btn-ghost workbench-action-btn intelligence-action-btn" id="btn-open-simulation">${c('openSimulation')}</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">${c('decisionSummary')}</span>
+          <span class="text-xs text-muted font-mono" id="decision-status">${c('ready')}</span>
+        </div>
+        <div class="card-body" id="decision-summary">${renderDecisionReadyState()}</div>
+      </section>
+    </div>
+
+    <div class="grid-2 workbench-main-grid">
+      <section class="card">
+        <div class="card-header"><span class="card-title">${c('evidence')}</span></div>
+        <div class="card-body" id="evidence-panel"></div>
+      </section>
+      <section class="card">
+        <div class="card-header"><span class="card-title">${c('counter')}</span></div>
+        <div class="card-body" id="counter-panel">${renderCounterReadyState()}</div>
+      </section>
+    </div>
+
+    <div class="grid-2 workbench-main-grid">
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">${c('audit')}</span>
+          <button class="btn btn-ghost btn-sm" id="btn-load-audit">${c('loadAudit')}</button>
+        </div>
+        <div class="card-body" id="audit-panel">${renderAuditReadyState()}</div>
+      </section>
+      <section class="card">
+        <div class="card-header"><span class="card-title">${c('workbenches')}</span></div>
+        <div class="card-body">
+          <div class="workbench-link-grid">
+            <button class="workbench-link-card" id="link-factor-lab">
+              <strong>${c('factorTitle')}</strong>
+              <span>${c('factorDesc')}</span>
+            </button>
+            <button class="workbench-link-card" id="link-simulation">
+              <strong>${c('simTitle')}</strong>
+              <span>${c('simDesc')}</span>
+            </button>
+          </div>
+          ${renderConnectedActions()}
+        </div>
+      </section>
+    </div>
+  </div>`;
+}
+
+function bindEvents(container) {
+  container.querySelector('#btn-refresh-intelligence')?.addEventListener('click', () => refreshEvidence(container, true));
+  container.querySelector('#btn-intel-scan')?.addEventListener('click', () => runEvidence(container));
+  container.querySelector('#btn-decision-explain')?.addEventListener('click', () => runDecision(container));
+  container.querySelector('#btn-open-factor-lab')?.addEventListener('click', () => router.navigate('/factor-lab'));
+  container.querySelector('#btn-open-simulation')?.addEventListener('click', () => router.navigate('/simulation'));
+  container.querySelector('#link-factor-lab')?.addEventListener('click', () => router.navigate('/factor-lab'));
+  container.querySelector('#link-simulation')?.addEventListener('click', () => router.navigate('/simulation'));
+  container.querySelector('#btn-load-audit')?.addEventListener('click', () => loadAudit(container));
+}
+
+function readConfig(container) {
+  const symbol = readSymbol(container, '#intel-symbol', 'AAPL');
+  const universe = readUniverse(container.querySelector('#intel-universe')?.value, symbol);
+  return {
+    symbol,
+    universe,
+    query: container.querySelector('#intel-query')?.value || '',
+    horizon_days: Number(container.querySelector('#intel-horizon')?.value) || 20,
+  };
+}
+
+async function refreshEvidence(container, showToast) {
+  const cfg = readConfig(container);
+  setLoading(container.querySelector('#evidence-panel'));
+  try {
+    _latest.evidence = await api.intelligence.evidence(cfg.symbol, 12);
+    renderEvidence(container, _latest.evidence?.items || []);
+    if (showToast) toast.success(c('refresh'), `${(_latest.evidence?.items || []).length} items`);
+  } catch (err) {
+    renderError(container.querySelector('#evidence-panel'), err);
+  }
+}
+
+async function runEvidence(container) {
+  const cfg = readConfig(container);
+  setLoading(container.querySelector('#evidence-panel'), c('scanning'));
+  try {
+    _latest.evidence = await api.intelligence.scan({
+      universe: cfg.universe,
+      query: cfg.query,
+      live_connectors: false,
+      limit: 20,
+    });
+    renderEvidence(container, _latest.evidence.items || []);
+    toast.success(c('scan'), `${_latest.evidence.items?.length || 0} items`);
+  } catch (err) {
+    renderError(container.querySelector('#evidence-panel'), err);
+    toast.error(c('scan'), err.message);
+  }
+}
+
+async function runDecision(container) {
+  const cfg = readConfig(container);
+  setLoading(container.querySelector('#decision-summary'), c('explaining'));
+  try {
+    _latest.decision = await api.decision.explain({
+      symbol: cfg.symbol,
+      universe: cfg.universe,
+      query: cfg.query,
+      horizon_days: cfg.horizon_days,
+      include_simulation: true,
+    });
+    renderDecision(container, _latest.decision);
+    renderEvidence(container, _latest.decision.main_evidence || []);
+    renderCounterEvidence(container, _latest.decision.counter_evidence || []);
+    toast.success(c('explain'), (_latest.decision.action || '').toUpperCase());
+  } catch (err) {
+    renderError(container.querySelector('#decision-summary'), err);
+    toast.error(c('explain'), err.message);
+  }
+}
+
+async function loadAudit(container) {
+  const cfg = readConfig(container);
+  setLoading(container.querySelector('#audit-panel'), c('auditLoading'));
+  try {
+    _latest.audit = await api.decision.auditTrail(cfg.symbol, 20);
+    renderAudit(container, _latest.audit?.decisions || []);
+  } catch (err) {
+    renderError(container.querySelector('#audit-panel'), err);
+  }
+}
+
+function renderCached(container) {
+  if (_latest.decision) renderDecision(container, _latest.decision);
+  if (_latest.evidence) renderEvidence(container, _latest.evidence.items || []);
+  if (_latest.decision) renderCounterEvidence(container, _latest.decision.counter_evidence || []);
+  if (_latest.audit) renderAudit(container, _latest.audit.decisions || []);
+}
+
+function renderDecision(container, report) {
+  const status = container.querySelector('#decision-status');
+  if (status) status.textContent = `${report.symbol || ''} / ${report.action || ''}`;
+  const verifier = report.verifier_checks || {};
+  const triggers = (report.risk_triggers || []).map(item => `<li>${esc(item)}</li>`).join('');
+  const factors = renderFactorCards(report.factor_cards || [], { maxItems: 3 });
+  const simulation = report.simulation ? renderSimulationResult(report.simulation) : '';
+  container.querySelector('#decision-summary').innerHTML = `
+    <div class="workbench-metric-grid">
+      ${metric(getLang() === 'zh' ? '动作' : 'Action', String(report.action || '').toUpperCase())}
+      ${metric(getLang() === 'zh' ? '期望收益' : 'Expected', pct(report.expected_return), 'positive')}
+      ${metric(getLang() === 'zh' ? '置信度' : 'Confidence', num(report.confidence))}
+      ${metric(getLang() === 'zh' ? '最大仓位' : 'Weight Max', pct(report.position_weight_range?.max || 0))}
+    </div>
+    <div class="workbench-report-text">
+      <div><strong>${getLang() === 'zh' ? '置信区间' : 'Interval'}:</strong>
+        ${pct(report.confidence_interval?.lower)} / ${pct(report.confidence_interval?.center)} / ${pct(report.confidence_interval?.upper)}
+      </div>
+      <div><strong>Verifier:</strong>
+        ${esc(verifier.verdict || 'review')} / leakage ${String(!!verifier.leakage_pass)}
+      </div>
+      <div class="workbench-section__title">${getLang() === 'zh' ? '风险触发条件' : 'Risk Triggers'}</div>
+      <ul>${triggers}</ul>
+    </div>
+    <div class="workbench-section">
+      <div class="workbench-section__title">${getLang() === 'zh' ? '因子贡献' : 'Factor Contribution'}</div>
+      ${factors}
+    </div>
+    <div class="workbench-section">
+      <div class="workbench-section__title">${getLang() === 'zh' ? '内嵌模拟摘要' : 'Embedded Simulation'}</div>
+      ${simulation}
+    </div>`;
+}
+
+function renderEvidence(container, items) {
+  container.querySelector('#evidence-panel').innerHTML = renderEvidenceItems(items, { maxItems: 10 });
+}
+
+function renderCounterEvidence(container, items) {
+  container.querySelector('#counter-panel').innerHTML = items?.length
+    ? renderEvidenceItems(items, { maxItems: 8 })
+    : renderCounterReadyState();
+}
+
+function renderAudit(container, decisions) {
+  if (!decisions.length) {
+    container.querySelector('#audit-panel').innerHTML = renderAuditReadyState();
+    return;
+  }
+  const rows = decisions.map(decision => `
+    <tr>
+      <td>${esc(decision.decision_id || '')}</td>
+      <td>${esc(decision.symbol || '')}</td>
+      <td>${esc((decision.action || '').toUpperCase())}</td>
+      <td class="cell-num">${pct(decision.expected_return)}</td>
+      <td class="cell-num">${num(decision.confidence)}</td>
+    </tr>`).join('');
+  container.querySelector('#audit-panel').innerHTML = `
+    <div class="tbl-wrap workbench-table-wrap"><table>
+      <thead><tr><th>ID</th><th>Symbol</th><th>Action</th><th>Exp Ret</th><th>Conf</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+function renderDecisionReadyState() {
+  return `
+    <div class="functional-empty decision-ready-state">
+      <div>
+        <div class="functional-empty__eyebrow">${t('Decision Readiness', '决策准备度')}</div>
+        <h3>${c('decisionEmpty')}</h3>
+        <p>${c('decisionHint')}</p>
+      </div>
+      <div class="workbench-metric-grid functional-empty__metrics">
+        ${metric(t('Evidence', '证据'), t('pending', '待扫描'))}
+        ${metric(t('Verifier', '验证器'), t('armed', '已启用'), 'positive')}
+        ${metric(t('Leakage', '泄漏检查'), t('as-of', '时点安全'))}
+        ${metric(t('Mode', '模式'), t('shadow', '影子'))}
+      </div>
+      <div class="factor-checklist">
+        <div class="factor-check-row"><span>${t('Scan source-linked evidence', '扫描带来源证据')}</span><strong>${t('next', '下一步')}</strong></div>
+        <div class="factor-check-row"><span>${t('Generate factor and risk explanation', '生成因子与风险解释')}</span><strong>${t('ready', '就绪')}</strong></div>
+        <div class="factor-check-row"><span>${t('No broker execution from this page', '本页不触发券商执行')}</span><strong class="is-pass">${t('pass', '通过')}</strong></div>
+      </div>
+    </div>`;
+}
+
+function renderCounterReadyState() {
+  return `
+    <div class="functional-empty compact-functional-empty">
+      <div>
+        <div class="functional-empty__eyebrow">${t('Counter Evidence', '反方证据')}</div>
+        <h3>${c('noCounter')}</h3>
+        <p>${t('The critic will list model disagreement, weak sources, stale signals, and risk conflicts after a decision report is generated.', '生成决策报告后，验证器会列出模型分歧、弱来源、旧信号和风险冲突。')}</p>
+      </div>
+      <div class="factor-checklist">
+        <div class="factor-check-row"><span>${t('Source reliability', '来源可靠性')}</span><strong>${t('watch', '观察')}</strong></div>
+        <div class="factor-check-row"><span>${t('Future leakage', '未来信息泄漏')}</span><strong class="is-pass">${t('guarded', '已防护')}</strong></div>
+        <div class="factor-check-row"><span>${t('Overconfidence', '过度置信')}</span><strong>${t('critic', '验证器')}</strong></div>
+        <div class="factor-check-row"><span>${t('Regime conflict', '市场状态冲突')}</span><strong>${t('pending', '待检查')}</strong></div>
+      </div>
+    </div>`;
+}
+
+function renderAuditReadyState() {
+  return `
+    <div class="functional-empty compact-functional-empty">
+      <div>
+        <div class="functional-empty__eyebrow">${t('Audit Trail', '审计追踪')}</div>
+        <h3>${c('noAudit')}</h3>
+        <p>${c('noAuditHint')}</p>
+      </div>
+      <div class="workbench-kv-list compact-kv-list">
+        <div class="workbench-kv-row"><span>${t('Data snapshot', '数据快照')}</span><strong>${t('waiting', '等待生成')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Model version', '模型版本')}</span><strong>shadow-stack</strong></div>
+        <div class="workbench-kv-row"><span>${t('Feature time', '特征时点')}</span><strong>as-of safe</strong></div>
+        <div class="workbench-kv-row"><span>${t('Outcome log', '结果复盘')}</span><strong>${t('after decision', '决策后记录')}</strong></div>
+      </div>
+    </div>`;
+}
+
+function renderConnectedActions() {
+  return `
+    <div class="workbench-section connected-actions">
+      <div class="workbench-section__title">${t('Connected Actions', '关联动作')}</div>
+      <div class="factor-checklist">
+        <div class="factor-check-row"><span>${t('Promote validated factors in Factor Lab', '在因子实验室升格通过门禁的因子')}</span><strong>${t('research', '研究')}</strong></div>
+        <div class="factor-check-row"><span>${t('Replay the current thesis in Simulation', '在模拟工作台回放当前判断')}</span><strong>${t('what-if', '推演')}</strong></div>
+        <div class="factor-check-row"><span>${t('Keep every recommendation in shadow log', '所有建议进入影子日志')}</span><strong class="is-pass">${t('on', '开启')}</strong></div>
+      </div>
+    </div>`;
+}

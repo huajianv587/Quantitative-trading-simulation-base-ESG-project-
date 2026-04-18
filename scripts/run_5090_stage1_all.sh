@@ -37,6 +37,14 @@ if [ -d ".venv" ]; then
   source .venv/bin/activate
 fi
 
+echo "[stage1] package smoke preflight"
+python training/full_model_preflight.py \
+  --jobs "${FULL_SUITE_JOBS}" \
+  --smoke \
+  --allow-cpu-smoke \
+  --min-free-gb "${PACKAGE_PREFLIGHT_MIN_FREE_GB:-0}" \
+  --output-path "storage/full-training-runs/${RUN_ID}/preflight/package_smoke_preflight.json"
+
 cpu_smoke_args=()
 if [ "${ALLOW_CPU_SMOKE}" = "1" ]; then
   cpu_smoke_args=(--allow-cpu-smoke)
@@ -70,6 +78,11 @@ python training/full_model_data_audit.py \
   --jobs "${FULL_SUITE_JOBS}" \
   --output-dir "storage/full-training-runs/${RUN_ID}/data_audit"
 
+if [ "${SMOKE}" != "1" ] && { [ "${FULL_SUITE_JOBS}" = "all" ] || [[ ",${FULL_SUITE_JOBS}," == *",lora,"* ]]; }; then
+  echo "[stage1] qwen base model cache"
+  bash scripts/download_qwen_base_model.sh
+fi
+
 echo "[stage1] ESG/RL paper-run"
 RESUME="${RESUME:-1}" ALLOW_CPU_SMOKE="${ALLOW_CPU_SMOKE}" SMOKE="${SMOKE}" \
   bash scripts/autodl_run_paper_experiments.sh
@@ -78,6 +91,10 @@ echo "[stage1] full model suite"
 python training/train_full_model_suite.py "${suite_args[@]}"
 
 echo "[stage1] final artifact check"
+python scripts/quant_rl_expected_run_manifest.py verify \
+  --manifest-path "storage/quant/rl-experiments/paper-run/protocol/expected_run_manifest.json" \
+  --report-path "storage/full-training-runs/${RUN_ID}/final_paper_run_matrix_check.json"
+
 python - "${RUN_ID}" <<'PY'
 import json
 import sys
@@ -87,12 +104,15 @@ run_id = sys.argv[1]
 required = [
     Path(f"storage/full-training-runs/{run_id}/full_training_manifest.json"),
     Path(f"storage/full-training-runs/{run_id}/data_audit/full_model_data_audit.json"),
-    Path("storage/quant/rl-experiments/paper-run/formula_v2/sample_full_2022_2025/summary"),
-    Path("storage/quant/rl-experiments/paper-run/formula_v2_1/sample_full_2022_2025/summary"),
-    Path("storage/quant/rl-experiments/paper-run/formula_v2/sample_post_esg_effective/summary"),
-    Path("storage/quant/rl-experiments/paper-run/formula_v2_1/sample_post_esg_effective/summary"),
+    Path(f"storage/full-training-runs/{run_id}/final_paper_run_matrix_check.json"),
 ]
 missing = [str(path) for path in required if not path.exists()]
+paper_check = {}
+paper_check_path = Path(f"storage/full-training-runs/{run_id}/final_paper_run_matrix_check.json")
+if paper_check_path.exists():
+    paper_check = json.loads(paper_check_path.read_text(encoding="utf-8"))
+    if paper_check.get("status") != "pass":
+        missing.append(f"{paper_check_path} status={paper_check.get('status')}")
 payload = {"run_id": run_id, "status": "fail" if missing else "pass", "missing": missing}
 Path(f"storage/full-training-runs/{run_id}/final_artifact_check.json").write_text(
     json.dumps(payload, ensure_ascii=False, indent=2),

@@ -1,10 +1,73 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
 import { router } from '../router.js?v=8';
+import { getLang, onLangChange } from '../i18n.js?v=8';
 import { ensureUiAuditLog, recordUiAuditEvent } from '../modules/ui-audit.js?v=8';
 
 let _container = null;
 let _state = null;
+let _langCleanup = null;
+
+const RL_COPY = {
+  en: {
+    title: 'RL Agent Lab',
+    subtitle: 'Recipe datasets / quick search / full train / backtest artifacts / AutoDL handoff',
+    openExecution: 'Open Execution',
+    refresh: 'Refresh Lab',
+    badge: 'SCI Experiment Track',
+    heroTitle: 'Turn recipe layers into a repeatable RL training loop.',
+    heroText: 'Build datasets from the live market stack, search local best hyper-parameters, launch a full run, archive metrics, and hand the validated policy back into the execution layer.',
+    trackedRuns: 'Tracked Runs',
+    trackedDetail: 'SQLite + Supabase mirrored metadata',
+    recipeCatalog: 'Recipe Catalog',
+    recipeDetail: 'Six-stage AutoDL experiment ladder',
+    manifests: 'Dataset Manifests',
+    manifestsDetail: 'Experiment manual data lineage',
+    metrics: 'Metrics Files',
+    metricsDetail: 'Per-run metrics.json archived',
+    latestDataset: 'Latest Dataset',
+    latestDatasetReady: 'Latest recipe/market dataset located',
+    latestDatasetPending: 'No ready dataset found yet',
+    latestCheckpoint: 'Latest Checkpoint',
+    latestCheckpointReady: 'Checkpoint ready for reload',
+    latestCheckpointPending: 'Training artifact not synced yet',
+    latestReport: 'Latest Report',
+    latestReportReady: 'Backtest/report artifact available',
+    latestReportPending: 'Report artifact pending',
+    paperExecution: 'Paper Execution',
+    paperExecutionDetail: 'Validated models hand off into the main execution stack',
+    awaiting: 'Awaiting remote artifact',
+  },
+  zh: {
+    title: 'RL 智能体实验室',
+    subtitle: '配方数据集 / 快速搜索 / 正式训练 / 回测产物 / AutoDL 交接',
+    openExecution: '打开执行层',
+    refresh: '刷新实验室',
+    badge: 'SCI 实验轨道',
+    heroTitle: '把配方层变成可复现的 RL 训练闭环。',
+    heroText: '从市场栈构建数据集，搜索本地最优超参数，启动完整训练，归档指标，并把验证后的策略交回执行层。',
+    trackedRuns: '跟踪运行',
+    trackedDetail: 'SQLite + Supabase 镜像元数据',
+    recipeCatalog: '配方目录',
+    recipeDetail: '六阶段 AutoDL 实验阶梯',
+    manifests: '数据清单',
+    manifestsDetail: '实验手册数据血缘',
+    metrics: '指标文件',
+    metricsDetail: '逐运行归档 metrics.json',
+    latestDataset: '最新数据集',
+    latestDatasetReady: '已定位最新配方/市场数据集',
+    latestDatasetPending: '暂未找到可用数据集',
+    latestCheckpoint: '最新检查点',
+    latestCheckpointReady: '检查点可重新加载',
+    latestCheckpointPending: '训练产物尚未同步',
+    latestReport: '最新报告',
+    latestReportReady: '回测/报告产物可用',
+    latestReportPending: '报告产物待生成',
+    paperExecution: '论文执行入口',
+    paperExecutionDetail: '验证模型交接到主执行栈',
+    awaiting: '等待远端产物',
+  },
+};
 
 function resetState() {
   _state = {
@@ -61,39 +124,72 @@ export async function render(container) {
   ensureUiAuditLog();
   container.innerHTML = buildShell();
   bindEvents();
+  _langCleanup ||= onLangChange(() => {
+    if (_container?.isConnected) {
+      const snapshot = _state;
+      _container.innerHTML = buildShell();
+      bindEvents();
+      _state = snapshot;
+      renderOverview();
+    }
+  });
   await loadOverview(false);
 }
 
 export async function destroy() {
   _container = null;
   resetState();
+  _langCleanup?.();
+  _langCleanup = null;
+}
+
+function c(key) {
+  const current = getLang() === 'zh' ? 'zh' : 'en';
+  return RL_COPY[current]?.[key] || RL_COPY.en[key] || key;
 }
 
 function buildShell() {
   return `
+    <div class="rl-lab-page" data-no-autotranslate="true">
     <div class="page-header">
       <div>
-        <div class="page-header__title">RL Agent Lab</div>
-        <div class="page-header__sub">Recipe datasets · quick search · full train · backtest artifacts · AutoDL handoff</div>
+        <div class="page-header__title">${c('title')}</div>
+        <div class="page-header__sub">${c('subtitle')}</div>
       </div>
       <div class="page-header__actions">
-        <button class="btn btn-ghost btn-sm" id="rl-open-execution">Open Execution</button>
-        <button class="btn btn-primary btn-sm" id="rl-refresh">Refresh Lab</button>
+        <button class="btn btn-ghost btn-sm" id="rl-open-execution">${c('openExecution')}</button>
+        <button class="btn btn-primary btn-sm" id="rl-refresh">${c('refresh')}</button>
       </div>
     </div>
 
     <section class="card rl-lab-hero">
       <div class="card-body rl-lab-hero__body">
         <div class="rl-lab-hero__copy">
-          <span class="badge rl-lab-badge">SCI Experiment Track</span>
-          <h2>Turn recipe layers into a repeatable RL training loop.</h2>
-          <p>Build datasets from the live market stack, search local best hyper-parameters, launch a full run, archive metrics, and hand the validated policy back into the execution layer.</p>
+          <span class="badge rl-lab-badge">${c('badge')}</span>
+          <h2>${c('heroTitle')}</h2>
+          <p>${c('heroText')}</p>
         </div>
         <div class="rl-lab-hero__channels" id="rl-service-badges"></div>
       </div>
     </section>
 
-    <section class="rl-lab-stats" id="rl-stats"></section>
+    <section class="rl-lab-stats" id="rl-stats">
+      <article class="metric-card rl-lab-stat">
+        <div class="metric-label">${c('trackedRuns')}</div>
+        <div class="metric-value rl-lab-stat__value">0</div>
+        <div class="rl-lab-stat__detail">${c('trackedDetail')}</div>
+      </article>
+      <article class="metric-card rl-lab-stat">
+        <div class="metric-label">${c('recipeCatalog')}</div>
+        <div class="metric-value rl-lab-stat__value">0</div>
+        <div class="rl-lab-stat__detail">${c('recipeDetail')}</div>
+      </article>
+      <article class="metric-card rl-lab-stat">
+        <div class="metric-label">${c('latestDataset')}</div>
+        <div class="metric-value rl-lab-stat__value rl-lab-stat__value--path">${c('awaiting')}</div>
+        <div class="rl-lab-stat__detail">${c('latestDatasetPending')}</div>
+      </article>
+    </section>
 
     <div class="grid-2 rl-lab-main-grid">
       <section class="card">
@@ -305,6 +401,7 @@ function buildShell() {
         </div>
       </section>
     </div>
+    </div>
   `;
 }
 
@@ -341,6 +438,19 @@ async function loadOverview(withToast = false) {
     if (withToast) toast.success('RL lab refreshed', 'Latest overview loaded');
     recordUiAuditEvent('rl_refresh', '#rl-refresh', {}, { run_count: (overview.runs || []).length });
   } catch (error) {
+    _state.overview = {
+      runs: [],
+      recipes: [],
+      experiment_groups: [],
+      output_status: {},
+      artifact_health: {},
+      services: {},
+      latest_dataset: null,
+      latest_checkpoint: null,
+      latest_report: null,
+      paper_execution_bridge: { route: '#/execution' },
+    };
+    renderOverview();
     const node = query('#rl-train-output');
     if (node) {
       node.innerHTML = `
@@ -379,44 +489,48 @@ function renderServiceBadges(services) {
 function renderStats(overview) {
   const stats = [
     {
-      label: 'Tracked Runs',
+      label: c('trackedRuns'),
       value: String((overview.runs || []).length || 0),
-      detail: 'SQLite + Supabase mirrored metadata',
+      detail: c('trackedDetail'),
     },
     {
-      label: 'Recipe Catalog',
+      label: c('recipeCatalog'),
       value: String((overview.recipes || []).length || 0),
-      detail: 'Six-stage AutoDL experiment ladder',
+      detail: c('recipeDetail'),
     },
     {
-      label: 'Dataset Manifests',
+      label: c('manifests'),
       value: String(((overview.output_status || {}).dataset_manifests) || 0),
-      detail: 'Experiment manual data lineage',
+      detail: c('manifestsDetail'),
     },
     {
-      label: 'Metrics Files',
+      label: c('metrics'),
       value: String(((overview.output_status || {}).metrics_files) || 0),
-      detail: 'Per-run metrics.json archived',
+      detail: c('metricsDetail'),
     },
     {
-      label: 'Latest Dataset',
-      value: latestPath(overview.latest_dataset) || 'Awaiting remote artifact',
-      detail: (overview.artifact_health || {}).dataset_ready ? 'Latest recipe/market dataset located' : 'No ready dataset found yet',
+      label: c('latestDataset'),
+      value: latestPath(overview.latest_dataset) || c('awaiting'),
+      detail: (overview.artifact_health || {}).dataset_ready ? c('latestDatasetReady') : c('latestDatasetPending'),
+      path: true,
     },
     {
-      label: 'Latest Checkpoint',
-      value: latestPath(overview.latest_checkpoint) || 'Awaiting remote artifact',
-      detail: (overview.artifact_health || {}).checkpoint_ready ? 'Checkpoint ready for reload' : 'Training artifact not synced yet',
+      label: c('latestCheckpoint'),
+      value: latestPath(overview.latest_checkpoint) || c('awaiting'),
+      detail: (overview.artifact_health || {}).checkpoint_ready ? c('latestCheckpointReady') : c('latestCheckpointPending'),
+      path: true,
     },
     {
-      label: 'Latest Report',
-      value: latestPath(overview.latest_report) || 'Awaiting remote artifact',
-      detail: (overview.artifact_health || {}).report_ready ? 'Backtest/report artifact available' : 'Report artifact pending',
+      label: c('latestReport'),
+      value: latestPath(overview.latest_report) || c('awaiting'),
+      detail: (overview.artifact_health || {}).report_ready ? c('latestReportReady') : c('latestReportPending'),
+      path: true,
     },
     {
-      label: 'Paper Execution',
+      label: c('paperExecution'),
       value: (overview.paper_execution_bridge || {}).route || '#/execution',
-      detail: 'Validated models hand off into the main execution stack',
+      detail: c('paperExecutionDetail'),
+      path: true,
     },
   ];
   const node = query('#rl-stats');
@@ -424,7 +538,7 @@ function renderStats(overview) {
   node.innerHTML = stats.map((item) => `
     <article class="metric-card rl-lab-stat">
       <div class="metric-label">${escapeHtml(item.label)}</div>
-      <div class="metric-value">${escapeHtml(item.value)}</div>
+      <div class="metric-value rl-lab-stat__value${item.path ? ' rl-lab-stat__value--path' : ''}" title="${escapeHtml(item.value)}">${escapeHtml(item.value)}</div>
       <div class="rl-lab-stat__detail">${escapeHtml(item.detail)}</div>
     </article>
   `).join('');

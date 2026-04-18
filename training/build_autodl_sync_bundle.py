@@ -52,6 +52,10 @@ INCLUDE_DIRS = [
     "storage/esg_corpus",
     "storage/rag/esg_reports_openai_3072",
     "storage/quant/rl-experiments/paper-run",
+    "storage/quant/rl/datasets/paper-run_full_2022_2025_l4_no_esg",
+    "storage/quant/rl/datasets/paper-run_full_2022_2025_l5_house_esg",
+    "storage/quant/rl/datasets/paper-run_post_esg_effective_l4_no_esg",
+    "storage/quant/rl/datasets/paper-run_post_esg_effective_l5_house_esg",
 ]
 
 EXCLUDED_PARTS = {
@@ -128,6 +132,8 @@ def _is_excluded(path: Path, project_root: Path, *, include_existing_checkpoints
         return True
     rel = relative.as_posix()
     if rel.startswith("model-serving/checkpoint/") and not include_existing_checkpoints:
+        return True
+    if rel.startswith("data/auth/"):
         return True
     if rel == "training/full_training_run_manifest.json":
         return True
@@ -244,9 +250,12 @@ def build_bundle(
         return manifest
 
     archive_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_archive_path = archive_path.with_name(archive_path.name + ".tmp")
+    if tmp_archive_path.exists():
+        tmp_archive_path.unlink()
     bundle_root_name = project_root.name
     manifest_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
-    with tarfile.open(archive_path, "w:gz") as archive:
+    with tarfile.open(tmp_archive_path, "w:gz", compresslevel=1) as archive:
         for path in files:
             relative = path.relative_to(project_root).as_posix()
             archive.add(path, arcname=f"{bundle_root_name}/{relative}", recursive=False)
@@ -256,6 +265,7 @@ def build_bundle(
         import io
 
         archive.addfile(info, io.BytesIO(manifest_bytes))
+    tmp_archive_path.replace(archive_path)
 
     archive_sha = _sha256(archive_path)
     sha_path = archive_path.with_suffix(archive_path.suffix + ".sha256")

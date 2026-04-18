@@ -228,6 +228,9 @@ def _paper_tables_markdown(payload: dict[str, Any]) -> str:
             "- Negative or mixed ESG contribution remains publishable as evidence that annual RAG ESG signals may be too low-frequency for short-horizon RL.",
         ]
     )
+    negative = payload.get("negative_result_note") or {}
+    if negative:
+        lines.extend(["", "## Negative-Result Template", "", negative.get("markdown", "").strip()])
     return "\n".join(lines) + "\n"
 
 
@@ -238,6 +241,221 @@ def _fmt(value: Any) -> str:
         return f"{float(value):.4f}"
     except Exception:
         return ""
+
+
+def _negative_result_note(payload: dict[str, Any]) -> dict[str, Any]:
+    primary = (payload.get("comparisons") or [{}])[0]
+    equity = (payload.get("equity_curve_comparisons") or [{}])[0]
+    metric_interpretation = primary.get("interpretation")
+    curve_interpretation = equity.get("interpretation")
+    significant_positive = metric_interpretation == "positive_esg_contribution" and curve_interpretation == "positive_curve_contribution"
+    if significant_positive:
+        title = "ESG contribution is positive under the current paired tests."
+        body = (
+            "The primary ESG comparison is positive in both seed-level metrics and paired daily-return bootstrap. "
+            "The negative-result template is retained only as a preregistered fallback."
+        )
+    else:
+        title = "ESG contribution is mixed or statistically inconclusive."
+        body = (
+            "A mixed or insignificant ESG gain is still publishable: the current ESG signal is annual-report based, "
+            "therefore low-frequency and delayed by publication timing. Short-horizon RL can rationally place more weight "
+            "on price, regime, and risk features than on slowly changing ESG disclosures. This result should be framed as "
+            "evidence about signal frequency and time alignment, not as evidence that ESG information has no value."
+        )
+    markdown = "\n".join(
+        [
+            f"**{title}**",
+            "",
+            body,
+            "",
+            "| Evidence | Interpretation |",
+            "| --- | --- |",
+            f"| Seed-level Sharpe bootstrap | `{metric_interpretation}` |",
+            f"| Paired daily-return bootstrap | `{curve_interpretation}` |",
+        ]
+    )
+    return {
+        "significant_positive": significant_positive,
+        "metric_interpretation": metric_interpretation,
+        "curve_interpretation": curve_interpretation,
+        "markdown": markdown,
+    }
+
+
+def _write_negative_result_note(payload: dict[str, Any], output_dir: Path) -> str:
+    note = _negative_result_note(payload)
+    path = output_dir / "negative_result_template.md"
+    path.write_text(note["markdown"] + "\n", encoding="utf-8")
+    payload["negative_result_note"] = note
+    return str(path)
+
+
+def _write_seed_stability(rows: list[dict[str, Any]], output_dir: Path) -> dict[str, Any]:
+    stability_rows = [
+        {
+            "group": row.get("group"),
+            "group_label": row.get("group_label"),
+            "seed": row.get("seed"),
+            "sharpe_ratio": row.get("sharpe_ratio"),
+            "max_drawdown": row.get("max_drawdown"),
+            "annual_return": row.get("annual_return"),
+            "metrics_path": row.get("path"),
+        }
+        for row in rows
+    ]
+    csv_path = output_dir / "seed_level_stability.csv"
+    json_path = output_dir / "seed_level_stability.json"
+    pd.DataFrame(stability_rows).to_csv(csv_path, index=False)
+    json_path.write_text(json.dumps(stability_rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    plot_paths: list[str] = []
+    if stability_rows:
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            frame = pd.DataFrame(stability_rows)
+            for metric, filename in [
+                ("sharpe_ratio", "seed_stability_sharpe.png"),
+                ("max_drawdown", "seed_stability_mdd.png"),
+                ("annual_return", "seed_stability_return.png"),
+            ]:
+                if metric not in frame.columns:
+                    continue
+                plot_frame = frame.dropna(subset=[metric])
+                if plot_frame.empty:
+                    continue
+                groups = list(dict.fromkeys(plot_frame["group"].astype(str).tolist()))
+                data = [pd.to_numeric(plot_frame.loc[plot_frame["group"].astype(str) == group, metric], errors="coerce").dropna().tolist() for group in groups]
+                fig, ax = plt.subplots(figsize=(max(8, len(groups) * 1.2), 4.5))
+                try:
+                    ax.boxplot(data, tick_labels=groups, showmeans=True)
+                except TypeError:
+                    ax.boxplot(data, labels=groups, showmeans=True)
+                for idx, values in enumerate(data, start=1):
+                    ax.scatter([idx] * len(values), values, s=24, alpha=0.8)
+                ax.set_title(f"Seed-level {metric}")
+                ax.set_ylabel(metric)
+                ax.tick_params(axis="x", rotation=30)
+                fig.tight_layout()
+                plot_path = output_dir / filename
+                fig.savefig(plot_path, dpi=160)
+                plt.close(fig)
+                plot_paths.append(str(plot_path))
+        except Exception as exc:
+            return {"csv_path": str(csv_path), "json_path": str(json_path), "plot_paths": plot_paths, "plot_warning": str(exc)}
+    return {"csv_path": str(csv_path), "json_path": str(json_path), "plot_paths": plot_paths}
+
+
+def _safe_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _paper_dataset_rows(sample: str | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not sample:
+        return rows
+    pipeline_path = ROOT / "storage" / "quant" / "rl-experiments" / "paper-run" / "summary" / f"esg_rl_2022_2025_pipeline_{sample}.json"
+    payload = _safe_json(pipeline_path)
+    for role, item in (payload.get("datasets") or {}).items():
+        dataset_path = Path(str(item.get("merged_dataset_path") or ""))
+        row_count = None
+        if dataset_path.exists():
+            try:
+                row_count = len(pd.read_csv(dataset_path))
+            except Exception:
+                row_count = None
+        rows.append(
+            {
+                "kind": "paper_dataset",
+                "sample": sample,
+                "dataset_role": role,
+                "path": str(dataset_path),
+                "rows": row_count,
+                "source_summary": str(pipeline_path),
+            }
+        )
+    return rows
+
+
+def _write_data_lineage_appendix(rows: list[dict[str, Any]], output_dir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+    lineage_rows: list[dict[str, Any]] = []
+    manifest = _safe_json(ROOT / "storage" / "esg_corpus" / "manifest.json")
+    for record in manifest.get("records") or []:
+        lineage_rows.append(
+            {
+                "kind": "esg_source_file",
+                "ticker": record.get("ticker"),
+                "year": record.get("year"),
+                "report_type": record.get("report_type"),
+                "path": record.get("local_path"),
+                "checksum_sha256": record.get("checksum_sha256"),
+                "embedding_status": record.get("embedding_status"),
+                "embedding_chunks": record.get("chunk_count"),
+                "dataset_role": "",
+                "rows": "",
+                "result_group": "",
+                "result_seed": "",
+            }
+        )
+    for item in _paper_dataset_rows(metadata.get("sample")):
+        lineage_rows.append(
+            {
+                "kind": item["kind"],
+                "ticker": "",
+                "year": "",
+                "report_type": "",
+                "path": item["path"],
+                "checksum_sha256": "",
+                "embedding_status": "",
+                "embedding_chunks": "",
+                "dataset_role": item["dataset_role"],
+                "rows": item["rows"],
+                "result_group": "",
+                "result_seed": "",
+            }
+        )
+    for row in rows:
+        lineage_rows.append(
+            {
+                "kind": "experiment_result",
+                "ticker": "",
+                "year": "",
+                "report_type": "",
+                "path": row.get("path"),
+                "checksum_sha256": "",
+                "embedding_status": "",
+                "embedding_chunks": "",
+                "dataset_role": "",
+                "rows": "",
+                "result_group": row.get("group"),
+                "result_seed": row.get("seed"),
+            }
+        )
+    csv_path = output_dir / "data_lineage_appendix.csv"
+    md_path = output_dir / "data_lineage_appendix.md"
+    pd.DataFrame(lineage_rows).to_csv(csv_path, index=False)
+    md_lines = [
+        "# Data Lineage Appendix",
+        "",
+        f"- ESG source records: `{sum(1 for item in lineage_rows if item['kind'] == 'esg_source_file')}`",
+        f"- Paper datasets: `{sum(1 for item in lineage_rows if item['kind'] == 'paper_dataset')}`",
+        f"- Experiment result files: `{sum(1 for item in lineage_rows if item['kind'] == 'experiment_result')}`",
+        f"- Sample: `{metadata.get('sample')}`",
+        f"- Formula: `{metadata.get('formula_mode')}`",
+        "",
+        "The CSV version links ESG source files, checksums, embedding chunk counts, paper dataset rows, and result files.",
+    ]
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    return {"csv_path": str(csv_path), "markdown_path": str(md_path), "rows": len(lineage_rows)}
 
 
 def build_report(results_root: Path, output_dir: Path, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -281,10 +499,16 @@ def build_report(results_root: Path, output_dir: Path, *, metadata: dict[str, An
             "negative_result_is_publishable": True,
         },
     }
+    negative_path = _write_negative_result_note(payload, output_dir)
+    seed_stability = _write_seed_stability(rows, output_dir)
+    lineage = _write_data_lineage_appendix(rows, output_dir, metadata or {})
     json_path = output_dir / "esg_contribution_report.json"
     csv_path = output_dir / "esg_contribution_rows.csv"
     equity_csv_path = output_dir / "equity_curve_bootstrap.csv"
     markdown_path = output_dir / "paper_result_tables.md"
+    payload["negative_result_template_path"] = negative_path
+    payload["seed_stability"] = seed_stability
+    payload["data_lineage_appendix"] = lineage
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     pd.DataFrame(rows).to_csv(csv_path, index=False)
     pd.DataFrame(equity_curve_comparisons).to_csv(equity_csv_path, index=False)

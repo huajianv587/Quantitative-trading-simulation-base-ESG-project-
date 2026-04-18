@@ -309,7 +309,7 @@ function buildShell() {
       </div>
 
       <!-- Results -->
-      <div class="results-panel" id="results-panel">
+      <div class="results-panel research-results-panel" id="results-panel">
         <div class="results-panel__header">
           <span class="card-title" id="results-title">${text('results')}</span>
           <div style="display:flex;gap:8px;align-items:center">
@@ -320,11 +320,7 @@ function buildShell() {
           </div>
         </div>
         <div class="results-panel__body" id="results-body">
-          <div class="empty-state">
-            <div class="empty-state__icon">🔬</div>
-            <div class="empty-state__title">${text('emptyTitle')}</div>
-            <div class="empty-state__text">${text('emptyText')}</div>
-          </div>
+          ${buildResearchPreview()}
         </div>
       </div>
 
@@ -399,6 +395,57 @@ function buildShell() {
 /* ══════════════════════════════════════════════
    WATCHLIST RENDER
 ══════════════════════════════════════════════ */
+function buildResearchPreview() {
+  const zh = getLang() === 'zh';
+  const steps = zh
+    ? ['读取股票池', '生成 ESG/量价/情绪因子', '排序 Alpha 信号', '输出风险与论证']
+    : ['Load universe', 'Build ESG / price / sentiment factors', 'Rank alpha signals', 'Write risk notes and thesis'];
+  const columns = zh
+    ? ['代码', '方向', '置信度', '预期收益', '主要证据']
+    : ['Symbol', 'Action', 'Confidence', 'Expected', 'Primary Evidence'];
+  const cards = [
+    { label: zh ? '当前股票池' : 'Universe', value: _watchlist.slice(0, 5).join(', ') },
+    { label: zh ? '研究周期' : 'Horizon', value: '20d' },
+    { label: zh ? '基准' : 'Benchmark', value: 'SPY' },
+    { label: zh ? '输出模式' : 'Output', value: zh ? '影子研究' : 'shadow research' },
+  ];
+  return `
+    <div class="research-preview">
+      <div class="functional-empty__eyebrow">${zh ? '研究预览' : 'Research Preview'}</div>
+      <div class="research-preview__head">
+        <div>
+          <h3>${text('emptyTitle')}</h3>
+          <p>${text('emptyText')}</p>
+        </div>
+      </div>
+      <div class="research-preview__metrics">
+        ${cards.map(card => `
+          <div class="workbench-mini-metric">
+            <span>${card.label}</span>
+            <strong>${card.value}</strong>
+          </div>
+        `).join('')}
+      </div>
+      <div class="research-preview__grid">
+        <section>
+          <div class="workbench-section__title">${zh ? '管线步骤' : 'Pipeline Steps'}</div>
+          <div class="factor-checklist">
+            ${steps.map((step, index) => `
+              <div class="factor-check-row"><span>${index + 1}. ${step}</span><strong>${zh ? '就绪' : 'ready'}</strong></div>
+            `).join('')}
+          </div>
+        </section>
+        <section>
+          <div class="workbench-section__title">${zh ? '结果表结构' : 'Result Columns'}</div>
+          <div class="research-preview__columns">
+            ${columns.map(col => `<span>${col}</span>`).join('')}
+          </div>
+          <p class="workbench-report-text">${zh ? '运行后这里会显示 Alpha 信号、排序、风险说明和可点击 thesis。' : 'After the run, this area shows alpha signals, ranking, risk notes, and clickable theses.'}</p>
+        </section>
+      </div>
+    </div>`;
+}
+
 function renderWatchlist(container) {
   const el = container.querySelector('#watchlist-items');
   el.innerHTML = _watchlist.map(sym => `

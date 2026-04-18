@@ -2,6 +2,9 @@ const { test, expect } = require('@playwright/test');
 
 const ROUTE_SELECTORS = [
   ['/research', '#btn-run-research'],
+  ['/intelligence', '#btn-intel-scan'],
+  ['/factor-lab', '#btn-factor-discover'],
+  ['/simulation', '#btn-simulate-scenario'],
   ['/portfolio', '#wizard-bar'],
   ['/backtest', '#btn-run-bt'],
   ['/execution', '#btn-run-exec'],

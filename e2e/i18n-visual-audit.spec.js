@@ -7,6 +7,9 @@ const OUTPUT_DIR = path.join(process.cwd(), 'test-results', 'i18n-audit');
 const ROUTES = [
   { path: '/dashboard', ready: '.page-header__title', scenes: [{ name: 'default' }] },
   { path: '/research', ready: '#btn-run-research', scenes: [{ name: 'default' }, { name: 'results', action: runResearch }] },
+  { path: '/intelligence', ready: '#btn-intel-scan', scenes: [{ name: 'default' }] },
+  { path: '/factor-lab', ready: '#btn-factor-discover', scenes: [{ name: 'default' }] },
+  { path: '/simulation', ready: '#btn-simulate-scenario', scenes: [{ name: 'default' }] },
   { path: '/portfolio', ready: '#step-content', scenes: [
     { name: 'step-1' },
     { name: 'step-2', action: async (page) => page.locator('#s1-next').click() },

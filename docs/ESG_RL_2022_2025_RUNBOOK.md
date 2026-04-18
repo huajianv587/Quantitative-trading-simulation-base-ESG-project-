@@ -162,6 +162,8 @@ On AutoDL, after syncing the repo and `.env`:
 
 ```bash
 bash scripts/autodl_bootstrap.sh
+python training/full_model_preflight.py --smoke --allow-cpu-smoke --min-free-gb 0
+python training/verify_autodl_bundle.py --archive delivery/esg_quant_autodl_sync.tar.gz
 ```
 
 Run the formal driver:
@@ -176,6 +178,27 @@ project training line in one resumable 5090 pass:
 ```bash
 TOTAL_STEPS=500000 EPISODES=50 RUN_EMBED=0 bash scripts/run_5090_stage1_all.sh
 ```
+
+The Stage 1 driver writes and verifies the frozen paper-run matrix:
+
+```text
+2 samples x 2 formulas x 8 groups x 3 seeds = 96 expected runs
+```
+
+Every expected run must have `metrics.json`, `equity_curve.csv`,
+`run_status.json`, `run.log`, and the sample-level group log. The final
+artifact check fails if any matrix item is missing.
+
+The Qwen 7B base model is not bundled into `delivery/esg_quant_autodl_sync.tar.gz`.
+Before formal LoRA training, pre-download it on AutoDL:
+
+```bash
+bash scripts/download_qwen_base_model.sh
+```
+
+If Hugging Face direct access is slow, set `HF_ENDPOINT=https://hf-mirror.com`
+or your preferred mirror before running the script. The script writes
+`storage/full-training-runs/qwen_base_model_cache_check.json`.
 
 Optional controls:
 

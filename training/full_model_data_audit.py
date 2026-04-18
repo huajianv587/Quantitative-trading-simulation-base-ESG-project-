@@ -357,6 +357,28 @@ def _write_outputs(report: dict[str, Any], output_dir: Path) -> None:
         markdown.append(f"- `{track}`: {split_rows}")
     (output_dir / "full_model_data_audit.md").write_text("\n".join(markdown) + "\n", encoding="utf-8")
 
+    limitation_lines = [
+        "# Stage 1 Baseline Limitations",
+        "",
+        "These notes are intended for the paper appendix and rebuttal material.",
+        "",
+        "- Stage 1 full-suite checkpoints are marked `stage1_baseline_checkpoint`; they prove the project training lines are runnable and resumable, but they are not the ESG/RL paper's primary evidence.",
+        "- LoRA/Event/Alpha/P1/P2 require Stage 2 paper-grade data upgrades before their metrics can be used as main research conclusions.",
+        "- Independent 2025 test splits are missing for several non-paper tracks in Stage 1; those warnings are expected and must not be presented as paper-grade validation.",
+        "- Event classifier labels may be sparse or synthetic in Stage 1, especially minority ESG axes such as environmental controversy; Stage 2 must add source-linked event labels and double-check label quality.",
+        "- Alpha/P1/P2 Stage 1 labels are useful for baseline checkpoint training, but Stage 2 must add leakage audits, walk-forward manifests, and independent test splits before publication claims.",
+        "",
+        "## Audit Warnings",
+        "",
+    ]
+    warning_issues = [issue for issue in report["issues"] if issue["severity"] == "warn"]
+    if warning_issues:
+        for issue in warning_issues:
+            limitation_lines.append(f"- `{issue['track']}` `{issue['rule']}`: {issue['message']}")
+    else:
+        limitation_lines.append("- No Stage 1 warnings were reported.")
+    (output_dir / "stage1_baseline_limitations.md").write_text("\n".join(limitation_lines) + "\n", encoding="utf-8")
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit full-suite training data before 5090 runs.")

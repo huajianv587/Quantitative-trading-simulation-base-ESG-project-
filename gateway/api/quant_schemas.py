@@ -88,6 +88,53 @@ class QuantValidationRequest(BaseModel):
     impact_cost_bps: float | None = None
 
 
+class QuantIntelligenceScanRequest(BaseModel):
+    universe: list[str] = Field(default_factory=list)
+    query: str = "Build an as-of evidence bundle for the quant intelligence cockpit"
+    decision_time: str | None = None
+    live_connectors: bool = False
+    limit: int = 20
+
+
+class QuantFactorDiscoveryRequest(BaseModel):
+    universe: list[str] = Field(default_factory=list)
+    query: str = "Discover evidence-linked quant factors"
+    horizon_days: int = 20
+    decision_time: str | None = None
+
+
+class QuantDecisionExplainRequest(BaseModel):
+    symbol: str = "AAPL"
+    universe: list[str] = Field(default_factory=list)
+    query: str = "Explain the current multi-expert quant decision"
+    horizon_days: int = 20
+    include_simulation: bool = True
+
+
+class QuantSimulationScenarioRequest(BaseModel):
+    symbol: str = "AAPL"
+    universe: list[str] = Field(default_factory=list)
+    horizon_days: int = 20
+    shock_bps: float = 0.0
+    transaction_cost_bps: float = 8.0
+    slippage_bps: float = 5.0
+    paths: int = 256
+    seed: int = 42
+    scenario_name: str = "base_case"
+    event_assumption: str = ""
+    regime: str = "neutral"
+
+
+class QuantOutcomeEvaluateRequest(BaseModel):
+    symbol: str = "AAPL"
+    decision_id: str | None = None
+    horizon_days: int = 20
+    realized_return: float | None = None
+    benchmark_return: float = 0.0
+    drawdown: float | None = None
+    notes: str = ""
+
+
 class ModelReleaseRequest(BaseModel):
     actor: str = "operator"
     model_key: str

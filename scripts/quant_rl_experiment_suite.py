@@ -27,6 +27,12 @@ def _resolve_groups(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _resolve_seed_override(raw: str | None) -> list[int] | None:
+    if raw is None or not raw.strip():
+        return None
+    return [int(item.strip()) for item in raw.replace(",", " ").split() if item.strip()]
+
+
 def _action_type_for_algorithm(algorithm: str) -> str:
     return "discrete" if algorithm in {"buy_hold", "rule_based", "random", "dqn", "cql"} else "continuous"
 
@@ -148,7 +154,14 @@ def _run_dir(output_root: Path, group: str, seed: int | None) -> Path:
 
 def _run_complete(output_root: Path, group: str, seed: int | None) -> bool:
     run_dir = _run_dir(output_root, group, seed)
-    return (run_dir / "metrics.json").exists() and (run_dir / "equity_curve.csv").exists()
+    status_path = run_dir / "run_status.json"
+    if not ((run_dir / "metrics.json").exists() and (run_dir / "equity_curve.csv").exists() and status_path.exists()):
+        return False
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8")).get("status")
+    except Exception:
+        return False
+    return status in {"completed", "skipped_existing"}
 
 
 def _append_run_log(output_root: Path, group: str, seed: int | None, message: str) -> str:
@@ -242,6 +255,7 @@ def main() -> None:
     parser.add_argument("--sample", default="full_2022_2025", choices=["full_2022_2025", "post_esg_effective"])
     parser.add_argument("--formula-mode", default=None, choices=[None, "v2", "v2_1"], help="Formula isolation for ESG datasets.")
     parser.add_argument("--protocol-file", default=None)
+    parser.add_argument("--seeds", default=None, help="Optional comma/space-separated seed override for every group.")
     parser.add_argument("--resume", action="store_true", help="Skip completed group/seed runs and continue incomplete runs.")
     parser.add_argument("--skip-existing", action="store_true", help="Skip group/seed runs that already have metrics and equity curves.")
     parser.add_argument("--sample-output-root", default=None)
@@ -266,6 +280,7 @@ def main() -> None:
         _environment_snapshot(args, dataset_sha256=dataset_sha256, protocol_file=protocol_path),
     )
     service = QuantRLService()
+    seed_override = _resolve_seed_override(args.seeds)
     summary = {
         "run_namespace": args.run_namespace,
         "sample": args.sample,
@@ -284,7 +299,7 @@ def main() -> None:
             raise KeyError(f"Unknown experiment group: {group_key}")
         group_cfg = EXPERIMENT_GROUPS[group_key]
         algorithm = str(group_cfg["algorithm"])
-        seeds = group_cfg["seeds"] or [None]
+        seeds = seed_override if seed_override is not None else (group_cfg["seeds"] or [None])
         group_result = {"group": group_key, "algorithm": algorithm, "runs": []}
 
         for seed in seeds:

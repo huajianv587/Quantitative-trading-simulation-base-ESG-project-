@@ -8,6 +8,7 @@ set -euo pipefail
 #   TOTAL_STEPS=500000       formal trainer steps; SMOKE default is 120
 #   EPISODES=50              formal episodes; SMOKE default is 3
 #   SAMPLES="full_2022_2025 post_esg_effective"
+#   SEEDS="42,123,456"       formal seeds for every group, including baselines
 #   RESUME=1                 skip completed group/seed runs
 #   ALLOW_CPU_SMOKE=1        explicitly allow CPU-only smoke checks
 
@@ -58,7 +59,18 @@ PY
 SAMPLES="${SAMPLES:-full_2022_2025 post_esg_effective}"
 GROUPS_BASELINE="B1_buyhold B2_macd B3_sac_noesg"
 GROUPS_ESG="B4_sac_esg OURS_full 6a_no_esg_obs 6b_no_esg_reward 6c_no_regime"
+ALL_GROUPS="${GROUPS_BASELINE} ${GROUPS_ESG}"
+SEEDS="${SEEDS:-42,123,456}"
 RESUME="${RESUME:-1}"
+EXPECTED_MANIFEST_PATH="${EXPECTED_MANIFEST_PATH:-storage/quant/rl-experiments/paper-run/protocol/expected_run_manifest.json}"
+
+python scripts/quant_rl_expected_run_manifest.py build \
+  --namespace-root "storage/quant/rl-experiments/paper-run" \
+  --output-path "${EXPECTED_MANIFEST_PATH}" \
+  --samples "${SAMPLES}" \
+  --formulas "v2 v2_1" \
+  --groups "${ALL_GROUPS}" \
+  --seeds "${SEEDS}"
 
 embed_flag=()
 if [ "${RUN_EMBED:-0}" = "1" ]; then
@@ -121,6 +133,7 @@ PY
         --episodes "${EPISODES}" \
         --total-steps "${TOTAL_STEPS}" \
         --protocol-file "${protocol_file}" \
+        --seeds "${SEEDS}" \
         --sample-output-root "${sample_root}" \
         "${resume_flag[@]}" \
         --output-summary "${sample_root}/summary/experiment_suite_${sample}_${group}_${formula}.json" \
@@ -139,6 +152,7 @@ PY
         --episodes "${EPISODES}" \
         --total-steps "${TOTAL_STEPS}" \
         --protocol-file "${protocol_file}" \
+        --seeds "${SEEDS}" \
         --sample-output-root "${sample_root}" \
         "${resume_flag[@]}" \
         --output-summary "${sample_root}/summary/experiment_suite_${sample}_${group}_${formula}.json" \
@@ -152,5 +166,9 @@ PY
       --output-dir "${sample_root}/summary"
   done
 done
+
+python scripts/quant_rl_expected_run_manifest.py verify \
+  --manifest-path "${EXPECTED_MANIFEST_PATH}" \
+  --report-path "storage/quant/rl-experiments/paper-run/summary/expected_run_verification.json"
 
 echo "[paper-run] complete total_steps=${TOTAL_STEPS} episodes=${EPISODES} smoke=${SMOKE}"

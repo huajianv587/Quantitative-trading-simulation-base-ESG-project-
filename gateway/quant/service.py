@@ -1373,7 +1373,7 @@ class QuantSystemService:
         benchmark = benchmark or self.default_benchmark
         capital_base = capital_base or self.default_capital
         signals = self._build_signals(self.get_default_universe(universe_symbols), research_question, benchmark)
-        portfolio = self._build_portfolio(signals, capital_base, benchmark)
+        portfolio = self._build_portfolio(signals, capital_base, benchmark, allow_watchlist_fallback=True)
         portfolio = self._apply_portfolio_request_overrides(
             portfolio,
             signals,
@@ -4579,6 +4579,8 @@ class QuantSystemService:
         signals: list[ResearchSignal],
         capital_base: float,
         benchmark: str,
+        *,
+        allow_watchlist_fallback: bool = False,
     ) -> PortfolioSummary:
         active_strategy = next(
             (signal.selector_strategy for signal in signals if signal.selector_strategy in P2_STRATEGY_PROFILES),
@@ -4599,7 +4601,7 @@ class QuantSystemService:
             and (signal.decision_score is None or signal.decision_score >= decision_floor)
             and (signal.graph_contagion_risk is None or signal.graph_contagion_risk < float(getattr(settings, "P2_GRAPH_CONTAGION_LIMIT", 0.62) or 0.62))
         ][: int(strategy_profile["max_positions"])]
-        if not long_candidates:
+        if allow_watchlist_fallback and not long_candidates:
             long_candidates = [
                 signal
                 for signal in signals
@@ -4611,7 +4613,7 @@ class QuantSystemService:
             ][: max(1, min(int(strategy_profile["max_positions"]), 4))]
             if long_candidates:
                 candidate_status = "watchlist_fallback"
-        if not long_candidates:
+        if allow_watchlist_fallback and not long_candidates:
             long_candidates = [
                 signal
                 for signal in signals
@@ -4625,7 +4627,7 @@ class QuantSystemService:
             if long_candidates:
                 candidate_status = "confidence_fallback"
         minimum_target_positions = max(1, min(int(strategy_profile["max_positions"]), 3))
-        if 0 < len(long_candidates) < minimum_target_positions:
+        if allow_watchlist_fallback and 0 < len(long_candidates) < minimum_target_positions:
             existing_symbols = {signal.symbol for signal in long_candidates}
             breadth_candidates = [
                 signal

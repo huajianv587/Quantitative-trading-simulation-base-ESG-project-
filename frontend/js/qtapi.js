@@ -174,6 +174,46 @@ export var api = {
     list: function() { return _get(Q + '/experiments'); },
   },
 
+  intelligence: {
+    scan: function(payload) { return _post(Q + '/intelligence/scan', payload || {}); },
+    evidence: function(symbol, limit) {
+      var query = '?limit=' + encodeURIComponent(limit || 20);
+      if (symbol) query += '&symbol=' + encodeURIComponent(symbol);
+      return _get(Q + '/intelligence/evidence' + query);
+    },
+  },
+
+  factors: {
+    discover: function(payload) { return _post(Q + '/factors/discover', payload || {}); },
+    registry: function(limit) { return _get(Q + '/factors/registry?limit=' + encodeURIComponent(limit || 50)); },
+  },
+
+  factorLab: {
+    discover: function(payload) { return _post(Q + '/factors/discover', payload || {}); },
+    registry: function(limit) { return _get(Q + '/factors/registry?limit=' + encodeURIComponent(limit || 50)); },
+  },
+
+  decision: {
+    explain: function(payload) { return _post(Q + '/decision/explain', payload || {}); },
+    auditTrail: function(symbol, limit) {
+      var query = '?limit=' + encodeURIComponent(limit || 20);
+      if (symbol) query += '&symbol=' + encodeURIComponent(symbol);
+      return _get(Q + '/decision/audit-trail' + query);
+    },
+  },
+
+  simulate: {
+    scenario: function(payload) { return _post(Q + '/simulate/scenario', payload || {}); },
+  },
+
+  simulation: {
+    run: function(payload) { return _post(Q + '/simulate/scenario', payload || {}); },
+  },
+
+  outcomes: {
+    evaluate: function(payload) { return _post(Q + '/outcomes/evaluate', payload || {}); },
+  },
+
   reports: {
     generate: function(payload) { return _post('/admin/reports/generate', payload, { scope: 'admin' }); },
     latest: function(reportType, company) {

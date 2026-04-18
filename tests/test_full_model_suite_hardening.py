@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from training.full_model_data_audit import audit_project
+from training.qwen_base_model_cache import check_or_download
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -95,6 +96,29 @@ def test_full_model_data_audit_stage1_warnings_do_not_fail():
     assert report["tracks"]["alpha"]["role"] == "stage1_baseline_checkpoint"
 
 
+def test_full_model_data_audit_writes_stage1_limitations(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "training/full_model_data_audit.py",
+            "--jobs",
+            "alpha,event",
+            "--output-dir",
+            str(tmp_path / "audit"),
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    limitations = tmp_path / "audit" / "stage1_baseline_limitations.md"
+    assert limitations.exists()
+    assert "stage1_baseline_checkpoint" in limitations.read_text(encoding="utf-8")
+
+
 def test_full_model_preflight_allows_cpu_smoke(tmp_path):
     result = subprocess.run(
         [
@@ -120,3 +144,17 @@ def test_full_model_preflight_allows_cpu_smoke(tmp_path):
     assert result.returncode == 0, result.stderr
     payload = json.loads((tmp_path / "preflight.json").read_text(encoding="utf-8"))
     assert payload["status"] == "pass"
+
+
+def test_qwen_cache_check_dry_run_writes_manifest(tmp_path):
+    model_dir = tmp_path / "qwen"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+    output = tmp_path / "qwen_cache.json"
+
+    payload = check_or_download(local_dir=model_dir, output_path=output, dry_run=True)
+
+    assert payload["status"] == "pass"
+    assert payload["cache"]["required_files"]["config.json"] is True
+    assert output.exists()

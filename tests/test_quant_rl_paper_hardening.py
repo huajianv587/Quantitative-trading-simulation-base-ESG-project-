@@ -8,6 +8,7 @@ import pandas as pd
 
 from quant_rl.service.quant_service import QuantRLService
 from scripts.quant_rl_esg_contribution_report import build_report
+from scripts.quant_rl_expected_run_manifest import build_expected_manifest, verify_expected_manifest, write_expected_manifest
 from scripts.quant_rl_paper_preflight import run_preflight
 
 
@@ -215,6 +216,44 @@ def test_contribution_report_writes_equity_bootstrap_and_markdown(tmp_path: Path
     assert report["equity_curve_comparisons"][0]["paired_days"] > 0
     assert Path(report["equity_curve_bootstrap_csv_path"]).exists()
     assert Path(report["paper_tables_markdown_path"]).exists()
+    assert Path(report["negative_result_template_path"]).exists()
+    assert Path(report["seed_stability"]["csv_path"]).exists()
+    assert Path(report["data_lineage_appendix"]["csv_path"]).exists()
+
+
+def test_expected_run_manifest_builds_96_matrix_and_verifies_missing(tmp_path: Path):
+    manifest = build_expected_manifest(namespace_root=tmp_path / "paper-run")
+    assert manifest["expected_run_count"] == 96
+    assert manifest["matrix_shape"] == {"samples": 2, "formulas": 2, "groups": 8, "seeds": 3}
+    manifest_path = tmp_path / "expected_run_manifest.json"
+    write_expected_manifest(manifest, manifest_path)
+
+    missing_report = verify_expected_manifest(manifest_path=manifest_path, report_path=tmp_path / "missing.json")
+    assert missing_report["status"] == "fail"
+    assert missing_report["missing_count"] == 96
+
+
+def test_expected_run_manifest_passes_complete_tmp_matrix(tmp_path: Path):
+    manifest = build_expected_manifest(namespace_root=tmp_path / "paper-run", samples=["full_2022_2025"], formulas=["v2"], groups=["B1_buyhold"], seeds=[42])
+    manifest_path = tmp_path / "expected_run_manifest.json"
+    write_expected_manifest(manifest, manifest_path)
+    run = manifest["runs"][0]
+    for path in run["required_files"].values():
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.name == "run_status.json":
+            target.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+        elif target.name == "metrics.json":
+            target.write_text(json.dumps({"group": "B1_buyhold", "seed": 42}), encoding="utf-8")
+        else:
+            target.write_text("ok\n", encoding="utf-8")
+    group_log = Path(run["group_log"])
+    group_log.parent.mkdir(parents=True, exist_ok=True)
+    group_log.write_text("ok\n", encoding="utf-8")
+
+    report = verify_expected_manifest(manifest_path=manifest_path, report_path=tmp_path / "pass.json")
+    assert report["status"] == "pass"
+    assert report["verified_run_count"] == 1
 
 
 def _write_preflight_artifacts(root: Path) -> None:

@@ -6,18 +6,25 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, st
 
 from gateway.api.quant_schemas import (
     QuantBacktestRequest,
+    QuantDecisionExplainRequest,
     QuantExecutionRequest,
+    QuantFactorDiscoveryRequest,
     QuantKillSwitchRequest,
+    QuantIntelligenceScanRequest,
     QuantOrderActionRequest,
+    QuantOutcomeEvaluateRequest,
     QuantP1StackRequest,
     QuantP2DecisionRequest,
     QuantPortfolioRequest,
     QuantResearchRequest,
+    QuantSimulationScenarioRequest,
     QuantValidationRequest,
 )
 from gateway.app_runtime import runtime
 from gateway.config import settings
 from gateway.ops.security import authorize_api_key, is_local_origin
+from gateway.quant.intelligence import QuantIntelligenceService
+from gateway.quant.intelligence_models import SimulationScenario
 
 router = APIRouter(prefix="/api/v1/quant", tags=["quant"])
 
@@ -26,6 +33,10 @@ def _quant_service():
     if runtime.quant_system is None:
         raise HTTPException(status_code=503, detail="Quant system not ready")
     return runtime.quant_system
+
+
+def _intelligence_service():
+    return QuantIntelligenceService(_quant_service())
 
 
 def _run_execution_request(req: QuantExecutionRequest):
@@ -309,3 +320,84 @@ def run_alpha_validation(req: QuantValidationRequest):
 @router.get("/experiments")
 def list_experiments():
     return {"experiments": _quant_service().list_experiments()}
+
+
+@router.post("/intelligence/scan")
+def scan_intelligence(req: QuantIntelligenceScanRequest):
+    return _intelligence_service().scan(
+        universe_symbols=req.universe or None,
+        query=req.query,
+        decision_time=req.decision_time,
+        live_connectors=req.live_connectors,
+        limit=req.limit,
+    )
+
+
+@router.get("/intelligence/evidence")
+def get_intelligence_evidence(symbol: str | None = None, limit: int = 20):
+    return _intelligence_service().list_evidence(symbol=symbol, limit=limit)
+
+
+@router.post("/factors/discover")
+def discover_factors(req: QuantFactorDiscoveryRequest):
+    return _intelligence_service().discover_factors(
+        universe_symbols=req.universe or None,
+        query=req.query,
+        horizon_days=req.horizon_days,
+        decision_time=req.decision_time,
+    )
+
+
+@router.get("/factors/registry")
+def get_factor_registry(limit: int = 50):
+    return _intelligence_service().factor_registry(limit=limit)
+
+
+@router.post("/simulate/scenario")
+def simulate_scenario(req: QuantSimulationScenarioRequest):
+    scenario = SimulationScenario(
+        symbol=req.symbol,
+        universe=req.universe,
+        horizon_days=req.horizon_days,
+        shock_bps=req.shock_bps,
+        transaction_cost_bps=req.transaction_cost_bps,
+        slippage_bps=req.slippage_bps,
+        paths=req.paths,
+        seed=req.seed,
+        scenario_name=req.scenario_name,
+        event_assumption=req.event_assumption,
+        regime=req.regime,
+    )
+    return _intelligence_service().simulate_scenario(scenario)
+
+
+@router.post("/decision/explain")
+def explain_decision(req: QuantDecisionExplainRequest):
+    try:
+        return _intelligence_service().explain_decision(
+            symbol=req.symbol,
+            universe_symbols=req.universe or [req.symbol],
+            query=req.query,
+            horizon_days=req.horizon_days,
+            include_simulation=req.include_simulation,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/decision/audit-trail")
+def get_decision_audit_trail(symbol: str | None = None, limit: int = 20):
+    return _intelligence_service().audit_trail(symbol=symbol, limit=limit)
+
+
+@router.post("/outcomes/evaluate")
+def evaluate_outcomes(req: QuantOutcomeEvaluateRequest):
+    return _intelligence_service().evaluate_outcome(
+        symbol=req.symbol,
+        decision_id=req.decision_id,
+        horizon_days=req.horizon_days,
+        realized_return=req.realized_return,
+        benchmark_return=req.benchmark_return,
+        drawdown=req.drawdown,
+        notes=req.notes,
+    )
