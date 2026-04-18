@@ -10,7 +10,7 @@ def test_autodl_bundle_excludes_env_and_checkpoints(tmp_path):
     project = tmp_path / "repo"
     (project / "scripts").mkdir(parents=True)
     (project / "training").mkdir()
-    (project / "data").mkdir()
+    (project / "data" / "alpha_ranker").mkdir(parents=True)
     (project / "storage" / "esg_corpus").mkdir(parents=True)
     (project / "model-serving" / "checkpoint" / "alpha_ranker").mkdir(parents=True)
 
@@ -18,7 +18,7 @@ def test_autodl_bundle_excludes_env_and_checkpoints(tmp_path):
     (project / "README.md").write_text("unit\n", encoding="utf-8")
     (project / "scripts" / "run.sh").write_text("echo hi\n", encoding="utf-8")
     (project / "training" / "train.py").write_text("print('hi')\n", encoding="utf-8")
-    (project / "data" / "train.csv").write_text("x\n1\n", encoding="utf-8")
+    (project / "data" / "alpha_ranker" / "train.csv").write_text("x\n1\n", encoding="utf-8")
     (project / "storage" / "esg_corpus" / "manifest.json").write_text("{}", encoding="utf-8")
     (project / "model-serving" / "checkpoint" / "alpha_ranker" / "model.joblib").write_text("model", encoding="utf-8")
 

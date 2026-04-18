@@ -16,6 +16,7 @@ INCLUDE_FILES = [
     ".env.example",
     ".env.quant_rl.example",
     "README.md",
+    "data/__init__.py",
     "pyproject.toml",
     "pytest.ini",
     "requirements.txt",
@@ -38,7 +39,15 @@ INCLUDE_DIRS = [
     "risk",
     "scripts",
     "training",
-    "data",
+    "data/advanced_decision",
+    "data/alpha_ranker",
+    "data/data_ingestion_scripts",
+    "data/event_classifier",
+    "data/governance",
+    "data/ingestion",
+    "data/p1_stack",
+    "data/p2_stack",
+    "data/rag_training_data",
     "model-serving",
     "storage/esg_corpus",
     "storage/rag/esg_reports_openai_3072",
@@ -119,6 +128,8 @@ def _is_excluded(path: Path, project_root: Path, *, include_existing_checkpoints
         return True
     rel = relative.as_posix()
     if rel.startswith("model-serving/checkpoint/") and not include_existing_checkpoints:
+        return True
+    if rel == "training/full_training_run_manifest.json":
         return True
     if rel.startswith("training/p0_assets/models/") and not include_local_models:
         return True
