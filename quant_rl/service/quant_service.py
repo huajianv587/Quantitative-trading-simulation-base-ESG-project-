@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -88,6 +89,25 @@ EXPERIMENT_PERIOD_2022_2025 = {
     "test": ("2025-01-01", "2025-12-31"),
 }
 
+ESG_FRAME_COLUMNS = [
+    "house_score",
+    "house_score_v2",
+    "house_score_v2_1",
+    "esg_level",
+    "esg_score",
+    "esg_delta",
+    "esg_delta_v2_1",
+    "esg_confidence",
+    "esg_staleness_days",
+    "esg_effective_date",
+    "esg_missing_flag",
+    "sector_relative_esg",
+    "e_score",
+    "s_score",
+    "g_score",
+]
+REGIME_FRAME_COLUMNS = ["vix", "us10y_yield", "credit_spread"]
+
 
 class QuantRLService:
     def __init__(self) -> None:
@@ -119,8 +139,16 @@ class QuantRLService:
         df = self._apply_formula_frame_overrides(df, formula_mode)
         return self._apply_experiment_frame_overrides(df, experiment_group)
 
-    def build_env(self, df: pd.DataFrame, action_type: str = "discrete", *, experiment_group: str | None = None) -> TradingEnv:
-        builder = ObservationBuilder(feature_columns=default_feature_columns(df))
+    def build_env(
+        self,
+        df: pd.DataFrame,
+        action_type: str = "discrete",
+        *,
+        experiment_group: str | None = None,
+        observation_feature_columns: list[str] | None = None,
+    ) -> TradingEnv:
+        feature_columns = observation_feature_columns or self._observation_feature_columns(df, experiment_group)
+        builder = ObservationBuilder(feature_columns=feature_columns)
         return TradingEnv(
             df,
             observation_builder=builder,
@@ -517,6 +545,7 @@ class QuantRLService:
             "experiment_group": resolved_group,
             "seed": resolved_seed,
             "notes": notes or "",
+            "formula_mode": formula_mode,
         }
         self.repo.save(
             RunInfo(
@@ -970,53 +999,25 @@ class QuantRLService:
         if not experiment_group:
             return df
         frame = df.copy()
-        esg_columns = [
-            "house_score",
-            "house_score_v2",
-            "house_score_v2_1",
-            "esg_level",
-            "esg_score",
-            "esg_delta",
-            "esg_delta_v2_1",
-            "esg_confidence",
-            "esg_staleness_days",
-            "esg_effective_date",
-            "esg_missing_flag",
-            "sector_relative_esg",
-            "e_score",
-            "s_score",
-            "g_score",
-        ]
-        regime_columns = ["vix", "us10y_yield", "credit_spread"]
 
-        if experiment_group in {"B3_sac_noesg", "6a_no_esg_obs"}:
-            frame = frame.drop(columns=[column for column in esg_columns if column in frame.columns], errors="ignore")
+        if experiment_group == "B3_sac_noesg":
+            frame = frame.drop(columns=[column for column in ESG_FRAME_COLUMNS if column in frame.columns], errors="ignore")
         if experiment_group == "6c_no_regime":
-            frame = frame.drop(columns=[column for column in regime_columns if column in frame.columns], errors="ignore")
+            frame = frame.drop(columns=[column for column in REGIME_FRAME_COLUMNS if column in frame.columns], errors="ignore")
         return frame
 
     @staticmethod
+    def _observation_feature_columns(df: pd.DataFrame, experiment_group: str | None) -> list[str]:
+        feature_columns = default_feature_columns(df)
+        if experiment_group in {"B3_sac_noesg", "6a_no_esg_obs"}:
+            feature_columns = [column for column in feature_columns if column not in ESG_FRAME_COLUMNS]
+        if experiment_group == "6c_no_regime":
+            feature_columns = [column for column in feature_columns if column not in REGIME_FRAME_COLUMNS]
+        return feature_columns
+
+    @staticmethod
     def _drop_esg_columns(frame: pd.DataFrame) -> pd.DataFrame:
-        return frame.drop(
-            columns=[
-                "house_score",
-                "house_score_v2",
-                "house_score_v2_1",
-                "esg_level",
-                "esg_score",
-                "esg_delta",
-                "esg_delta_v2_1",
-                "esg_confidence",
-                "esg_staleness_days",
-                "esg_effective_date",
-                "esg_missing_flag",
-                "sector_relative_esg",
-                "e_score",
-                "s_score",
-                "g_score",
-            ],
-            errors="ignore",
-        )
+        return frame.drop(columns=ESG_FRAME_COLUMNS, errors="ignore")
 
     @staticmethod
     def _reward_config_for_group(experiment_group: str | None) -> RewardConfig:

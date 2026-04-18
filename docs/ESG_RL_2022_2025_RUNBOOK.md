@@ -170,18 +170,41 @@ Run the formal driver:
 bash scripts/autodl_run_paper_experiments.sh
 ```
 
+Run the complete Stage 1 driver when you want the paper-run plus every
+project training line in one resumable 5090 pass:
+
+```bash
+TOTAL_STEPS=500000 EPISODES=50 RUN_EMBED=0 bash scripts/run_5090_stage1_all.sh
+```
+
 Optional controls:
 
 ```bash
-RUN_EMBED=1 QUICK_STEPS=500000 EPISODES=50 bash scripts/autodl_run_paper_experiments.sh
-SAMPLES="full_2022_2025" QUICK_STEPS=120 bash scripts/autodl_run_paper_experiments.sh
+RUN_EMBED=1 TOTAL_STEPS=500000 EPISODES=50 bash scripts/autodl_run_paper_experiments.sh
+SAMPLES="full_2022_2025" SMOKE=1 bash scripts/autodl_run_paper_experiments.sh
+SMOKE=1 ALLOW_CPU_SMOKE=1 bash scripts/run_5090_stage1_all.sh
 ```
 
 V2 and V2.1 results are isolated under:
 
 ```text
-storage/quant/rl-experiments/paper-run/formula_v2/
-storage/quant/rl-experiments/paper-run/formula_v2_1/
+storage/quant/rl-experiments/paper-run/formula_v2/sample_full_2022_2025/
+storage/quant/rl-experiments/paper-run/formula_v2/sample_post_esg_effective/
+storage/quant/rl-experiments/paper-run/formula_v2_1/sample_full_2022_2025/
+storage/quant/rl-experiments/paper-run/formula_v2_1/sample_post_esg_effective/
+```
+
+`paper-run` requires CUDA by default. A CPU-only run is allowed only for an explicit smoke check:
+
+```bash
+ALLOW_CPU_SMOKE=1 SMOKE=1 bash scripts/autodl_run_paper_experiments.sh
+```
+
+Final preflight:
+
+```bash
+python scripts/quant_rl_paper_preflight.py --namespace paper-run --sample full_2022_2025 --require-cuda
+python scripts/quant_rl_paper_preflight.py --namespace paper-run --sample post_esg_effective --require-cuda
 ```
 
 ## 8. Experiment Groups

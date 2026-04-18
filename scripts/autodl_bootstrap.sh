@@ -72,6 +72,10 @@ PY
 # The venv is created with --system-site-packages, so torch>=2.1.1 in
 # requirements.txt is already satisfied by the base image and is not reinstalled.
 python -m pip install -r requirements.txt
+python -m pip install -r training/requirements.txt
+if [ -f "training/cloud_assets/requirements_cloud_extra.txt" ]; then
+  python -m pip install -r training/cloud_assets/requirements_cloud_extra.txt
+fi
 
 mkdir -p \
   storage/esg_corpus \
@@ -99,6 +103,7 @@ python -m py_compile \
   gateway/quant/esg_house_score.py \
   scripts/esg_corpus_pipeline.py \
   scripts/run_esg_rl_2022_2025_pipeline.py \
+  scripts/quant_rl_paper_preflight.py \
   scripts/quant_rl_experiment_suite.py \
   scripts/quant_rl_esg_contribution_report.py
 

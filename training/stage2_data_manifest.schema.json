@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Stage 2 Paper-Grade Data Manifest",
+  "type": "object",
+  "required": ["version", "generated_at", "universe", "splits", "tracks"],
+  "properties": {
+    "version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "universe": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1
+    },
+    "splits": {
+      "type": "object",
+      "required": ["train", "val", "test"],
+      "properties": {
+        "train": {"$ref": "#/$defs/split"},
+        "val": {"$ref": "#/$defs/split"},
+        "test": {"$ref": "#/$defs/split"}
+      }
+    },
+    "tracks": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/track"}
+    }
+  },
+  "$defs": {
+    "split": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "string"},
+        "end": {"type": "string"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["provider", "source_uri", "timestamp", "checksum", "license_note"],
+      "properties": {
+        "provider": {"type": "string"},
+        "source_uri": {"type": "string"},
+        "timestamp": {"type": "string"},
+        "checksum": {"type": "string"},
+        "license_note": {"type": "string"}
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "required": ["path", "split", "rows", "sources"],
+      "properties": {
+        "path": {"type": "string"},
+        "split": {"enum": ["train", "val", "test"]},
+        "rows": {"type": "integer", "minimum": 0},
+        "sources": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/source"}
+        },
+        "label_columns": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "target_columns": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "track": {
+      "type": "object",
+      "required": ["status", "datasets", "lineage"],
+      "properties": {
+        "status": {"enum": ["planned", "collecting", "reviewing", "paper_grade", "not_paper_grade"]},
+        "datasets": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/dataset"}
+        },
+        "lineage": {"type": "string"},
+        "review": {
+          "type": "object",
+          "properties": {
+            "dual_review_rate": {"type": "number", "minimum": 0, "maximum": 1},
+            "cohen_kappa": {"type": ["number", "null"]},
+            "adjudication_log": {"type": "string"}
+          }
+        },
+        "leakage_audit": {
+          "type": "object",
+          "properties": {
+            "status": {"enum": ["pass", "warn", "fail", "not_run"]},
+            "notes": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

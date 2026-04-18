@@ -144,6 +144,7 @@ def _write_frozen_inputs(namespace: str, sample: str, payload: dict[str, Any], a
         "embedding": payload.get("embedding"),
         "datasets": payload.get("datasets"),
         "data_quality": payload.get("data_quality"),
+        "formal_training_protocol": payload.get("formal_training_protocol"),
         "paper_run_blocked": payload.get("paper_run_blocked"),
     }
     path = out_dir / f"frozen_inputs_{sample}.json"
@@ -209,6 +210,25 @@ def main() -> int:
         "run_namespace": args.run_namespace,
         "sample": args.sample,
         "formula_modes": ["v2", "v2_1"],
+        "formal_training_protocol": {
+            "samples": ["full_2022_2025", "post_esg_effective"],
+            "formula_modes": ["v2", "v2_1"],
+            "groups": [
+                "B1_buyhold",
+                "B2_macd",
+                "B3_sac_noesg",
+                "B4_sac_esg",
+                "OURS_full",
+                "6a_no_esg_obs",
+                "6b_no_esg_reward",
+                "6c_no_regime",
+            ],
+            "seeds": [42, 123, 456],
+            "formal_total_steps": 500000,
+            "formal_episodes": 50,
+            "smoke_total_steps": 120,
+            "smoke_episodes": 3,
+        },
         "sample_period": {"start_date": sample_start, "end_date": sample_end},
         "coverage": coverage,
         "coverage_gate": coverage_gate,
