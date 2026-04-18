@@ -40,6 +40,7 @@ xgboost>=2.0.0
 lightgbm>=4.3.0
 yfinance>=0.2.40
 rouge-score>=0.1.2
+pypdf>=4.2.0
 
 # Utilities
 requests>=2.31.0

@@ -82,6 +82,12 @@ RECIPE_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
+EXPERIMENT_PERIOD_2022_2025 = {
+    "train": ("2022-01-01", "2023-12-31"),
+    "validation": ("2024-01-01", "2024-12-31"),
+    "test": ("2025-01-01", "2025-12-31"),
+}
+
 
 class QuantRLService:
     def __init__(self) -> None:
@@ -99,6 +105,7 @@ class QuantRLService:
         use_demo_if_missing: bool = True,
         *,
         experiment_group: str | None = None,
+        formula_mode: str | None = None,
     ) -> pd.DataFrame:
         path = self._resolve_dataset_file(Path(dataset_path))
         if path.exists():
@@ -109,6 +116,7 @@ class QuantRLService:
         else:
             raise FileNotFoundError(dataset_path)
         df = add_technical_features(df)
+        df = self._apply_formula_frame_overrides(df, formula_mode)
         return self._apply_experiment_frame_overrides(df, experiment_group)
 
     def build_env(self, df: pd.DataFrame, action_type: str = "discrete", *, experiment_group: str | None = None) -> TradingEnv:
@@ -163,6 +171,8 @@ class QuantRLService:
         limit: int = 240,
         force_refresh: bool = False,
         include_esg: bool = True,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> dict:
         selected_symbols = [item.upper().strip() for item in (symbols or self.default_symbols()) if str(item).strip()]
         if not selected_symbols:
@@ -176,8 +186,12 @@ class QuantRLService:
         merged_frames: list[pd.DataFrame] = []
         for symbol in selected_symbols:
             bars_result = self.market_data.get_daily_bars(symbol, limit=max(60, int(limit)), force_refresh=force_refresh)
+            bars_frame = self._filter_market_period(bars_result.bars, start_date=start_date, end_date=end_date)
             profile = self._load_symbol_profile(symbol) if include_esg else self._fallback_symbol_profile(symbol)
-            frame = self._enrich_market_frame(bars_result.bars, symbol=symbol, profile=profile)
+            frame = self._enrich_market_frame(bars_frame, symbol=symbol, profile=profile)
+            frame["provider"] = bars_result.provider
+            if not include_esg:
+                frame = self._drop_esg_columns(frame)
             symbol_path = dataset_dir / f"{symbol}.csv"
             frame.to_csv(symbol_path, index=False)
             merged_frames.append(frame.assign(symbol=symbol))
@@ -190,8 +204,11 @@ class QuantRLService:
                     "dataset_path": str(symbol_path),
                     "start": str(frame["timestamp"].iloc[0]) if not frame.empty else None,
                     "end": str(frame["timestamp"].iloc[-1]) if not frame.empty else None,
-                    "esg_score": round(float(frame["house_score"].iloc[-1] if "house_score" in frame else frame["esg_score"].iloc[-1]) * 100, 2)
-                    if (("house_score" in frame) or ("esg_score" in frame)) and not frame.empty else None,
+                    "esg_score": round(
+                        float(frame["house_score_v2_1"].iloc[-1] if "house_score_v2_1" in frame else frame["house_score_v2"].iloc[-1] if "house_score_v2" in frame else frame["house_score"].iloc[-1] if "house_score" in frame else frame["esg_score"].iloc[-1]) * 100,
+                        2,
+                    )
+                    if (("house_score_v2_1" in frame) or ("house_score_v2" in frame) or ("house_score" in frame) or ("esg_score" in frame)) and not frame.empty else None,
                 }
             )
 
@@ -206,6 +223,9 @@ class QuantRLService:
             "merged_dataset_path": str(merged_path),
             "symbols": symbol_payloads,
             "limit": int(limit),
+            "start_date": start_date,
+            "end_date": end_date,
+            "experiment_period": EXPERIMENT_PERIOD_2022_2025,
             "force_refresh": bool(force_refresh),
             "include_esg": bool(include_esg),
             "market_data_status": self.market_data.status(),
@@ -247,11 +267,12 @@ class QuantRLService:
         seed: int | None = None,
         notes: str | None = None,
         trainer_hparams: dict[str, Any] | None = None,
+        formula_mode: str | None = None,
     ) -> dict:
         if seed is not None:
             set_seed(int(seed))
 
-        df = self.prepare_dataframe(dataset_path, use_demo_if_missing, experiment_group=experiment_group)
+        df = self.prepare_dataframe(dataset_path, use_demo_if_missing, experiment_group=experiment_group, formula_mode=formula_mode)
         train_df, _, _ = time_split(df)
         env = self.build_env(train_df, action_type=action_type, experiment_group=experiment_group)
 
@@ -371,6 +392,7 @@ class QuantRLService:
             "seed": seed,
             "notes": notes or "",
             "trainer_hparams": trainer_hparams,
+            "formula_mode": formula_mode,
         }
         artifacts = {"checkpoint_path": checkpoint_path}
 
@@ -422,6 +444,7 @@ class QuantRLService:
         experiment_group: str | None = None,
         seed: int | None = None,
         notes: str | None = None,
+        formula_mode: str | None = None,
     ) -> dict:
         if seed is not None:
             set_seed(int(seed))
@@ -430,7 +453,7 @@ class QuantRLService:
         resolved_checkpoint = self._resolve_checkpoint_path(algo, checkpoint_path)
         training_run = self._find_run_for_checkpoint(resolved_checkpoint) if resolved_checkpoint else None
         resolved_group = experiment_group or (training_run or {}).get("config", {}).get("experiment_group")
-        df = self.prepare_dataframe(dataset_path, True, experiment_group=resolved_group)
+        df = self.prepare_dataframe(dataset_path, True, experiment_group=resolved_group, formula_mode=formula_mode)
         _, _, test_df = time_split(df)
         env = self.build_env(test_df, action_type=action_type, experiment_group=resolved_group)
 
@@ -715,7 +738,23 @@ class QuantRLService:
 
         if "house_esg" not in layers:
             enriched = enriched.drop(
-                columns=["house_score", "esg_score", "esg_delta", "e_score", "s_score", "g_score"],
+                columns=[
+                    "house_score",
+                    "house_score_v2",
+                    "house_score_v2_1",
+                    "esg_level",
+                    "esg_score",
+                    "esg_delta",
+                    "esg_delta_v2_1",
+                    "esg_confidence",
+                    "esg_staleness_days",
+                    "esg_effective_date",
+                    "esg_missing_flag",
+                    "sector_relative_esg",
+                    "e_score",
+                    "s_score",
+                    "g_score",
+                ],
                 errors="ignore",
             )
 
@@ -729,6 +768,8 @@ class QuantRLService:
         limit: int = 240,
         force_refresh: bool = False,
         symbols: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> dict[str, Any]:
         if recipe_key not in RECIPE_PRESETS:
             raise ValueError(f"Unknown recipe_key: {recipe_key}")
@@ -741,6 +782,8 @@ class QuantRLService:
             limit=limit,
             force_refresh=force_refresh,
             include_esg="house_esg" in recipe["layers"],
+            start_date=start_date,
+            end_date=end_date,
         )
 
         for symbol_payload in payload["symbols"]:
@@ -771,6 +814,7 @@ class QuantRLService:
             "layers": list(recipe["layers"]),
             "algorithm": recipe["algorithm"],
         }
+        payload["experiment_period"] = EXPERIMENT_PERIOD_2022_2025
         return payload
 
     def search_recipe(
@@ -904,11 +948,45 @@ class QuantRLService:
         return base_grid[: max(1, min(trials, len(base_grid)))]
 
     @staticmethod
+    def _apply_formula_frame_overrides(df: pd.DataFrame, formula_mode: str | None) -> pd.DataFrame:
+        mode = str(formula_mode or "").strip().lower()
+        if mode not in {"v2", "v2_1", "v2.1", "calibrated"}:
+            return df
+        frame = df.copy()
+        if mode == "v2":
+            return frame.drop(columns=["house_score_v2_1", "esg_delta_v2_1", "sector_relative_esg"], errors="ignore")
+
+        if "house_score_v2_1" in frame.columns:
+            frame["house_score_v2"] = frame["house_score_v2_1"]
+            frame["house_score"] = frame["house_score_v2_1"]
+            frame["esg_score"] = frame["house_score_v2_1"]
+            frame["esg_level"] = frame["house_score_v2_1"]
+        if "esg_delta_v2_1" in frame.columns:
+            frame["esg_delta"] = frame["esg_delta_v2_1"]
+        return frame
+
+    @staticmethod
     def _apply_experiment_frame_overrides(df: pd.DataFrame, experiment_group: str | None) -> pd.DataFrame:
         if not experiment_group:
             return df
         frame = df.copy()
-        esg_columns = ["esg_score", "esg_delta", "e_score", "s_score", "g_score"]
+        esg_columns = [
+            "house_score",
+            "house_score_v2",
+            "house_score_v2_1",
+            "esg_level",
+            "esg_score",
+            "esg_delta",
+            "esg_delta_v2_1",
+            "esg_confidence",
+            "esg_staleness_days",
+            "esg_effective_date",
+            "esg_missing_flag",
+            "sector_relative_esg",
+            "e_score",
+            "s_score",
+            "g_score",
+        ]
         regime_columns = ["vix", "us10y_yield", "credit_spread"]
 
         if experiment_group in {"B3_sac_noesg", "6a_no_esg_obs"}:
@@ -916,6 +994,29 @@ class QuantRLService:
         if experiment_group == "6c_no_regime":
             frame = frame.drop(columns=[column for column in regime_columns if column in frame.columns], errors="ignore")
         return frame
+
+    @staticmethod
+    def _drop_esg_columns(frame: pd.DataFrame) -> pd.DataFrame:
+        return frame.drop(
+            columns=[
+                "house_score",
+                "house_score_v2",
+                "house_score_v2_1",
+                "esg_level",
+                "esg_score",
+                "esg_delta",
+                "esg_delta_v2_1",
+                "esg_confidence",
+                "esg_staleness_days",
+                "esg_effective_date",
+                "esg_missing_flag",
+                "sector_relative_esg",
+                "e_score",
+                "s_score",
+                "g_score",
+            ],
+            errors="ignore",
+        )
 
     @staticmethod
     def _reward_config_for_group(experiment_group: str | None) -> RewardConfig:
@@ -974,6 +1075,9 @@ class QuantRLService:
             return None
 
     def _load_symbol_profile(self, symbol: str) -> dict:
+        local_profile = self._load_local_esg_profile(symbol)
+        if local_profile is not None:
+            return local_profile
         fallback = self._fallback_symbol_profile(symbol)
         if self.data_sources is None:
             return fallback
@@ -992,10 +1096,14 @@ class QuantRLService:
             return {
                 "overall_score": float(report.overall_score),
                 "house_score": float(report.house_score or report.overall_score),
+                "house_score_v2": float(report.house_score or report.overall_score),
+                "house_score_v2_1": float(report.house_score or report.overall_score),
                 "house_grade": str(report.house_grade or ""),
                 "e_score": float(report.e_scores.overall_score),
                 "s_score": float(report.s_scores.overall_score),
                 "g_score": float(report.g_scores.overall_score),
+                "esg_confidence": float(report.disclosure_confidence or 0.72),
+                "evidence_count": len(list(company_payload.get("data_sources") or [])),
                 "data_sources": list(company_payload.get("data_sources") or []),
                 "house_explanation": str(report.house_explanation or ""),
             }
@@ -1013,32 +1121,216 @@ class QuantRLService:
         return {
             "overall_score": overall,
             "house_score": overall,
+            "house_score_v2": overall,
+            "house_score_v2_1": overall,
             "house_grade": "BBB",
             "e_score": e_score,
             "s_score": s_score,
             "g_score": g_score,
+            "esg_confidence": 0.42,
+            "evidence_count": 0,
+            "sector_relative_esg": 0.0,
             "data_sources": [],
             "house_explanation": f"{symbol} fallback house score mirrors overall ESG score in offline mode.",
+        }
+
+    @staticmethod
+    def _filter_market_period(frame: pd.DataFrame, *, start_date: str | None, end_date: str | None) -> pd.DataFrame:
+        if frame.empty or not (start_date or end_date):
+            return frame
+        filtered = frame.copy()
+        filtered["timestamp"] = pd.to_datetime(filtered["timestamp"], utc=True)
+        if start_date:
+            start = pd.Timestamp(start_date, tz="UTC")
+            filtered = filtered.loc[filtered["timestamp"] >= start]
+        if end_date:
+            end = pd.Timestamp(end_date, tz="UTC") + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+            filtered = filtered.loc[filtered["timestamp"] <= end]
+        return filtered.reset_index(drop=True)
+
+    @staticmethod
+    def _load_local_esg_profile(symbol: str) -> dict | None:
+        score_path = Path("storage/esg_corpus/house_scores_v2.json")
+        if not score_path.exists():
+            return None
+        try:
+            rows = json.loads(score_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        symbol_rows = [
+            row for row in rows
+            if str(row.get("ticker", "")).upper() == symbol.upper()
+        ]
+        if not symbol_rows:
+            return None
+        usable_rows = [
+            row for row in symbol_rows
+            if float(row.get("coverage") or 0.0) > 0 and row.get("effective_date")
+        ]
+        latest = (usable_rows or symbol_rows)[-1]
+        pillar = latest.get("pillar_breakdown") or {}
+        return {
+            "overall_score": float(latest.get("house_score") or 50.0),
+            "house_score": float(latest.get("house_score") or 50.0),
+            "house_score_v2": float(latest.get("house_score") or 50.0),
+            "house_score_v2_1": float(latest.get("house_score_v2_1") or latest.get("house_score") or 50.0),
+            "house_grade": str(latest.get("house_grade") or ""),
+            "e_score": float(pillar.get("E", 50.0)),
+            "s_score": float(pillar.get("S", 50.0)),
+            "g_score": float(pillar.get("G", 50.0)),
+            "esg_confidence": float(latest.get("disclosure_confidence") or 0.35),
+            "evidence_count": int(latest.get("evidence_count") or 0),
+            "sector_relative_esg": float(latest.get("sector_relative_esg") or 0.0),
+            "data_sources": list(latest.get("explanation_sources") or latest.get("data_sources") or []),
+            "house_explanation": str(latest.get("house_explanation") or ""),
+            "score_timeseries": usable_rows,
         }
 
     @staticmethod
     def _enrich_market_frame(frame: pd.DataFrame, *, symbol: str, profile: dict) -> pd.DataFrame:
         enriched = frame.copy()
         enriched["timestamp"] = pd.to_datetime(enriched["timestamp"], utc=True)
+        timeline = list(profile.get("score_timeseries") or [])
+        if timeline:
+            return QuantRLService._apply_esg_timeline(enriched, symbol=symbol, profile=profile, timeline=timeline)
+
         phase = (sum(ord(char) for char in symbol.upper()) % 17) / 5.0
         index = np.arange(len(enriched), dtype=float)
 
+        if int(profile.get("evidence_count", 0) or 0) == 0:
+            enriched["esg_score"] = 0.5
+            enriched["house_score"] = 0.5
+            enriched["house_score_v2"] = 0.5
+            enriched["house_score_v2_1"] = 0.5
+            enriched["esg_level"] = 0.5
+            enriched["e_score"] = 0.5
+            enriched["s_score"] = 0.5
+            enriched["g_score"] = 0.5
+            enriched["esg_delta"] = 0.0
+            enriched["esg_delta_v2_1"] = 0.0
+            enriched["esg_confidence"] = 0.0
+            enriched["esg_staleness_days"] = 9999.0
+            enriched["esg_effective_date"] = ""
+            enriched["esg_missing_flag"] = 1.0
+            enriched["sector_relative_esg"] = 0.0
+            enriched["vix"] = 0.18 + 0.05 * np.sin(index / 19.0 + phase)
+            enriched["us10y_yield"] = 0.035 + 0.004 * np.cos(index / 41.0 + phase)
+            enriched["credit_spread"] = 0.012 + 0.003 * np.sin(index / 27.0 + phase / 2.0)
+            return enriched
+
         base_overall = float(profile.get("house_score", profile.get("overall_score", 65.0))) / 100.0
+        base_v2 = float(profile.get("house_score_v2", profile.get("house_score", profile.get("overall_score", 65.0)))) / 100.0
+        base_v2_1 = float(profile.get("house_score_v2_1", profile.get("house_score_v2", profile.get("house_score", profile.get("overall_score", 65.0))))) / 100.0
         base_e = float(profile.get("e_score", 66.0)) / 100.0
         base_s = float(profile.get("s_score", 64.0)) / 100.0
         base_g = float(profile.get("g_score", 67.0)) / 100.0
+        confidence = float(profile.get("esg_confidence", 0.72) or 0.72)
 
         enriched["esg_score"] = np.clip(base_overall + np.sin(index / 36.0 + phase) * 0.015, 0.0, 1.0)
         enriched["house_score"] = enriched["esg_score"]
+        enriched["house_score_v2"] = np.clip(base_v2 + np.sin(index / 52.0 + phase) * 0.010, 0.0, 1.0)
+        enriched["house_score_v2_1"] = np.clip(base_v2_1 + np.sin(index / 64.0 + phase) * 0.008, 0.0, 1.0)
+        enriched["esg_level"] = enriched["house_score_v2_1"]
         enriched["e_score"] = np.clip(base_e + np.sin(index / 33.0 + phase) * 0.012, 0.0, 1.0)
         enriched["s_score"] = np.clip(base_s + np.cos(index / 40.0 + phase) * 0.01, 0.0, 1.0)
         enriched["g_score"] = np.clip(base_g + np.sin(index / 44.0 + phase / 2.0) * 0.008, 0.0, 1.0)
-        enriched["esg_delta"] = enriched["esg_score"].diff().fillna(0.0)
+        enriched["esg_delta"] = enriched["house_score_v2"].diff().fillna(0.0)
+        enriched["esg_delta_v2_1"] = enriched["house_score_v2_1"].diff().fillna(0.0)
+        enriched["esg_confidence"] = np.clip(confidence, 0.0, 1.0)
+        enriched["esg_staleness_days"] = np.minimum(index.astype(int), 730)
+        enriched["esg_effective_date"] = str(profile.get("effective_date") or "")
+        enriched["esg_missing_flag"] = 1.0 if int(profile.get("evidence_count", 0) or 0) == 0 else 0.0
+        enriched["sector_relative_esg"] = float(profile.get("sector_relative_esg") or 0.0)
+        enriched["vix"] = 0.18 + 0.05 * np.sin(index / 19.0 + phase)
+        enriched["us10y_yield"] = 0.035 + 0.004 * np.cos(index / 41.0 + phase)
+        enriched["credit_spread"] = 0.012 + 0.003 * np.sin(index / 27.0 + phase / 2.0)
+        return enriched
+
+    @staticmethod
+    def _apply_esg_timeline(frame: pd.DataFrame, *, symbol: str, profile: dict, timeline: list[dict[str, Any]]) -> pd.DataFrame:
+        enriched = frame.copy()
+        enriched["timestamp"] = pd.to_datetime(enriched["timestamp"], utc=True)
+        index = np.arange(len(enriched), dtype=float)
+        phase = (sum(ord(char) for char in symbol.upper()) % 17) / 5.0
+
+        parsed_rows: list[dict[str, Any]] = []
+        for row in timeline:
+            effective = pd.to_datetime(row.get("effective_date"), utc=True, errors="coerce")
+            if pd.isna(effective):
+                continue
+            parsed_rows.append({**row, "_effective_ts": effective})
+        parsed_rows.sort(key=lambda item: item["_effective_ts"])
+
+        neutral = {
+            "house_score": 0.5,
+            "e_score": 0.5,
+            "s_score": 0.5,
+            "g_score": 0.5,
+            "confidence": 0.0,
+            "delta": 0.0,
+        }
+
+        house_values: list[float] = []
+        house_v2_1_values: list[float] = []
+        e_values: list[float] = []
+        s_values: list[float] = []
+        g_values: list[float] = []
+        confidence_values: list[float] = []
+        delta_values: list[float] = []
+        delta_v2_1_values: list[float] = []
+        sector_relative_values: list[float] = []
+        staleness_values: list[float] = []
+        effective_date_values: list[str] = []
+        missing_values: list[float] = []
+        current_idx = -1
+        for ts in enriched["timestamp"]:
+            while current_idx + 1 < len(parsed_rows) and parsed_rows[current_idx + 1]["_effective_ts"] <= ts:
+                current_idx += 1
+            if current_idx < 0:
+                house_values.append(neutral["house_score"])
+                house_v2_1_values.append(neutral["house_score"])
+                e_values.append(neutral["e_score"])
+                s_values.append(neutral["s_score"])
+                g_values.append(neutral["g_score"])
+                confidence_values.append(neutral["confidence"])
+                delta_values.append(0.0)
+                delta_v2_1_values.append(0.0)
+                sector_relative_values.append(0.0)
+                staleness_values.append(9999.0)
+                effective_date_values.append("")
+                missing_values.append(1.0)
+                continue
+            row = parsed_rows[current_idx]
+            pillar = row.get("pillar_breakdown") or {}
+            effective_ts = row["_effective_ts"]
+            house_values.append(float(row.get("house_score") or 50.0) / 100.0)
+            house_v2_1_values.append(float(row.get("house_score_v2_1") or row.get("house_score") or 50.0) / 100.0)
+            e_values.append(float(pillar.get("E", 50.0)) / 100.0)
+            s_values.append(float(pillar.get("S", 50.0)) / 100.0)
+            g_values.append(float(pillar.get("G", 50.0)) / 100.0)
+            confidence_values.append(float(row.get("disclosure_confidence") or row.get("confidence") or 0.35))
+            delta_values.append(float(row.get("score_delta") or 0.0))
+            delta_v2_1_values.append(float(row.get("score_delta_v2_1") or row.get("score_delta") or 0.0))
+            sector_relative_values.append(float(row.get("sector_relative_esg") or 0.0))
+            staleness_values.append(float(max(0, (ts.normalize() - effective_ts.normalize()).days)))
+            effective_date_values.append(effective_ts.date().isoformat())
+            missing_values.append(0.0)
+
+        enriched["house_score_v2"] = np.clip(house_values, 0.0, 1.0)
+        enriched["house_score_v2_1"] = np.clip(house_v2_1_values, 0.0, 1.0)
+        enriched["house_score"] = enriched["house_score_v2"]
+        enriched["esg_score"] = enriched["house_score_v2_1"]
+        enriched["esg_level"] = enriched["house_score_v2_1"]
+        enriched["e_score"] = np.clip(e_values, 0.0, 1.0)
+        enriched["s_score"] = np.clip(s_values, 0.0, 1.0)
+        enriched["g_score"] = np.clip(g_values, 0.0, 1.0)
+        enriched["esg_delta"] = np.array(delta_values, dtype=float)
+        enriched["esg_delta_v2_1"] = np.array(delta_v2_1_values, dtype=float)
+        enriched["esg_confidence"] = np.clip(confidence_values, 0.0, 1.0)
+        enriched["esg_staleness_days"] = np.array(staleness_values, dtype=float)
+        enriched["esg_effective_date"] = effective_date_values
+        enriched["esg_missing_flag"] = np.array(missing_values, dtype=float)
+        enriched["sector_relative_esg"] = np.array(sector_relative_values, dtype=float)
         enriched["vix"] = 0.18 + 0.05 * np.sin(index / 19.0 + phase)
         enriched["us10y_yield"] = 0.035 + 0.004 * np.cos(index / 41.0 + phase)
         enriched["credit_spread"] = 0.012 + 0.003 * np.sin(index / 27.0 + phase / 2.0)

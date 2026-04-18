@@ -12,6 +12,7 @@ echo.
 
 :: Step 1: Stop any running servers first so the rebuild never keeps stale UI files alive
 echo [1/5] Stopping stale UI/API servers...
+call :kill_runtime_processes
 call :kill_port 9000
 call :kill_port 8000
 echo       OK
@@ -78,6 +79,13 @@ exit /b 0
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%~1" ^| findstr "LISTENING"') do (
     taskkill /PID %%p /F >nul 2>&1
 )
+timeout /t 1 /nobreak >nul
+exit /b 0
+
+:kill_runtime_processes
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$patterns = @('*uvicorn gateway.main:app*', '*_api_server.cmd*', '*python -m http.server 9000*', '*_ui_server.cmd*');" ^
+  "Get-CimInstance Win32_Process | Where-Object { $cmd = $_.CommandLine; $cmd -and (($patterns | Where-Object { $cmd -like $_ }) | Measure-Object).Count -gt 0 } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }"
 timeout /t 1 /nobreak >nul
 exit /b 0
 

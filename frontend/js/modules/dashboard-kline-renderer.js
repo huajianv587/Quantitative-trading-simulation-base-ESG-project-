@@ -119,6 +119,7 @@ function writeAuditState(state, viewport, candleWidth) {
     }),
   );
   const payload = {
+    ...(window.__dashboardAuditState || {}),
     symbol: state.symbol,
     timeframe: state.timeframe,
     zoomLabel: state.zoomLabel,

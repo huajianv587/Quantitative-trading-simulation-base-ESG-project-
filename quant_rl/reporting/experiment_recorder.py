@@ -36,9 +36,9 @@ def build_protocol_summary(output_root: str | Path) -> dict[str, Any]:
         "total_training_runs": 18,
         "seeds": [42, 123, 456],
         "time_split": {
-            "train": ["2018-01-01", "2021-12-31"],
-            "validation": ["2022-01-01", "2022-12-31"],
-            "test": ["2023-01-01", "2023-12-31"],
+            "train": ["2022-01-01", "2023-12-31"],
+            "validation": ["2024-01-01", "2024-12-31"],
+            "test": ["2025-01-01", "2025-12-31"],
         },
         "stock_universe": MANUAL_STOCK_UNIVERSE,
         "groups": EXPERIMENT_GROUPS,
@@ -281,7 +281,10 @@ class ExperimentRecorder:
             frame = pd.read_csv(curve_path)
             if "date" not in frame.columns or "portfolio_value" not in frame.columns:
                 continue
-            grouped.setdefault(group, []).append(frame[["date", "portfolio_value"]].rename(columns={"portfolio_value": curve_path.stem}))
+            compact = frame[["date", "portfolio_value"]].copy()
+            compact["portfolio_value"] = pd.to_numeric(compact["portfolio_value"], errors="coerce")
+            compact = compact.dropna(subset=["date", "portfolio_value"]).groupby("date", as_index=False).last()
+            grouped.setdefault(group, []).append(compact.rename(columns={"portfolio_value": curve_path.stem}))
 
         if not grouped:
             return pd.DataFrame(columns=["date"])
@@ -311,4 +314,19 @@ class ExperimentRecorder:
             frame["position"] = 0.0
         if "regime" not in frame.columns:
             frame["regime"] = ""
-        return frame[["date", "portfolio_value", "daily_return", "position", "regime"]].dropna(subset=["portfolio_value"])
+        frame = frame[["date", "portfolio_value", "daily_return", "position", "regime"]].dropna(subset=["portfolio_value"])
+        if frame.empty:
+            return frame
+        frame["portfolio_value"] = pd.to_numeric(frame["portfolio_value"], errors="coerce")
+        frame["daily_return"] = pd.to_numeric(frame["daily_return"], errors="coerce").fillna(0.0)
+        frame["position"] = pd.to_numeric(frame["position"], errors="coerce").fillna(0.0)
+        return (
+            frame.dropna(subset=["portfolio_value"])
+            .groupby("date", as_index=False)
+            .agg(
+                portfolio_value=("portfolio_value", "last"),
+                daily_return=("daily_return", "last"),
+                position=("position", "mean"),
+                regime=("regime", "last"),
+            )
+        )

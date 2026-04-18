@@ -159,9 +159,15 @@ class TradingEnv:
         return pd.DataFrame(self.history)
 
     def _esg_alignment_signal(self) -> float:
-        if "esg_score" not in self.df.columns:
+        score_column = next((column for column in ("house_score_v2_1", "house_score_v2", "house_score", "esg_score") if column in self.df.columns), None)
+        if score_column is None:
             return 0.0
         current = self.df.iloc[self.step_idx]
-        esg_score = float(current.get("esg_score", 0.5) or 0.5)
+        esg_score = float(current.get(score_column, 0.5) or 0.5)
+        if esg_score > 1.0:
+            esg_score = esg_score / 100.0
         centered = esg_score - 0.5
-        return float(self.position * centered)
+        confidence = float(current.get("esg_confidence", 1.0) or 1.0) if "esg_confidence" in self.df.columns else 1.0
+        stale_days = float(current.get("esg_staleness_days", 0.0) or 0.0) if "esg_staleness_days" in self.df.columns else 0.0
+        freshness = max(0.35, 1.0 - min(stale_days, 730.0) / 1460.0)
+        return float(self.position * centered * confidence * freshness)

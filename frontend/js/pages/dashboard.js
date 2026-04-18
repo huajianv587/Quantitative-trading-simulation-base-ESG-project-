@@ -10,6 +10,7 @@ const ZOOM_MAX = 600;
 const ZOOM_STEP = 20;
 const DEFAULT_INDICATORS = ['VOL'];
 const HEATMAP_TFS = ['1D', '1W', '1M'];
+const CHART_CACHE_TTL_MS = 45_000;
 
 const TEXT = {
   en: {
@@ -165,12 +166,15 @@ let _lastCandleResponse = {
   signal: null,
   prediction_disabled_reason: null,
 };
-let _heatmapRects = [];
+let _heatmapChart = null;
 let _selectedHeatmapNode = null;
 let _boundClickHandler = null;
 let _boundPointerDownHandler = null;
+let _boundResizeHandler = null;
 let _zoomHoldTimer = null;
 let _zoomHoldInterval = null;
+let _chartRequestSeq = 0;
+const _chartCache = new Map();
 
 function copy(key) {
   return TEXT[getLang()]?.[key] ?? TEXT.en[key] ?? key;
@@ -268,7 +272,10 @@ function buildShell() {
           `).join('')}</div>
           <div style="display:flex;align-items:center;gap:6px">
             <button type="button" class="ind-btn" id="zoom-out-btn" aria-label="zoom out">-</button>
-            <span class="zoom-readout" id="zoom-readout" title="Continuous zoom 100%-600%">${_activeZoom}</span>
+            <span class="zoom-readout" id="zoom-readout" title="Continuous zoom 100%-600%">
+              <span class="zoom-readout__label">Zoom</span>
+              <span class="zoom-readout__value">${_activeZoom}</span>
+            </span>
             <div class="tf-tabs" id="zoom-tabs">${ZOOM_SEQUENCE.map((zoom) => `
               <button type="button" class="tf-tab${zoom === _activeZoom ? ' active' : ''}" data-zoom="${zoom}">${zoom}</button>
             `).join('')}</div>
@@ -356,8 +363,8 @@ function buildShell() {
           <button type="button" class="tf-tab${tf === _activeHeatTf ? ' active' : ''}" data-heat-tf="${tf}">${tf}</button>
         `).join('')}</div>
       </div>
-      <div class="heatmap-canvas-container" style="padding:8px">
-        <canvas id="heatmap-canvas" height="190"></canvas>
+      <div class="heatmap-canvas-container heatmap-chart-container">
+        <div id="heatmap-chart" class="heatmap-chart" role="img" aria-label="${copy('heatmapTitle')}"></div>
         <div class="heatmap-tooltip" id="heatmap-popup"></div>
       </div>
     </div>
@@ -1091,149 +1098,230 @@ function heatmapData() {
   }));
 }
 
-function buildHeatmapRects(items, x, y, width, height) {
-  const sorted = [...items].sort((left, right) => (
-    Math.max(1, Number(right.weight || right.value || 1)) - Math.max(1, Number(left.weight || left.value || 1))
-  ));
-  const rects = [];
+function heatmapColor(delta) {
+  const value = clamp(Number(delta || 0), -8, 8);
+  const alpha = clamp(Math.abs(value) / 8, 0.22, 0.76);
+  return value >= 0 ? `rgba(0,255,136,${alpha})` : `rgba(255,77,109,${alpha})`;
+}
 
-  function split(group, gx, gy, gw, gh, vertical) {
-    if (!group.length || gw <= 0 || gh <= 0) return;
-    if (group.length === 1) {
-      rects.push({ item: group[0], x: gx, y: gy, width: gw, height: gh });
-      return;
-    }
-    const total = group.reduce((sum, item) => sum + Math.max(1, Number(item.weight || item.value || 1)), 0);
-    let pivot = 0;
-    let index = 0;
-    while (index < group.length - 1 && pivot < total / 2) {
-      pivot += Math.max(1, Number(group[index].weight || group[index].value || 1));
-      index += 1;
-    }
-    const leftGroup = group.slice(0, index);
-    const rightGroup = group.slice(index);
-    const leftTotal = leftGroup.reduce((sum, item) => sum + Math.max(1, Number(item.weight || item.value || 1)), 0);
-    const ratio = clamp(leftTotal / total, 0.18, 0.82);
-    if (vertical) {
-      const splitWidth = gw * ratio;
-      split(leftGroup, gx, gy, splitWidth, gh, !vertical);
-      split(rightGroup, gx + splitWidth, gy, gw - splitWidth, gh, !vertical);
-    } else {
-      const splitHeight = gh * ratio;
-      split(leftGroup, gx, gy, gw, splitHeight, !vertical);
-      split(rightGroup, gx, gy + splitHeight, gw, gh - splitHeight, !vertical);
-    }
-  }
+function heatmapBorderColor(delta) {
+  return Number(delta || 0) >= 0 ? 'rgba(0,255,136,0.72)' : 'rgba(255,77,109,0.72)';
+}
 
-  split(sorted, x, y, width, height, width >= height);
-  return rects;
+function normalizeHeatmapNode(item, index, depth = 0) {
+  const nodeId = `${depth}:${index}:${item.name}`;
+  const delta = Number(item.delta || 0);
+  const value = Math.max(1, Number(item.weight || item.value || 1));
+  const children = Array.isArray(item.children) && item.children.length > 1
+    ? item.children.slice(0, 12).map((child, childIndex) => normalizeHeatmapNode({
+      name: child.name || child.symbol || `${item.name}-${childIndex + 1}`,
+      weight: child.value || child.weight || value / Math.max(item.children.length, 1),
+      delta: Number(child.change || child.delta || 0) * 100,
+      score: child.score ?? item.score,
+      symbols: [child.name || child.symbol].filter(Boolean),
+      marketData: item.marketData,
+    }, childIndex, depth + 1))
+    : undefined;
+
+  return {
+    id: nodeId,
+    name: item.name,
+    value,
+    children,
+    itemStyle: {
+      color: heatmapColor(delta),
+      borderColor: heatmapBorderColor(delta),
+      borderWidth: 1,
+      gapWidth: 5,
+    },
+    emphasis: {
+      itemStyle: {
+        borderColor: '#f0f4ff',
+        borderWidth: 2,
+        shadowColor: Number(delta || 0) >= 0 ? 'rgba(0,255,136,0.32)' : 'rgba(255,77,109,0.32)',
+        shadowBlur: 18,
+      },
+    },
+    __nodeId: nodeId,
+    __raw: {
+      ...item,
+      delta,
+      weight: value,
+    },
+  };
+}
+
+function heatmapFormatter(params) {
+  const raw = params?.data?.__raw || {};
+  const value = Number(raw.weight || params.value || 0);
+  const delta = Number(raw.delta || 0);
+  const sign = delta >= 0 ? '+' : '';
+  if (value < 18) return `${params.name}`;
+  if (value < 34) return `${params.name}\n${sign}${delta.toFixed(1)}%`;
+  return [
+    `{name|${params.name}}`,
+    `{delta|${sign}${delta.toFixed(1)}%}`,
+    `{meta|${copy('houseScore')}: ${formatNum(raw.score)}}`,
+    `{meta|${copy('heatmapWeight')}: ${formatNum(value, 0)}}`,
+  ].join('\n');
+}
+
+function heatmapTooltipFormatter(params) {
+  const raw = params?.data?.__raw || {};
+  const delta = Number(raw.delta || 0);
+  return `
+    <div class="heatmap-echarts-tooltip">
+      <strong>${params.name || raw.name || '--'}</strong>
+      <span class="${pctCls(delta / 100)}">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}%</span>
+      <span>${copy('houseScore')}: ${formatNum(raw.score)}</span>
+      <span>${copy('heatmapWeight')}: ${formatNum(raw.weight, 0)}</span>
+      <span>${copy('source')}: ${raw.marketData || 'mixed'}</span>
+      <span>${copy('heatmapSymbols')}: ${(raw.symbols || []).join(', ') || '--'}</span>
+    </div>
+  `;
+}
+
+function writeHeatmapAuditState(data) {
+  window.__dashboardAuditState = {
+    ...(window.__dashboardAuditState || {}),
+    heatmap: {
+      timeframe: _activeHeatTf,
+      tileCount: data.length,
+      selected: _selectedHeatmapNode?.name || null,
+      renderer: window.echarts ? 'echarts_treemap' : 'unavailable',
+      symbols: data.flatMap((item) => item.symbols || []).filter(Boolean).slice(0, 40),
+    },
+  };
+}
+
+function positionHeatmapPopup(params) {
+  const popup = _container?.querySelector('#heatmap-popup');
+  const chartEl = _container?.querySelector('#heatmap-chart');
+  if (!popup || !chartEl || !params?.data?.__raw) return;
+  const raw = params.data.__raw;
+  const event = params.event?.event;
+  const bounds = chartEl.getBoundingClientRect();
+  const localX = event ? event.clientX - bounds.left : bounds.width * 0.5;
+  const localY = event ? event.clientY - bounds.top : bounds.height * 0.5;
+  const width = 278;
+  popup.style.display = 'block';
+  popup.style.left = `${Math.max(12, Math.min(localX + 14, bounds.width - width - 12))}px`;
+  popup.style.top = `${Math.max(12, Math.min(localY + 12, bounds.height - 150))}px`;
+  popup.innerHTML = `
+    <div class="heatmap-popup-card">
+      <div class="heatmap-popup-card__title">${raw.name || params.name}</div>
+      <div><span class="${pctCls(raw.delta / 100)}">${raw.delta >= 0 ? '+' : ''}${Number(raw.delta || 0).toFixed(2)}%</span></div>
+      <div>${copy('houseScore')}: ${formatNum(raw.score)}</div>
+      <div>${copy('heatmapWeight')}: ${formatNum(raw.weight, 0)}</div>
+      <div>${copy('source')}: ${raw.marketData || 'mixed'}</div>
+      <div>${copy('heatmapSymbols')}: ${(raw.symbols || []).join(', ') || '--'}</div>
+      <button type="button" class="btn btn-primary btn-sm heatmap-trade-btn" data-trade-symbol="${(raw.symbols || [raw.name])[0] || raw.name}">
+        ${copy('executePlan')}
+      </button>
+    </div>
+  `;
 }
 
 function drawHeatmap() {
-  const canvas = _container.querySelector('#heatmap-canvas');
-  if (!canvas) return;
+  const chartEl = _container.querySelector('#heatmap-chart');
+  if (!chartEl) return;
   const popup = _container.querySelector('#heatmap-popup');
-  const width = canvas.parentElement?.clientWidth || 960;
-  const height = 232;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = width * dpr;
-  canvas.height = height * dpr;
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
-  const ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--card-bg').trim() || '#07070F';
-  ctx.fillRect(0, 0, width, height);
+  const data = heatmapData().sort((left, right) => Number(right.weight || 0) - Number(left.weight || 0));
+  const echartsLib = window.echarts;
+  if (!echartsLib) {
+    chartEl.innerHTML = `<div class="empty-state" style="min-height:220px"><div class="empty-state__title">Heatmap renderer unavailable</div></div>`;
+    writeHeatmapAuditState(data);
+    return;
+  }
 
-  const data = heatmapData();
-  const outer = { x: 8, y: 8, width: width - 16, height: height - 16 };
-  _heatmapRects = buildHeatmapRects(data, outer.x, outer.y, outer.width, outer.height);
+  if (!_heatmapChart || _heatmapChart.isDisposed?.()) {
+    _heatmapChart = echartsLib.init(chartEl, null, { renderer: 'canvas' });
+  }
 
-  _heatmapRects.forEach((rect, index) => {
-    const item = rect.item;
-    const positive = item.delta >= 0;
-    const isSelected = _selectedHeatmapNode?.name === item.name;
-    const fill = positive ? 'rgba(0,255,136,0.20)' : 'rgba(255,77,109,0.20)';
-    const stroke = positive ? 'rgba(0,255,136,0.40)' : 'rgba(255,77,109,0.40)';
-    ctx.fillStyle = fill;
-    ctx.strokeStyle = isSelected ? '#F0F4FF' : stroke;
-    ctx.lineWidth = isSelected ? 2 : 1;
-    ctx.beginPath();
-    ctx.roundRect(rect.x, rect.y, Math.max(24, rect.width - 6), Math.max(24, rect.height - 6), 14);
-    ctx.fill();
-    ctx.stroke();
+  const option = {
+    backgroundColor: 'transparent',
+    animation: true,
+    animationDuration: 550,
+    animationEasing: 'cubicOut',
+    tooltip: {
+      confine: true,
+      className: 'heatmap-echarts-tooltip-wrap',
+      borderWidth: 1,
+      backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--bg-surface').trim() || '#101223',
+      borderColor: getComputedStyle(document.documentElement).getPropertyValue('--border-dim').trim() || 'rgba(90,120,160,0.35)',
+      textStyle: {
+        color: getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim() || '#f0f4ff',
+        fontFamily: 'IBM Plex Mono, monospace',
+        fontSize: 11,
+      },
+      formatter: heatmapTooltipFormatter,
+    },
+    series: [{
+      type: 'treemap',
+      roam: false,
+      nodeClick: false,
+      breadcrumb: { show: false },
+      left: 10,
+      right: 10,
+      top: 10,
+      bottom: 10,
+      visibleMin: 10,
+      leafDepth: 1,
+      sort: 'desc',
+      squareRatio: 0.72,
+      data: data.map((item, index) => normalizeHeatmapNode(item, index)),
+      label: {
+        show: true,
+        color: getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim() || '#f0f4ff',
+        fontFamily: 'IBM Plex Mono, monospace',
+        lineHeight: 18,
+        overflow: 'truncate',
+        formatter: heatmapFormatter,
+        rich: {
+          name: { fontSize: 12, fontWeight: 700, color: '#f0f4ff', lineHeight: 20 },
+          delta: { fontSize: 18, fontWeight: 800, color: '#f0f4ff', lineHeight: 24 },
+          meta: { fontSize: 10, color: 'rgba(190,210,235,0.78)', lineHeight: 17 },
+        },
+      },
+      upperLabel: {
+        show: false,
+      },
+      levels: [
+        {
+          itemStyle: {
+            borderColor: 'rgba(255,255,255,0.04)',
+            borderWidth: 0,
+            gapWidth: 8,
+          },
+        },
+        {
+          itemStyle: {
+            borderRadius: 12,
+            gapWidth: 6,
+          },
+        },
+      ],
+    }],
+  };
 
-    const innerX = rect.x + 14;
-    const innerY = rect.y + 18;
-    ctx.fillStyle = 'rgba(235,245,255,0.95)';
-    ctx.font = "600 11px 'IBM Plex Mono', monospace";
-    ctx.fillText(item.name, innerX, innerY);
-
-    ctx.fillStyle = positive ? '#00FF88' : '#FF4D6D';
-    ctx.font = `700 ${rect.width > 240 ? 18 : 14}px Orbitron, 'IBM Plex Sans', sans-serif`;
-    ctx.fillText(`${item.delta >= 0 ? '+' : ''}${item.delta.toFixed(1)}%`, innerX, innerY + 30);
-
-    ctx.fillStyle = 'rgba(154,190,224,0.74)';
-    ctx.font = "500 10px 'IBM Plex Mono', monospace";
-    ctx.fillText(`${copy('houseScore')}: ${formatNum(item.score)}`, innerX, innerY + 54);
-    ctx.fillText(`${copy('heatmapWeight')}: ${formatNum(item.weight, 0)}`, innerX, innerY + 72);
-
-    const symbolText = (item.symbols || []).slice(0, rect.width > 240 ? 4 : 2).join(', ');
-    if (symbolText) {
-      const availableWidth = Math.max(40, rect.width - 28);
-      const text = symbolText.length > Math.floor(availableWidth / 8) ? `${symbolText.slice(0, Math.max(8, Math.floor(availableWidth / 8) - 3))}...` : symbolText;
-      ctx.fillText(text, innerX, Math.min(rect.y + rect.height - 16, innerY + 92));
-    }
-
-    if (rect.width > 220 && Array.isArray(item.children) && item.children.length) {
-      const childRects = buildHeatmapRects(
-        item.children.slice(0, 4).map((child) => ({ ...child, weight: child.value || 1 })),
-        rect.x + 12,
-        rect.y + rect.height - 48,
-        Math.max(24, rect.width - 30),
-        28,
-      );
-      childRects.forEach((childRect) => {
-        const positiveChild = Number(childRect.item.change || 0) >= 0;
-        ctx.fillStyle = positiveChild ? 'rgba(0,255,136,0.16)' : 'rgba(255,77,109,0.16)';
-        ctx.beginPath();
-        ctx.roundRect(childRect.x, childRect.y, Math.max(18, childRect.width - 4), childRect.height, 8);
-        ctx.fill();
-      });
-    }
-
-    if (index < _heatmapRects.length - 1) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(rect.x + rect.width, rect.y + 8);
-      ctx.lineTo(rect.x + rect.width, rect.y + rect.height - 8);
-      ctx.stroke();
-    }
+  _heatmapChart.setOption(option, true);
+  _heatmapChart.off('click');
+  _heatmapChart.on('click', (params) => {
+    if (!params?.data?.__raw) return;
+    _selectedHeatmapNode = params.data.__raw;
+    positionHeatmapPopup(params);
+    writeHeatmapAuditState(data);
+    recordUiAuditEvent('heatmap_tile_select', 'dashboard_heatmap', {}, {
+      sector: _selectedHeatmapNode.name,
+      symbols: _selectedHeatmapNode.symbols || [],
+    });
   });
 
-  if (_selectedHeatmapNode) {
-    const selectedRect = _heatmapRects.find((item) => item.item.name === _selectedHeatmapNode.name);
-    if (selectedRect && popup) {
-      const item = selectedRect.item;
-      popup.style.display = 'block';
-      popup.style.left = `${Math.max(12, Math.min(selectedRect.x + 16, width - 250))}px`;
-      popup.style.top = `${Math.max(12, Math.min(selectedRect.y + 16, height - 132))}px`;
-      popup.innerHTML = `
-        <div style="display:grid;gap:6px;min-width:220px">
-          <div style="font-family:var(--f-display);font-size:12px;color:var(--text-primary)">${item.name}</div>
-          <div><span class="${pctCls(item.delta / 100)}">${item.delta >= 0 ? '+' : ''}${item.delta.toFixed(2)}%</span></div>
-          <div>${copy('houseScore')}: ${formatNum(item.score)}</div>
-          <div>${copy('heatmapWeight')}: ${formatNum(item.weight, 0)}</div>
-          <div>${copy('heatmapSymbols')}: ${(item.symbols || []).join(', ') || '--'}</div>
-        </div>
-      `;
-    }
-  } else if (popup) {
+  if (!_selectedHeatmapNode && popup) {
     popup.style.display = 'none';
     popup.innerHTML = '';
   }
+  writeHeatmapAuditState(data);
 }
 
 async function loadPositions() {
@@ -1294,7 +1382,10 @@ function indicatorButtonsState() {
   });
   const zoomReadout = _container.querySelector('#zoom-readout');
   if (zoomReadout) {
-    zoomReadout.textContent = _activeZoom;
+    const valueEl = zoomReadout.querySelector('.zoom-readout__value');
+    if (valueEl) {
+      valueEl.textContent = _activeZoom;
+    }
     zoomReadout.dataset.zoom = _activeZoom;
   }
   _container.querySelectorAll('[data-tf]').forEach((button) => {
@@ -1328,9 +1419,14 @@ function candleFallback(symbol, limit = 140) {
 }
 
 async function fetchCandles(symbol, timeframe) {
+  const cacheKey = `${String(symbol || '').toUpperCase()}::${String(timeframe || '1D').toUpperCase()}`;
+  const cached = _chartCache.get(cacheKey);
+  if (cached && (Date.now() - cached.at) < CHART_CACHE_TTL_MS) {
+    return cached.payload;
+  }
   try {
     const response = await api.platform.dashboardChart(symbol, timeframe);
-    return {
+    const payload = {
       source: response.source || 'unknown',
       indicators: response.indicators || {},
       projection_scenarios: response.projection_scenarios || {},
@@ -1349,8 +1445,10 @@ async function fetchCandles(symbol, timeframe) {
         date: candle.date ?? candle.t,
       })),
     };
+    _chartCache.set(cacheKey, { at: Date.now(), payload });
+    return payload;
   } catch {
-    return {
+    const payload = {
       source: 'unavailable',
       indicators: {},
       projection_scenarios: {},
@@ -1362,6 +1460,8 @@ async function fetchCandles(symbol, timeframe) {
       signal: null,
       candles: [],
     };
+    _chartCache.set(cacheKey, { at: Date.now(), payload });
+    return payload;
   }
 }
 
@@ -1383,6 +1483,7 @@ function updateRenderer() {
 }
 
 async function loadActiveKline() {
+  const requestId = ++_chartRequestSeq;
   const signal = activeSignal();
   if (!signal) {
     _chartLoading = false;
@@ -1419,7 +1520,9 @@ async function loadActiveKline() {
   };
   renderHealthBanner();
   updateRenderer();
-  _lastCandleResponse = await fetchCandles(signal.symbol, _activeTF);
+  const response = await fetchCandles(signal.symbol, _activeTF);
+  if (requestId !== _chartRequestSeq) return;
+  _lastCandleResponse = response;
   _chartLoading = false;
   if (_lastCandleResponse.signal) {
     mergeActiveSignal(_lastCandleResponse.signal);
@@ -1522,17 +1625,10 @@ async function loadOverview() {
   drawHeatmap();
   syncPageState();
   ensureRenderer();
-  await loadActiveKline();
-  await loadPositions();
-}
-
-function heatmapRectAtPoint(point) {
-  return _heatmapRects.find((rect) => (
-    point.x >= rect.x
-    && point.x <= rect.x + rect.width
-    && point.y >= rect.y
-    && point.y <= rect.y + rect.height
-  )) || null;
+  await Promise.allSettled([
+    loadActiveKline(),
+    loadPositions(),
+  ]);
 }
 
 function bindEvents() {
@@ -1622,20 +1718,17 @@ function bindEvents() {
       return;
     }
 
-    if (event.target.closest('#heatmap-canvas')) {
-      const canvas = _container.querySelector('#heatmap-canvas');
-      const rect = canvas.getBoundingClientRect();
-      const hit = heatmapRectAtPoint({
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      });
-      if (hit) {
-        _selectedHeatmapNode = hit.item;
-        drawHeatmap();
-        recordUiAuditEvent('heatmap_tile_select', 'dashboard_heatmap', {}, {
-          sector: hit.item.name,
-          symbols: hit.item.symbols || [],
-        });
+    const tradeButton = event.target.closest('[data-trade-symbol]');
+    if (tradeButton) {
+      const symbol = String(tradeButton.dataset.tradeSymbol || '').toUpperCase();
+      if (symbol) {
+        window.sessionStorage.setItem('qt.execution.prefill', JSON.stringify({
+          universe: symbol,
+          broker: 'alpaca',
+          source: 'dashboard_heatmap',
+        }));
+        recordUiAuditEvent('trade_prefill', 'dashboard_heatmap', {}, { symbol, route: '/execution' });
+        window.location.hash = '#/execution';
       }
       return;
     }
@@ -1658,6 +1751,9 @@ function bindEvents() {
   if (_boundPointerDownHandler) {
     _container.removeEventListener('pointerdown', _boundPointerDownHandler);
   }
+  if (_boundResizeHandler) {
+    window.removeEventListener('resize', _boundResizeHandler);
+  }
   _boundPointerDownHandler = (event) => {
     if (event.target.closest('#zoom-out-btn')) {
       startZoomHold(-1);
@@ -1672,6 +1768,11 @@ function bindEvents() {
     }
   };
   _container.addEventListener('pointerdown', _boundPointerDownHandler);
+
+  _boundResizeHandler = () => {
+    _heatmapChart?.resize?.();
+  };
+  window.addEventListener('resize', _boundResizeHandler);
 }
 
 export async function render(container) {
@@ -1680,6 +1781,8 @@ export async function render(container) {
   _clockTimer = null;
   _renderer?.destroy();
   _renderer = null;
+  _heatmapChart?.dispose?.();
+  _heatmapChart = null;
   clearZoomHold();
   _container = container;
   _overview = null;
@@ -1692,7 +1795,6 @@ export async function render(container) {
   _activeHeatTf = '1D';
   _selectedProjection = null;
   _selectedHeatmapNode = null;
-  _heatmapRects = [];
   _lastCandleResponse = {
     source: 'unknown',
     candles: [],
@@ -1722,11 +1824,17 @@ export function destroy() {
   if (_container && _boundPointerDownHandler) {
     _container.removeEventListener('pointerdown', _boundPointerDownHandler);
   }
+  if (_boundResizeHandler) {
+    window.removeEventListener('resize', _boundResizeHandler);
+  }
   clearZoomHold();
   _boundClickHandler = null;
   _boundPointerDownHandler = null;
+  _boundResizeHandler = null;
   _renderer?.destroy();
   _renderer = null;
+  _heatmapChart?.dispose?.();
+  _heatmapChart = null;
   _container = null;
   _overview = null;
   _overviewError = null;
@@ -1734,7 +1842,6 @@ export function destroy() {
   _watchlist = [];
   _selectedProjection = null;
   _selectedHeatmapNode = null;
-  _heatmapRects = [];
   _lastCandleResponse = {
     source: 'unknown',
     candles: [],

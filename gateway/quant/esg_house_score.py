@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 
 
-FORMULA_VERSION = "JHJ_HOUSE_SCORE_V1"
+FORMULA_VERSION = "JHJ_HOUSE_SCORE_V2"
+CALIBRATED_FORMULA_VERSION = "JHJ_HOUSE_SCORE_V2_1_CALIBRATED"
 
 
 @dataclass(slots=True)
@@ -19,6 +20,12 @@ class HouseScoreBreakdown:
     materiality_adjustment: float
     trend_bonus: float
     house_explanation: str
+    materiality_weights: dict[str, float] | None = None
+    evidence_count: int = 0
+    effective_date: str | None = None
+    staleness_days: int | None = None
+    score_delta: float | None = None
+    staleness_penalty: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +39,12 @@ class HouseScoreBreakdown:
             "materiality_adjustment": round(self.materiality_adjustment, 2),
             "trend_bonus": round(self.trend_bonus, 2),
             "house_explanation": self.house_explanation,
+            "materiality_weights": {key: round(value, 4) for key, value in (self.materiality_weights or {}).items()},
+            "evidence_count": int(self.evidence_count),
+            "effective_date": self.effective_date,
+            "staleness_days": self.staleness_days,
+            "score_delta": None if self.score_delta is None else round(float(self.score_delta), 4),
+            "staleness_penalty": round(self.staleness_penalty, 2),
         }
 
 
@@ -47,6 +60,20 @@ SECTOR_MATERIALITY_WEIGHTS: dict[str, dict[str, float]] = {
     "consumer discretionary": {"E": 0.7, "S": 0.9, "G": 0.7},
     "industrials": {"E": 1.1, "S": 0.5, "G": 0.7},
     "default": {"E": 0.7, "S": 0.6, "G": 0.8},
+}
+
+SECTOR_PILLAR_WEIGHTS: dict[str, dict[str, float]] = {
+    "technology": {"E": 0.26, "S": 0.34, "G": 0.40},
+    "semiconductors": {"E": 0.38, "S": 0.24, "G": 0.38},
+    "utilities": {"E": 0.52, "S": 0.18, "G": 0.30},
+    "energy": {"E": 0.58, "S": 0.16, "G": 0.26},
+    "financials": {"E": 0.14, "S": 0.34, "G": 0.52},
+    "banks": {"E": 0.14, "S": 0.34, "G": 0.52},
+    "health care": {"E": 0.18, "S": 0.46, "G": 0.36},
+    "consumer staples": {"E": 0.32, "S": 0.38, "G": 0.30},
+    "consumer discretionary": {"E": 0.30, "S": 0.40, "G": 0.30},
+    "industrials": {"E": 0.44, "S": 0.24, "G": 0.32},
+    "default": {"E": 0.34, "S": 0.28, "G": 0.38},
 }
 
 
@@ -68,6 +95,14 @@ def _materiality_adjustment(sector: str | None, industry: str | None, e_score: f
         + weights["G"] * (float(g_score) - 50.0)
     ) / 75.0
     return _bounded(weighted_center, -8.0, 8.0)
+
+
+def _sector_pillar_weights(sector: str | None, industry: str | None) -> dict[str, float]:
+    label = _normalize_text(industry, sector)
+    weights = next((value for key, value in SECTOR_PILLAR_WEIGHTS.items() if key != "default" and key in label), None)
+    selected = dict(weights or SECTOR_PILLAR_WEIGHTS["default"])
+    total = sum(float(value) for value in selected.values()) or 1.0
+    return {key: float(value) / total for key, value in selected.items()}
 
 
 def _disclosure_confidence(data_sources: list[str] | None, data_lineage: list[str] | None, metric_coverage_ratio: float) -> float:
@@ -122,6 +157,26 @@ def _data_gap_penalty(metric_coverage_ratio: float, disclosure_confidence: float
     return -_bounded(penalty, 0.0, 10.0)
 
 
+def _pillar_score(raw_score: float, *, target_progress: float, evidence_quality: float, rag_consistency: float) -> float:
+    return _bounded(
+        0.40 * float(raw_score)
+        + 0.25 * float(target_progress)
+        + 0.20 * float(evidence_quality)
+        + 0.15 * float(rag_consistency),
+        0.0,
+        100.0,
+    )
+
+
+def _staleness_penalty(staleness_days: int | None) -> float:
+    if staleness_days is None:
+        return 0.0
+    days = max(0, int(staleness_days))
+    if days <= 450:
+        return 0.0
+    return -_bounded(((days - 450) / 365.0) * 5.0, 0.0, 8.0)
+
+
 def _grade(score: float) -> str:
     if score >= 85:
         return "AAA"
@@ -136,6 +191,80 @@ def _grade(score: float) -> str:
     if score >= 40:
         return "B"
     return "CCC"
+
+
+def compute_calibrated_house_score(
+    *,
+    base_score: float,
+    sector_year_mean: float | None = None,
+    sector_year_std: float | None = None,
+    global_year_mean: float | None = None,
+    global_year_std: float | None = None,
+    percentile_rank: float | None = None,
+    confidence: float = 0.0,
+    evidence_strength: float = 0.0,
+    staleness_days: int | float | None = None,
+    missing: bool = False,
+) -> dict[str, Any]:
+    """Calibrate V2 into a research-grade, sector-relative ESG signal.
+
+    V2.1 deliberately uses only same-year cross-sectional ESG evidence and
+    document-quality metadata. It never looks at returns, so the calibration
+    improves signal comparability without leaking trading outcomes.
+    """
+    if missing:
+        return {
+            "house_score_v2_1": 50.0,
+            "house_grade_v2_1": "MISSING",
+            "formula_version_v2_1": CALIBRATED_FORMULA_VERSION,
+            "sector_year_zscore": None,
+            "sector_year_percentile": None,
+            "sector_relative_esg": 0.0,
+            "calibration_adjustment": 0.0,
+            "calibration_explanation": "Missing ESG evidence is held at neutral 50 with zero confidence.",
+        }
+
+    base = _bounded(float(base_score), 0.0, 100.0)
+    local_mean = float(sector_year_mean if sector_year_mean is not None else global_year_mean if global_year_mean is not None else 50.0)
+    local_std = float(sector_year_std if sector_year_std is not None else 0.0)
+    fallback_std = float(global_year_std if global_year_std is not None else 0.0)
+    std = local_std if local_std >= 2.5 else max(fallback_std, 6.0)
+    zscore = (base - local_mean) / max(std, 1e-6)
+    zscore = _bounded(zscore, -2.5, 2.5)
+
+    percentile = _bounded(float(percentile_rank if percentile_rank is not None else 0.5), 0.0, 1.0)
+    relative_component = _bounded(50.0 + zscore * 12.0, 18.0, 82.0)
+    percentile_component = percentile * 100.0
+    confidence_adjustment = _bounded((float(confidence) - 0.65) * 4.0, -2.5, 2.0)
+    evidence_adjustment = _bounded((float(evidence_strength) - 0.65) * 3.0, -2.5, 2.0)
+    stale = max(0.0, float(staleness_days or 0.0))
+    staleness_adjustment = -_bounded(max(0.0, stale - 450.0) / 365.0 * 2.0, 0.0, 4.0)
+    calibrated = _bounded(
+        0.74 * base
+        + 0.16 * relative_component
+        + 0.10 * percentile_component
+        + confidence_adjustment
+        + evidence_adjustment
+        + staleness_adjustment,
+        0.0,
+        100.0,
+    )
+    adjustment = calibrated - base
+    return {
+        "house_score_v2_1": round(calibrated, 2),
+        "house_grade_v2_1": _grade(calibrated),
+        "formula_version_v2_1": CALIBRATED_FORMULA_VERSION,
+        "sector_year_zscore": round(zscore, 4),
+        "sector_year_percentile": round(percentile, 4),
+        "sector_relative_esg": round(_bounded(zscore / 2.5, -1.0, 1.0), 4),
+        "calibration_adjustment": round(adjustment, 4),
+        "calibration_explanation": (
+            f"{CALIBRATED_FORMULA_VERSION} blends V2 score {base:.1f}, "
+            f"sector-year z={zscore:.2f}, percentile={percentile:.2f}, "
+            f"confidence={float(confidence):.2f}, evidence_strength={float(evidence_strength):.2f}, "
+            f"staleness_adjustment={staleness_adjustment:+.2f}."
+        ),
+    }
 
 
 def compute_house_score(
@@ -154,31 +283,49 @@ def compute_house_score(
     esg_delta: float | None = None,
     historical_data: dict[str, Any] | None = None,
     metric_coverage_ratio: float = 1.0,
+    evidence_quality: float | None = None,
+    target_progress: float | None = None,
+    rag_consistency: float | None = None,
+    evidence_count: int | None = None,
+    effective_date: str | None = None,
+    staleness_days: int | None = None,
 ) -> HouseScoreBreakdown:
     disclosure_quality_score = float(disclosure_quality) if disclosure_quality is not None else (
         58.0 + min(len(list(data_sources or [])) * 6.0, 22.0) + min(len(list(data_lineage or [])) * 2.5, 10.0)
     )
     disclosure_quality_score = _bounded(disclosure_quality_score, 35.0, 96.0)
 
-    base_score = (
-        0.34 * float(e_score)
-        + 0.28 * float(s_score)
-        + 0.28 * float(g_score)
-        + 0.10 * disclosure_quality_score
-    )
-    materiality_adjustment = _materiality_adjustment(sector, industry, e_score, s_score, g_score)
     disclosure_conf = _disclosure_confidence(data_sources, data_lineage, metric_coverage_ratio)
-    trend_bonus = _trend_bonus(base_score, esg_delta=esg_delta, historical_data=historical_data)
+    evidence_quality_score = _bounded(float(evidence_quality) if evidence_quality is not None else disclosure_conf * 100.0, 0.0, 100.0)
+    target_progress_score = _bounded(
+        float(target_progress) if target_progress is not None else 50.0 + _bounded(float(esg_delta or 0.0) * 450.0, -22.0, 22.0),
+        0.0,
+        100.0,
+    )
+    rag_consistency_score = _bounded(float(rag_consistency) if rag_consistency is not None else 42.0 + metric_coverage_ratio * 48.0, 0.0, 100.0)
+    pillar_scores = {
+        "E": _pillar_score(e_score, target_progress=target_progress_score, evidence_quality=evidence_quality_score, rag_consistency=rag_consistency_score),
+        "S": _pillar_score(s_score, target_progress=target_progress_score, evidence_quality=evidence_quality_score, rag_consistency=rag_consistency_score),
+        "G": _pillar_score(g_score, target_progress=target_progress_score, evidence_quality=evidence_quality_score, rag_consistency=rag_consistency_score),
+    }
+    materiality_weights = _sector_pillar_weights(sector, industry)
+    materiality_base = sum(materiality_weights[key] * pillar_scores[key] for key in ("E", "S", "G"))
+    disclosure_adjustment = _bounded((disclosure_quality_score - 60.0) * 0.08, -3.0, 4.0)
+    materiality_adjustment = disclosure_adjustment
+    trend_bonus = _trend_bonus(materiality_base, esg_delta=esg_delta, historical_data=historical_data)
     controversy_penalty = _controversy_penalty(recent_news, controversy_hints)
     data_gap_penalty = _data_gap_penalty(metric_coverage_ratio, disclosure_conf)
-    final_score = _bounded(base_score + materiality_adjustment + trend_bonus + controversy_penalty + data_gap_penalty, 0.0, 100.0)
+    staleness = _staleness_penalty(staleness_days)
+    final_score = _bounded(materiality_base + disclosure_adjustment + trend_bonus + controversy_penalty + data_gap_penalty + staleness, 0.0, 100.0)
     grade = _grade(final_score)
     explanation = (
-        f"{company_name} {FORMULA_VERSION} = base {base_score:.1f}"
-        f" + materiality {materiality_adjustment:+.1f}"
+        f"{company_name} {FORMULA_VERSION} = materiality base {materiality_base:.1f}"
+        f" with E/S/G weights {materiality_weights['E']:.2f}/{materiality_weights['S']:.2f}/{materiality_weights['G']:.2f}"
+        f" + disclosure {disclosure_adjustment:+.1f}"
         f" + trend {trend_bonus:+.1f}"
         f" {controversy_penalty:+.1f}"
         f" {data_gap_penalty:+.1f}"
+        f" {staleness:+.1f}"
         f" => {final_score:.1f} ({grade})."
     )
 
@@ -187,10 +334,16 @@ def compute_house_score(
         house_grade=grade,
         formula_version=FORMULA_VERSION,
         pillar_breakdown={
-            "E": float(e_score),
-            "S": float(s_score),
-            "G": float(g_score),
+            "E": pillar_scores["E"],
+            "S": pillar_scores["S"],
+            "G": pillar_scores["G"],
+            "RawE": float(e_score),
+            "RawS": float(s_score),
+            "RawG": float(g_score),
             "DisclosureQuality": disclosure_quality_score,
+            "TargetProgress": target_progress_score,
+            "EvidenceQuality": evidence_quality_score,
+            "RAGConsistency": rag_consistency_score,
         },
         disclosure_confidence=disclosure_conf,
         controversy_penalty=controversy_penalty,
@@ -198,4 +351,10 @@ def compute_house_score(
         materiality_adjustment=materiality_adjustment,
         trend_bonus=trend_bonus,
         house_explanation=explanation,
+        materiality_weights=materiality_weights,
+        evidence_count=int(evidence_count if evidence_count is not None else len(list(data_lineage or []))),
+        effective_date=effective_date,
+        staleness_days=staleness_days,
+        score_delta=esg_delta,
+        staleness_penalty=staleness,
     )

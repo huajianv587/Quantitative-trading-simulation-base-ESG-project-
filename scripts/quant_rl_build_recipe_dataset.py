@@ -19,6 +19,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=240)
     parser.add_argument("--force-refresh", action="store_true")
     parser.add_argument("--symbols", default="")
+    parser.add_argument("--start-date", default=None)
+    parser.add_argument("--end-date", default=None)
     args = parser.parse_args()
 
     service = QuantRLService()
@@ -29,6 +31,8 @@ def main() -> None:
         limit=args.limit,
         force_refresh=args.force_refresh,
         symbols=symbols or None,
+        start_date=args.start_date,
+        end_date=args.end_date,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 

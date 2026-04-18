@@ -89,6 +89,23 @@ class QuantSystemService:
         self.default_benchmark = getattr(settings, "QUANT_DEFAULT_BENCHMARK", "SPY")
         self.default_universe_name = getattr(settings, "QUANT_DEFAULT_UNIVERSE", "ESG_US_LARGE_CAP")
         self.default_broker = getattr(settings, "QUANT_BROKER_DEFAULT", "alpaca")
+        self._overview_cache: dict[str, Any] | None = None
+        self._chart_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        self._dashboard_cache_ttl_seconds = int(getattr(settings, "QUANT_DASHBOARD_CACHE_TTL_SECONDS", 15) or 15)
+
+    @staticmethod
+    def _cache_is_fresh(entry: dict[str, Any] | None) -> bool:
+        if not entry:
+            return False
+        expires_at = entry.get("expires_at")
+        return isinstance(expires_at, datetime) and expires_at > datetime.now(timezone.utc)
+
+    def _cache_wrap(self, payload: dict[str, Any], ttl_seconds: int | None = None) -> dict[str, Any]:
+        ttl = int(ttl_seconds or self._dashboard_cache_ttl_seconds)
+        return {
+            "payload": payload,
+            "expires_at": datetime.now(timezone.utc) + timedelta(seconds=max(ttl, 1)),
+        }
 
     @staticmethod
     def _normalize_broker_mode(mode: str | None) -> str:
@@ -284,9 +301,10 @@ class QuantSystemService:
         }
 
     def _build_house_score_payload(self, signal: ResearchSignal) -> dict[str, Any]:
-        if signal.house_score is not None and signal.house_grade and signal.formula_version:
+        if signal.house_score is not None and signal.house_grade and signal.formula_version and "V2" in str(signal.formula_version):
             return {
                 "house_score": float(signal.house_score),
+                "house_score_v2": float(signal.house_score_v2 or signal.house_score),
                 "house_grade": signal.house_grade,
                 "formula_version": signal.formula_version,
                 "pillar_breakdown": dict(signal.pillar_breakdown or {}),
@@ -296,6 +314,11 @@ class QuantSystemService:
                 "materiality_adjustment": float(signal.materiality_adjustment or 0.0),
                 "trend_bonus": float(signal.trend_bonus or 0.0),
                 "house_explanation": str(signal.house_explanation or ""),
+                "materiality_weights": dict(signal.materiality_weights or {}),
+                "evidence_count": int(signal.evidence_count or len(signal.data_lineage or [])),
+                "effective_date": signal.effective_date,
+                "staleness_days": signal.staleness_days,
+                "score_delta": signal.score_delta,
             }
 
         lineage = list(signal.data_lineage or [])
@@ -313,6 +336,7 @@ class QuantSystemService:
             esg_delta=self._factor_value(_as_dict(signal), "esg_delta") / 100.0,
             metric_coverage_ratio=metric_coverage,
         ).as_dict()
+        house["house_score_v2"] = house["house_score"]
         return house
 
     def _enrich_signal_house_score(self, signal: ResearchSignal) -> ResearchSignal:
@@ -400,6 +424,8 @@ class QuantSystemService:
         }
 
     def build_platform_overview(self) -> dict[str, Any]:
+        if self._cache_is_fresh(self._overview_cache):
+            return self._overview_cache["payload"]
         snapshot = self._build_watchlist_snapshot()
         position_symbols = snapshot["position_symbols"]
         universe = snapshot["universe"]
@@ -420,7 +446,7 @@ class QuantSystemService:
             persist=False,
         ).model_dump()
 
-        return {
+        payload = {
             "generated_at": _iso_now(),
             "platform_name": "ESG Quant Intelligence System",
             "tagline": "从数据接入到因子研究、回测执行与产品交付的一体化 ESG Quant 平台",
@@ -509,6 +535,8 @@ class QuantSystemService:
             "experiments": experiments[:3],
             "training_plan": self._build_training_plan().model_dump(),
         }
+        self._overview_cache = self._cache_wrap(payload)
+        return payload
 
     def _chart_limit_for_timeframe(self, timeframe: str) -> int:
         return {
@@ -570,7 +598,19 @@ class QuantSystemService:
         }
 
     def build_dashboard_chart(self, symbol: str | None = None, timeframe: str = "1D") -> dict[str, Any]:
-        snapshot = self._build_watchlist_snapshot()
+        cache_key = (str(symbol or "").upper().strip(), str(timeframe or "1D").upper())
+        cached = self._chart_cache.get(cache_key)
+        if self._cache_is_fresh(cached):
+            return cached["payload"]
+        overview_snapshot = self._overview_cache["payload"] if self._cache_is_fresh(self._overview_cache) else None
+        snapshot = (
+            {
+                "watchlist_signals": overview_snapshot.get("watchlist_signals", []),
+                "position_symbols": overview_snapshot.get("position_symbols", []),
+            }
+            if overview_snapshot is not None
+            else self._build_watchlist_snapshot()
+        )
         watchlist = snapshot.get("watchlist_signals") or []
         if not watchlist:
             return {
@@ -597,31 +637,29 @@ class QuantSystemService:
         active = next((item for item in watchlist if item["symbol"] == (symbol or "").upper().strip()), watchlist[0])
         active_symbol = active["symbol"]
         limit = self._chart_limit_for_timeframe(timeframe)
-        signal = next((item for item in self._build_signals(self.get_default_universe([active_symbol]), "dashboard chart", self.default_benchmark) if item.symbol == active_symbol), None)
-        if signal is None:
-            signal = self._enrich_signal_house_score(
-                ResearchSignal(
-                    symbol=active_symbol,
-                    company_name=active["company_name"],
-                    sector=active["sector"],
-                    thesis=active["thesis"],
-                    action=active["action"],
-                    confidence=float(active["confidence"]),
-                    expected_return=float(active["expected_return"]),
-                    risk_score=float(active["risk_score"]),
-                    overall_score=float(active["overall_score"]),
-                    e_score=float(active["e_score"]),
-                    s_score=float(active["s_score"]),
-                    g_score=float(active["g_score"]),
-                    factor_scores=[FactorScore(**item) for item in active.get("factor_scores", [])],
-                    catalysts=list(active.get("catalysts", [])),
-                    data_lineage=list(active.get("data_lineage", [])),
-                    market_data_source=active.get("market_data_source"),
-                    prediction_mode=active.get("prediction_mode"),
-                    projection_basis_return=active.get("projection_basis_return"),
-                    projection_scenarios={key: ProjectionScenario(**value) for key, value in (active.get("projection_scenarios") or {}).items()},
-                )
+        signal = self._enrich_signal_house_score(
+            ResearchSignal(
+                symbol=active_symbol,
+                company_name=active["company_name"],
+                sector=active["sector"],
+                thesis=active["thesis"],
+                action=active["action"],
+                confidence=float(active["confidence"]),
+                expected_return=float(active["expected_return"]),
+                risk_score=float(active["risk_score"]),
+                overall_score=float(active["overall_score"]),
+                e_score=float(active["e_score"]),
+                s_score=float(active["s_score"]),
+                g_score=float(active["g_score"]),
+                factor_scores=[FactorScore(**item) for item in active.get("factor_scores", [])],
+                catalysts=list(active.get("catalysts", [])),
+                data_lineage=list(active.get("data_lineage", [])),
+                market_data_source=active.get("market_data_source"),
+                prediction_mode=active.get("prediction_mode"),
+                projection_basis_return=active.get("projection_basis_return"),
+                projection_scenarios={key: ProjectionScenario(**value) for key, value in (active.get("projection_scenarios") or {}).items()},
             )
+        )
 
         source = str(active.get("market_data_source") or self._resolve_market_data_source(signal))
         degraded_from = None
@@ -717,7 +755,7 @@ class QuantSystemService:
         elif active.get("prediction_mode") != "model":
             prediction_disabled_reason = "prediction_mode_unavailable"
 
-        return {
+        payload = {
             "symbol": active_symbol,
             "timeframe": timeframe.upper(),
             "source": source,
@@ -742,6 +780,8 @@ class QuantSystemService:
             "positions_context": {"symbols": snapshot.get("position_symbols", [])},
             "indicator_panels": ["main", "volume"],
         }
+        self._chart_cache[(active_symbol, str(timeframe or "1D").upper())] = self._cache_wrap(payload, ttl_seconds=30)
+        return payload
 
     def _should_use_live_market_data(self) -> bool:
         running_pytest = any(name == "pytest" or name.startswith("_pytest") for name in sys.modules)

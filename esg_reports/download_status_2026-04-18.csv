@@ -1,0 +1,101 @@
+﻿Ticker,Year,Exists,ValidPdf,PdfCount,SizeMB,Pages,Title,Path,Note,SourceUrl
+ABT,2022,True,True,1,46.84,146,Abbott Sustainability Report 2022,C:\Users\Jhj\Downloads\esg_reports\ABT\ABT_ESG_2022.pdf,,
+ABT,2023,True,True,1,8.7,126,ABT_ESG_2023.pdf,C:\Users\Jhj\Downloads\esg_reports\ABT\ABT_ESG_2023.pdf,,
+ABT,2024,True,True,1,7.91,98,ABT_ESG_2024.pdf,C:\Users\Jhj\Downloads\esg_reports\ABT\ABT_ESG_2024.pdf,,
+ABT,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://www.abbott.com/responsibility/sustainability/reporting/current-reports.html
+ABT,2026,False,False,0,,,,,,
+AMZN,2022,True,True,1,7.94,82,Building a Better Future Together 2022 Amazon Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\AMZN\AMZN_ESG_2022.pdf,,
+AMZN,2023,True,True,1,15.02,98,AMZN_ESG_2023.pdf,C:\Users\Jhj\Downloads\esg_reports\AMZN\AMZN_ESG_2023.pdf,,
+AMZN,2024,True,True,1,6.71,57,2024 Amazon Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\AMZN\AMZN_ESG_2024.pdf,,
+AMZN,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://sustainability.aboutamazon.com/report
+AMZN,2026,False,False,0,,,,,,
+Apple,2022,True,True,3,45.31,370,Apple E 2022 .pdf | printmgr file | Apple S 2022.pdf,C:\Users\Jhj\Downloads\esg_reports\Apple\Apple E 2022 .pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple G 2022 .pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple S 2022.pdf,"Apple 2022 has separate E, G, S files.",
+Apple,2023,True,True,3,43.95,324,Apple E 2023.pdf | Apple_2023_Proxy_Statement__HD (4).pdf | People and Environment in Our Supply Chain,C:\Users\Jhj\Downloads\esg_reports\Apple\Apple E 2023.pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple G 2023.pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple S 2023.pdf,"Apple 2023 has separate E, G, S files.",
+Apple,2024,True,True,3,46.26,291,2024 Environmental Progress Report | HD-export | People and Environment in Our Supply Chain,C:\Users\Jhj\Downloads\esg_reports\Apple\Apple E 2024.pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple G 2024.pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple S 2024.pdf,"Apple 2024 has separate E, G, S files.",
+Apple,2025,True,True,3,39.98,291,Apple 2025 Environmental Progress Report | 434032-PDF_EXPORT_LD-5978d74c-63dc-4306-b788-876312c57bfd.pdf | People and Environment in Our Supply Chain,C:\Users\Jhj\Downloads\esg_reports\Apple\Apple E 2025.pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple G 2025.pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple S 2025.pdf,"Apple 2025 has separate E, G, S files.",
+Apple,2026,True,True,3,38.73,244,Apple 2026 Environmental Progress Report | AAPL_DEF 14A_2026_WO139_EDGAR_00_Courtesy PDF 3.pdf | People and Environment in Our Supply Chain,C:\Users\Jhj\Downloads\esg_reports\Apple\Apple E 2026.pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple G 2026.pdf | C:\Users\Jhj\Downloads\esg_reports\Apple\Apple S 2026.pdf,"Apple 2026 has separate E, G, S files. Extra local 2026 file(s).",
+BAC,2022,True,True,1,3.63,63,Task Force on Climate-Related Financial Disclosures Report,C:\Users\Jhj\Downloads\esg_reports\BAC\BAC_ESG_2022.pdf,,
+BAC,2023,True,True,1,7.82,73,Managing our Transition to a Sustainable Future,C:\Users\Jhj\Downloads\esg_reports\BAC\BAC_ESG_2023.pdf,,
+BAC,2024,True,True,1,18.73,124,2024 Sustainability at Bank of America,C:\Users\Jhj\Downloads\esg_reports\BAC\BAC_ESG_2024.pdf,,
+BAC,2025,True,True,1,13.63,62,2025 Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\BAC\BAC_ESG_2025.pdf,Official 2025 Sustainability at Bank of America report is present.,https://about.bankofamerica.com/en/making-an-impact/task-force-on-climate-related-financial-disclosures-report
+BAC,2026,False,False,0,,,,,,
+COST,2022,True,True,1,60.15,176,Sustainability Commitment - Compiled Version,C:\Users\Jhj\Downloads\esg_reports\COST\COST_ESG_2022.pdf,,
+COST,2023,True,True,1,52.56,162,2023 Consolidated Commitment,C:\Users\Jhj\Downloads\esg_reports\COST\COST_ESG_2023.pdf,,
+COST,2024,True,True,1,44.76,185,COST_ESG_2024.pdf,C:\Users\Jhj\Downloads\esg_reports\COST\COST_ESG_2024.pdf,,
+COST,2025,True,True,1,11.04,86,COST_ESG_2025.pdf,C:\Users\Jhj\Downloads\esg_reports\COST\COST_ESG_2025.pdf,Official 2025 Annual Sustainability Report is present.,https://www.costco.com/sustainability-introduction.html
+COST,2026,False,False,0,,,,,,
+CVX,2022,True,True,1,7.32,84,2022 Corporate Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\CVX\CVX_ESG_2022.pdf,,
+CVX,2023,True,True,1,7.68,62,2023 Corporate Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\CVX\CVX_ESG_2023.pdf,,
+CVX,2024,True,True,1,5.32,32,2024 Corporate Sustainability Highlights,C:\Users\Jhj\Downloads\esg_reports\CVX\CVX_ESG_2024.pdf,,
+CVX,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://www.chevron.com/investors/reports-and-filings
+CVX,2026,False,False,0,,,,,,
+ENPH,2022,True,True,1,22.03,96,ENPH_ESG_2022.pdf,C:\Users\Jhj\Downloads\esg_reports\ENPH\ENPH_ESG_2022.pdf,,
+ENPH,2023,True,True,1,15.17,102,ENPH_ESG_2023.pdf,C:\Users\Jhj\Downloads\esg_reports\ENPH\ENPH_ESG_2023.pdf,,
+ENPH,2024,True,True,1,4.88,39,ENPH_ESG_2024.pdf,C:\Users\Jhj\Downloads\esg_reports\ENPH\ENPH_ESG_2024.pdf,,
+ENPH,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://investor.enphase.com/
+ENPH,2026,False,False,0,,,,,,
+GOOGL,2022,True,True,1,1.89,17,Google Environmental Report 2022,C:\Users\Jhj\Downloads\esg_reports\GOOGL\GOOGL_ESG_2022.pdf,,
+GOOGL,2023,True,True,1,13.03,104,2023 Environmental Report,C:\Users\Jhj\Downloads\esg_reports\GOOGL\GOOGL_ESG_2023.pdf,,
+GOOGL,2024,True,True,1,14.16,86,Google 2024 Environmental Report - Google Sustainability,C:\Users\Jhj\Downloads\esg_reports\GOOGL\GOOGL_ESG_2024.pdf,,
+GOOGL,2025,True,True,1,18.55,120,Google 2025 Environmental Report - Google Sustainability,C:\Users\Jhj\Downloads\esg_reports\GOOGL\GOOGL_ESG_2025.pdf,Official Google 2025 Environmental Report is present.,https://sustainability.google/reports/
+GOOGL,2026,False,False,0,,,,,,
+GS,2022,True,True,1,14.21,124,GS_ESG_2022.pdf,C:\Users\Jhj\Downloads\esg_reports\GS\GS_ESG_2022.pdf,,
+GS,2023,True,True,1,8.29,97,Goldman Sachs 2023 Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\GS\GS_ESG_2023.pdf,,
+GS,2024,True,True,1,70.2,67,Task Force On Climate-Related Financial Disclosures 2024,C:\Users\Jhj\Downloads\esg_reports\GS\GS_ESG_2024_AWM_TCFD.pdf,Official AWM TCFD 2024 supplemental report; group-level 2024 Sustainability Report was not found on the historical sustainability page in prior search.,https://am.gs.com/en-us/advisors/insights/report-survey/tcfd-report
+GS,2025,True,True,1,13.59,57,GS_ESG_2025.pdf,C:\Users\Jhj\Downloads\esg_reports\GS\GS_ESG_2025.pdf,"Official Sustainability Report, December 2025 is present.",https://www.goldmansachs.com/investor-relations/corporate-governance/sustainability-reporting/historical-reports
+GS,2026,False,False,0,,,,,,
+JNJ,2022,True,True,1,55.97,114,2022 Health for Humanity Report,C:\Users\Jhj\Downloads\esg_reports\JNJ\JNJ_ESG_2022.pdf,,
+JNJ,2023,True,True,1,77.0,72,JNJ_ESG_2023.pdf,C:\Users\Jhj\Downloads\esg_reports\JNJ\JNJ_ESG_2023.pdf,,
+JNJ,2024,True,True,1,21.25,55,JNJ_ESG_2024.pdf,C:\Users\Jhj\Downloads\esg_reports\JNJ\JNJ_ESG_2024.pdf,,
+JNJ,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://healthforhumanityreport.jnj.com/2024/
+JNJ,2026,False,False,0,,,,,,
+JPM,2022,True,True,1,7.13,74,2022 Environmental Social Governance Report,C:\Users\Jhj\Downloads\esg_reports\JPM\JPM_ESG_2022.pdf,,
+JPM,2023,True,True,1,6.81,88,2023 Environmental Social Governance Report,C:\Users\Jhj\Downloads\esg_reports\JPM\JPM_ESG_2023.pdf,,
+JPM,2024,True,True,1,8.95,66,2024 Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\JPM\JPM_ESG_2024.pdf,,
+JPM,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://www.jpmorganchase.com/about/governance/sustainability
+JPM,2026,False,False,0,,,,,,
+MS,2022,True,True,1,14.48,115,MS_ESG_2022.pdf,C:\Users\Jhj\Downloads\esg_reports\MS\MS_ESG_2022.pdf,,
+MS,2023,True,True,1,9.15,93,MS_ESG_2023.pdf,C:\Users\Jhj\Downloads\esg_reports\MS\MS_ESG_2023.pdf,,
+MS,2024,True,True,1,11.11,68,MS_ESG_2024.pdf,C:\Users\Jhj\Downloads\esg_reports\MS\MS_ESG_2024.pdf,,
+MS,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://www.morganstanley.com/about-us/sustainability-reports-archive
+MS,2026,False,False,0,,,,,,
+MSFT,2022,True,True,1,17.09,81,2022 Environmental Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\MSFT\MSFT_ESG_2022.pdf,,
+MSFT,2023,True,True,1,1.89,23,2024 Environmental Sustainability Report Data Fact Sheet,C:\Users\Jhj\Downloads\esg_reports\MSFT\MSFT_ESG_2023.pdf,,
+MSFT,2024,True,True,1,19.1,88,2024 Environmental Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\MSFT\MSFT_ESG_2024.pdf,,
+MSFT,2025,True,True,1,19.81,90,2025 Microsoft Environmental Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\MSFT\MSFT_ESG_2025.pdf,Official 2025 Environmental Sustainability Report is present.,https://www.microsoft.com/en-us/corporate-responsibility/sustainability/report/
+MSFT,2026,False,False,0,,,,,,
+NEE,2022,True,True,1,9.6,74,NEE_ESG_2022.pdf,C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2022.pdf,,
+NEE,2023,True,True,1,22.25,71,NEE_ESG_2023.pdf,C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2023.pdf,,
+NEE,2024,True,True,1,11.6,72,NEE_ESG_2024.pdf,C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2024.pdf,,
+NEE,2025,True,True,7,1.4,81,Microsoft Word - NextEra CY2024_Verification Opinion_v1-TR | NEE_ESG_2025_CDP_Section_7.pdf | NEE_ESG_2025_Data_Appendix.pdf | NEE_ESG_2025_Employees_Customers_and_Communities.pdf | NEE_ESG_2025_Environmental_Stewardship.pdf | NEE_ESG_2025_Governance.pdf | NEE_ESG_2025_Risk_Management.pdf,C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2025_2024_Emissions_Data_Assurance.pdf | C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2025_CDP_Section_7.pdf | C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2025_Data_Appendix.pdf | C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2025_Employees_Customers_and_Communities.pdf | C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2025_Environmental_Stewardship.pdf | C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2025_Governance.pdf | C:\Users\Jhj\Downloads\esg_reports\NEE\NEE_ESG_2025_Risk_Management.pdf,2025 files are split sustainability resource PDFs.,https://www.investor.nexteraenergy.com/sustainability
+NEE,2026,False,False,0,,,,,,
+NVDA,2022,True,True,1,2.23,69,NVIDIA 2022 Corporate Responsibility Report,C:\Users\Jhj\Downloads\esg_reports\NVDA\NVDA_ESG_2022.pdf,,
+NVDA,2023,True,True,1,7.44,59,NVIDIA Corporate Responsibility Report Fiscal Year 2023,C:\Users\Jhj\Downloads\esg_reports\NVDA\NVDA_ESG_2023.pdf,,
+NVDA,2024,True,True,1,4.42,41,NVIDIA Sustainability Report Fiscal Year 2024,C:\Users\Jhj\Downloads\esg_reports\NVDA\NVDA_ESG_2024.pdf,,
+NVDA,2025,True,True,1,5.19,40,NVIDIA Sustainability Report Fiscal Year 2025,C:\Users\Jhj\Downloads\esg_reports\NVDA\NVDA_ESG_2025.pdf,Official NVIDIA Sustainability Report Fiscal Year 2025 is present.,https://www.nvidia.com/en-us/about-nvidia/sustainability/
+NVDA,2026,False,False,0,,,,,,
+PFE,2022,True,True,1,10.14,83,PFE_ESG_2022.pdf,C:\Users\Jhj\Downloads\esg_reports\PFE\PFE_ESG_2022.pdf,,
+PFE,2023,True,True,1,1.19,42,PFE_ESG_2023.pdf,C:\Users\Jhj\Downloads\esg_reports\PFE\PFE_ESG_2023.pdf,,
+PFE,2024,True,True,1,5.82,82,2024 Impact Report,C:\Users\Jhj\Downloads\esg_reports\PFE\PFE_ESG_2024.pdf,,
+PFE,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://www.pfizer.com/about/responsibility/responsible-business
+PFE,2026,False,False,0,,,,,,
+PG,2022,True,True,1,20.05,42,2022_Citizenship_Report,C:\Users\Jhj\Downloads\esg_reports\PG\PG_ESG_2022.pdf,,
+PG,2023,True,True,1,32.86,83,2023 Citizenship Report,C:\Users\Jhj\Downloads\esg_reports\PG\PG_ESG_2023.pdf,,
+PG,2024,True,True,1,1.05,19,PG_ESG_2024.pdf,C:\Users\Jhj\Downloads\esg_reports\PG\PG_ESG_2024.pdf,,
+PG,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://us.pg.com/citizenship/
+PG,2026,False,False,0,,,,,,
+UNH,2022,True,True,1,10.09,90,UNH_ESG_2022.pdf,C:\Users\Jhj\Downloads\esg_reports\UNH\UNH_ESG_2022.pdf,,
+UNH,2023,True,True,1,9.12,93,UNH_ESG_2023.pdf,C:\Users\Jhj\Downloads\esg_reports\UNH\UNH_ESG_2023.pdf,,
+UNH,2024,True,True,1,9.2,87,2024-sustainability-report,C:\Users\Jhj\Downloads\esg_reports\UNH\UNH_ESG_2024.pdf,,
+UNH,2025,False,False,0,,,,,No 2025 local file; not confirmed published / not found in prior search.,https://www.unitedhealthgroup.com/sustainability.html
+UNH,2026,False,False,0,,,,,,
+WMT,2022,True,True,1,10.22,50,Walmart FY2022 ESG Summary,C:\Users\Jhj\Downloads\esg_reports\WMT\WMT_ESG_2022.pdf,,
+WMT,2023,True,True,1,4.48,43,FY2023 Walmart ESG Highlights,C:\Users\Jhj\Downloads\esg_reports\WMT\WMT_ESG_2023.pdf,,
+WMT,2024,True,True,1,97.24,132,WMT_ESG_2024.pdf,C:\Users\Jhj\Downloads\esg_reports\WMT\WMT_ESG_2024.pdf,,
+WMT,2025,True,True,1,20.72,113,Walmart Inc. FY2025 ESG Report,C:\Users\Jhj\Downloads\esg_reports\WMT\WMT_ESG_2025.pdf,Official Walmart FY2025 ESG Report is present.,https://corporate.walmart.com/purpose/esgreport
+WMT,2026,False,False,0,,,,,,
+XOM,2022,True,True,1,13.29,84,Sustainability Report 2022,C:\Users\Jhj\Downloads\esg_reports\XOM\XOM_ESG_2022.pdf,,
+XOM,2023,True,True,1,6.58,12,Executive Summary Sustainability Report,C:\Users\Jhj\Downloads\esg_reports\XOM\XOM_ESG_2023.pdf,,
+XOM,2024,True,True,1,14.83,81,Advancing Climate Solutions Report,C:\Users\Jhj\Downloads\esg_reports\XOM\XOM_ESG_2024.pdf,2024 Advancing Climate Solutions report.,https://corporate.exxonmobil.com/-/media/global/files/advancing-climate-solutions/2024/2024-advancing-climate-solutions-report.pdf
+XOM,2025,True,True,1,11.95,72,Sustainability Report 2025,C:\Users\Jhj\Downloads\esg_reports\XOM\XOM_ESG_2025.pdf,Official ExxonMobil 2025 Sustainability Report is present.,https://corporate.exxonmobil.com/-/media/global/files/sustainability-report/2024/sustainability-report.pdf
+XOM,2026,False,False,0,,,,,,

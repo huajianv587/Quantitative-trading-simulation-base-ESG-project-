@@ -37,6 +37,8 @@ def build_dataset(request: QuantRLDatasetBuildRequest) -> dict:
             limit=request.limit,
             force_refresh=request.force_refresh,
             include_esg=request.include_esg,
+            start_date=request.start_date,
+            end_date=request.end_date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -51,6 +53,8 @@ def build_recipe_dataset(request: QuantRLRecipeBuildRequest) -> dict:
             limit=request.limit,
             force_refresh=request.force_refresh,
             symbols=request.symbols or None,
+            start_date=request.start_date,
+            end_date=request.end_date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

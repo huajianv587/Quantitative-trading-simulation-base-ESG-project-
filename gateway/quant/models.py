@@ -104,6 +104,12 @@ class ResearchSignal(BaseModel):
     materiality_adjustment: float | None = None
     trend_bonus: float | None = None
     house_explanation: str | None = None
+    house_score_v2: float | None = None
+    materiality_weights: dict[str, float] = Field(default_factory=dict)
+    evidence_count: int | None = None
+    effective_date: str | None = None
+    staleness_days: int | None = None
+    score_delta: float | None = None
 
 
 class PortfolioPosition(BaseModel):

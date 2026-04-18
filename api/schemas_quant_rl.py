@@ -11,6 +11,8 @@ class QuantRLDatasetBuildRequest(BaseModel):
     limit: int = 240
     force_refresh: bool = False
     include_esg: bool = True
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 class QuantRLRecipeBuildRequest(BaseModel):
@@ -19,6 +21,8 @@ class QuantRLRecipeBuildRequest(BaseModel):
     limit: int = 240
     force_refresh: bool = False
     symbols: list[str] = Field(default_factory=list)
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 class QuantRLSearchRequest(BaseModel):

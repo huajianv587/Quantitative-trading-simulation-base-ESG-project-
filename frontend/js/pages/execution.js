@@ -34,7 +34,11 @@ function fmtPct(value) {
 function shortTime(value) {
   if (!value) return '--';
   try {
-    return new Date(value).toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return new Date(value).toLocaleTimeString(getLocale(), {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
   } catch {
     return String(value);
   }
@@ -69,7 +73,7 @@ function buildShell() {
         <div class="execution-monitor__sub" id="execution-monitor-sub">Real broker account sync</div>
       </div>
       <div class="execution-monitor__stats">
-        <span id="ws-pill" class="live-pill live-pill--off">DISCONNECTED</span>
+        <span id="ws-pill" class="live-pill live-pill--off">SYNCING</span>
         <span id="monitor-mode" class="badge badge-neutral">PAPER</span>
         <span id="session-pnl" class="execution-monitor__value">$0.00</span>
       </div>
@@ -89,7 +93,7 @@ function buildShell() {
           <div class="run-panel__body">
             <div class="form-group">
               <label class="form-label">股票池</label>
-              <input class="form-input" id="ex-universe" placeholder="AAPL, MSFT, NVDA, GOOGL (留空则用默认池)">
+              <input class="form-input" id="ex-universe" placeholder="AAPL, MSFT, NVDA, GOOGL（留空则用默认池）">
             </div>
 
             <div class="form-row">
@@ -296,17 +300,19 @@ function bindEvents(container) {
     hideLiveConfirm();
     await submitExecution(container, true);
   });
-  container.querySelectorAll('[data-live-close]')?.forEach((node) => {
+  container.querySelectorAll('[data-live-close]').forEach((node) => {
     node.addEventListener('click', hideLiveConfirm);
   });
 }
 
 async function loadRuntime(container) {
   updateModeBadge(container);
-  await loadAccount(container);
-  await loadOrders(container);
-  await loadPositions(container);
   connectWS(container);
+  await Promise.allSettled([
+    loadAccount(container),
+    loadOrders(container),
+    loadPositions(container),
+  ]);
 }
 
 function updateModeBadge(container) {
@@ -320,6 +326,32 @@ function updateModeBadge(container) {
   if (brokerMeta) brokerMeta.textContent = `Alpaca · ${mode}`;
 }
 
+function updateAccountPill(container, connected, mode) {
+  const pill = container.querySelector('#ws-pill');
+  if (!pill) return;
+  pill.textContent = connected ? 'ACCOUNT ONLINE' : 'BROKER OFFLINE';
+  pill.className = connected ? 'live-pill' : 'live-pill live-pill--off';
+  container.querySelector('#execution-monitor-sub').textContent = connected
+    ? `Real broker account sync · ${mode}`
+    : `Broker unavailable · ${mode}`;
+}
+
+function renderAccountFallback(container, reason) {
+  updateAccountPill(container, false, currentMode(container));
+  container.querySelector('#account-id').textContent = '--';
+  container.querySelector('#account-clock').textContent = '--';
+  container.querySelector('#account-warning-count').textContent = '1';
+  container.querySelector('#broker-status-note').textContent = reason;
+  container.querySelector('#account-equity').textContent = '--';
+  container.querySelector('#account-buying-power').textContent = '--';
+  container.querySelector('#account-cash').textContent = '--';
+  container.querySelector('#account-daily-change').textContent = '--';
+  container.querySelector('#execution-clock').textContent = 'Broker unavailable';
+  container.querySelector('#session-pnl').textContent = '--';
+  container.querySelector('#session-pnl').style.color = 'var(--text-dim)';
+  container.querySelector('#btn-kill').disabled = true;
+}
+
 async function loadAccount(container) {
   const broker = currentBroker(container);
   const mode = currentMode(container);
@@ -330,7 +362,9 @@ async function loadAccount(container) {
     const clock = payload.market_clock || {};
 
     container.querySelector('#account-id').textContent = account.account_id || '--';
-    container.querySelector('#account-clock').textContent = clock.is_open ? 'MARKET OPEN' : (clock.next_open ? `Closed · next ${shortTime(clock.next_open)}` : 'Closed');
+    container.querySelector('#account-clock').textContent = clock.is_open
+      ? 'MARKET OPEN'
+      : (clock.next_open ? `Closed · next ${shortTime(clock.next_open)}` : 'Closed');
     container.querySelector('#account-warning-count').textContent = String(warnings.length);
     container.querySelector('#broker-status-note').textContent = warnings[0] || 'Server-side broker credentials active.';
     container.querySelector('#account-equity').textContent = fmtMoney(account.equity);
@@ -340,10 +374,10 @@ async function loadAccount(container) {
     container.querySelector('#execution-clock').textContent = clock.is_open ? 'Market Open' : 'Market Closed';
     container.querySelector('#session-pnl').textContent = fmtSignedMoney(account.daily_change);
     container.querySelector('#session-pnl').style.color = Number(account.daily_change || 0) >= 0 ? 'var(--green)' : 'var(--red)';
-    container.querySelector('#execution-monitor-sub').textContent = `${payload.connected ? 'Real broker account sync' : 'Broker unavailable'} · ${payload.mode || mode}`;
     container.querySelector('#btn-kill').disabled = !payload.connected;
+    updateAccountPill(container, Boolean(payload.connected), payload.mode || mode);
   } catch (error) {
-    container.querySelector('#broker-status-note').textContent = error.message || 'Could not load broker account.';
+    renderAccountFallback(container, error.message || 'Could not load broker account.');
     toast.error('Account sync failed', error.message || 'Unknown error');
   }
 }
@@ -438,7 +472,7 @@ function renderOrders(container) {
     body.innerHTML = `
       <div class="empty-state" style="min-height:120px">
         <div class="empty-state__title">当前没有订单</div>
-        <div class="empty-state__text">订单为空时显示空状态，不再显示 File not found。</div>
+        <div class="empty-state__text">订单为空时展示空状态，不再显示 File not found。</div>
       </div>
     `;
     return;
@@ -475,7 +509,12 @@ async function loadPositions(container) {
     const payload = await api.execution.positions(broker, mode);
     const positions = payload.positions || [];
     if (!positions.length) {
-      target.innerHTML = `<div class="empty-state" style="min-height:100px"><div class="empty-state__title">当前无持仓</div><div class="empty-state__text">空仓时显示空状态。</div></div>`;
+      target.innerHTML = `
+        <div class="empty-state" style="min-height:100px">
+          <div class="empty-state__title">当前无持仓</div>
+          <div class="empty-state__text">空仓时展示空状态。</div>
+        </div>
+      `;
       return;
     }
     target.innerHTML = `
@@ -498,23 +537,23 @@ async function loadPositions(container) {
       </table></div>
     `;
   } catch (error) {
-    target.innerHTML = `<div class="empty-state" style="min-height:100px"><div class="empty-state__title">持仓读取失败</div><div class="empty-state__text">${error.message || 'Unknown error'}</div></div>`;
+    target.innerHTML = `
+      <div class="empty-state" style="min-height:100px">
+        <div class="empty-state__title">持仓读取失败</div>
+        <div class="empty-state__text">${error.message || 'Unknown error'}</div>
+      </div>
+    `;
   }
 }
 
 function connectWS(container, executionId = null) {
   const broker = currentBroker(container);
   const mode = currentMode(container);
-  const pill = container.querySelector('#ws-pill');
   const feedLog = container.querySelector('#feed-log');
   const status = container.querySelector('#feed-status');
   _ws?.close();
 
   _ws = openExecutionWS(broker, executionId, 20, (msg) => {
-    if (pill) {
-      pill.textContent = 'LIVE';
-      pill.className = 'live-pill';
-    }
     if (status) status.textContent = 'live';
     if (feedLog) {
       const entry = document.createElement('div');
@@ -524,10 +563,6 @@ function connectWS(container, executionId = null) {
       feedLog.prepend(entry);
     }
   }, () => {
-    if (pill) {
-      pill.textContent = 'DISCONNECTED';
-      pill.className = 'live-pill live-pill--off';
-    }
-    if (status) status.textContent = 'disconnected';
+    if (status) status.textContent = 'event stream offline';
   }, mode);
 }
