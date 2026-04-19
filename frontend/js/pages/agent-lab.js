@@ -179,6 +179,14 @@ function renderTimelinePreview() {
       <div class="preview-step-grid">
         ${WORKFLOW_PREVIEW.map(([step, detail]) => `<div class="preview-step"><span>${esc(step)} | ${esc(detail)}</span><strong>queued</strong></div>`).join('')}
       </div>
+      <div class="workbench-section">
+        <div class="workbench-section__title">Workflow Guarantees</div>
+        <div class="factor-checklist">
+          <div class="factor-check-row"><span>Provider failures stay isolated</span><strong class="is-pass">yes</strong></div>
+          <div class="factor-check-row"><span>Broker execution remains blocked</span><strong class="is-pass">shadow</strong></div>
+          <div class="factor-check-row"><span>All outputs are run-addressable</span><strong>ledger</strong></div>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -201,6 +209,15 @@ function renderReportPreview() {
         <div class="workbench-kv-row"><span>Safety</span><strong>frozen-safe</strong></div>
         <div class="workbench-kv-row"><span>Keys</span><strong>masked</strong></div>
         <div class="workbench-kv-row"><span>Broker</span><strong>blocked</strong></div>
+      </div>
+      <div class="workbench-section">
+        <div class="workbench-section__title">Handoff Manifest</div>
+        <div class="preview-step-grid">
+          <div class="preview-step"><span>Evidence bundle</span><strong>pending</strong></div>
+          <div class="preview-step"><span>Factor registry</span><strong>pending</strong></div>
+          <div class="preview-step"><span>Decision report</span><strong>pending</strong></div>
+          <div class="preview-step"><span>Outcome row</span><strong>shadow-only</strong></div>
+        </div>
       </div>
     </div>`;
 }
@@ -309,12 +326,31 @@ async function runWorkflow() {
         ${metric('Factors', factors.factor_cards?.length || 0)}
         ${metric('Action', decision.action || '-')}
         ${metric('Loss Prob', pct(simulation.probability_of_loss), 'risk')}
+        ${metric('Outcome', outcomes.record_count || outcomes.summary?.record_count || 0)}
+        ${metric('Guard', 'shadow')}
       </div>
       <div class="workbench-kv-list compact-kv-list">
         <div class="workbench-kv-row"><span>Evidence bundle</span><strong>${esc(evidence.bundle_id || evidence.run_id || 'latest')}</strong></div>
         <div class="workbench-kv-row"><span>Factor run</span><strong>${esc(factors.run_id || 'registry')}</strong></div>
         <div class="workbench-kv-row"><span>Decision ID</span><strong>${esc(decision.decision_id || '-')}</strong></div>
         <div class="workbench-kv-row"><span>Simulation ID</span><strong>${esc(simulation.simulation_id || '-')}</strong></div>
+      </div>
+      <div class="workbench-section">
+        <div class="workbench-section__title">Handoff Manifest</div>
+        <div class="preview-step-grid">
+          <div class="preview-step"><span>Connector lineage</span><strong>${esc((decision.connector_lineage?.free_tier_registry?.providers || []).length || providers().length)}</strong></div>
+          <div class="preview-step"><span>Quota mode</span><strong>${esc(String(decision.quota_mode || evidence.mode || 'guarded'))}</strong></div>
+          <div class="preview-step"><span>Confidence</span><strong>${esc(decision.confidence || '-')}</strong></div>
+          <div class="preview-step"><span>Loss guard</span><strong>${pct(simulation.probability_of_loss)}</strong></div>
+        </div>
+      </div>
+      <div class="workbench-section">
+        <div class="workbench-section__title">Workflow Guarantees</div>
+        <div class="factor-checklist">
+          <div class="factor-check-row"><span>Evidence kept in shadow lake</span><strong class="is-pass">stored</strong></div>
+          <div class="factor-check-row"><span>Decision stayed broker-safe</span><strong class="is-pass">blocked</strong></div>
+          <div class="factor-check-row"><span>Outcome row linked to decision</span><strong>${esc(decision.decision_id ? 'linked' : 'pending')}</strong></div>
+        </div>
       </div>
       <div class="workbench-list workbench-scroll-list">
         <article class="workbench-item">

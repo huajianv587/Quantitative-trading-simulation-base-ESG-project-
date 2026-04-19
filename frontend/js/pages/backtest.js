@@ -189,6 +189,7 @@ function buildShell() {
         </div>
         <div class="grid-2 backtest-bottom-grid" id="bt-bottom" style="display:none">
           <div class="card" id="bt-metrics-detail"></div>
+          <div class="card" id="bt-risk-attribution"></div>
           <div class="card" id="bt-alerts"></div>
         </div>
         <div id="bt-placeholder" class="card">
@@ -372,6 +373,15 @@ function showResults(container, res) {
     ['Data Chain', (res.data_source_chain || []).join(' -> ')],
     ['Warnings', (res.market_data_warnings || []).join('; ') || 'none'],
   ];
+  const positions = Array.isArray(res.positions) ? res.positions : [];
+  const topRiskRows = [...positions]
+    .sort((left, right) => Number(right.risk_budget || 0) - Number(left.risk_budget || 0))
+    .slice(0, 4);
+  const avgFill = average(positions.map((position) => Number(position.expected_fill_probability || 0)).filter((value) => value > 0));
+  const avgSlippage = average(positions.map((position) => Number(position.estimated_slippage_bps || 0)).filter((value) => value > 0));
+  const avgImpact = average(positions.map((position) => Number(position.estimated_impact_bps || 0)).filter((value) => value > 0));
+  const engineMix = summarizeCounts(positions.map((position) => position.alpha_engine || position.strategy_bucket || 'runtime'));
+  const postureMix = summarizeCounts(positions.map((position) => position.regime_posture || 'neutral'));
   container.querySelector('#bt-metrics-detail').innerHTML = `
     <div class="card-header"><span class="card-title">${c('full')}</span></div>
     <div class="card-body" style="display:flex;flex-direction:column;gap:8px">
@@ -382,6 +392,35 @@ function showResults(container, res) {
         </div>`).join('')}
     </div>`;
 
+  container.querySelector('#bt-risk-attribution').innerHTML = `
+    <div class="card-header"><span class="card-title">Risk Attribution</span></div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+      <div class="workbench-metric-grid">
+        ${metric('Positions', positions.length || '-')}
+        ${metric('Avg Fill', avgFill ? pct(avgFill) : '-')}
+        ${metric('Slip', avgSlippage ? `${avgSlippage.toFixed(1)} bps` : '-')}
+        ${metric('Impact', avgImpact ? `${avgImpact.toFixed(1)} bps` : '-')}
+      </div>
+      <div class="workbench-section">
+        <div class="workbench-section__title">Top Risk Budget</div>
+        <div class="workbench-kv-list compact-kv-list">
+          ${(topRiskRows.length ? topRiskRows : [{ symbol: 'n/a', risk_budget: 0, weight: 0 }]).map((position) => `
+            <div class="workbench-kv-row">
+              <span>${esc(position.symbol || '-')} / ${esc(position.side || 'long')}</span>
+              <strong>${pct(position.risk_budget || 0)} | w ${pct(position.weight || 0)}</strong>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      <div class="workbench-section">
+        <div class="workbench-section__title">Engine + Regime Mix</div>
+        <div class="preview-step-grid">
+          <div class="preview-step"><span>Alpha engines</span><strong>${esc(engineMix)}</strong></div>
+          <div class="preview-step"><span>Regime posture</span><strong>${esc(postureMix)}</strong></div>
+        </div>
+      </div>
+    </div>`;
+
   const alerts = res.risk_alerts || [];
   container.querySelector('#bt-alerts').innerHTML = `
     <div class="card-header">
@@ -389,6 +428,14 @@ function showResults(container, res) {
       <span class="text-xs text-muted font-mono">${alerts.length} alerts</span>
     </div>
     <div class="card-body" style="display:flex;flex-direction:column;gap:8px">
+      <div class="workbench-section">
+        <div class="workbench-section__title">Source Guard</div>
+        <div class="factor-checklist">
+          <div class="factor-check-row"><span>data_source</span><strong>${esc(res.data_source || '-')}</strong></div>
+          <div class="factor-check-row"><span>fallback used</span><strong>${res.used_synthetic_fallback ? 'yes' : 'no'}</strong></div>
+          <div class="factor-check-row"><span>data chain</span><strong>${esc((res.data_source_chain || []).join(' -> ') || '-')}</strong></div>
+        </div>
+      </div>
       ${alerts.length ? alerts.map((alert) => `
         <div style="padding:10px 12px;border-radius:8px;background:var(--bg-raised);border:1px solid var(--border-subtle)">
           <div style="display:flex;align-items:center;gap:7px;margin-bottom:4px">
@@ -398,6 +445,13 @@ function showResults(container, res) {
           <div style="font-size:11px;color:var(--text-secondary)">${esc(alert.description)}</div>
           <div style="font-size:11px;color:var(--text-dim);margin-top:4px">${esc(alert.recommendation)}</div>
         </div>`).join('') : '<div class="text-muted text-sm" style="padding:4px 0">No risk alerts. Strategy remains inside the current guardrails.</div>'}
+      ${(res.market_data_warnings || []).length ? `
+        <div class="workbench-section">
+          <div class="workbench-section__title">Market Data Warnings</div>
+          <div class="workbench-kv-list compact-kv-list">
+            ${(res.market_data_warnings || []).map((warning) => `<div class="workbench-kv-row"><span>warning</span><strong>${esc(warning)}</strong></div>`).join('')}
+          </div>
+        </div>` : ''}
     </div>`;
 }
 
@@ -515,3 +569,19 @@ function drawMonthlyHeatmap(container, res) {
 }
 
 const pctCls = (value) => value > 0 ? 'pos' : value < 0 ? 'neg' : '';
+
+function average(values) {
+  if (!values.length) return 0;
+  return values.reduce((acc, value) => acc + value, 0) / values.length;
+}
+
+function summarizeCounts(values) {
+  const counts = values.reduce((acc, value) => {
+    const key = String(value || 'unknown');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const entries = Object.entries(counts);
+  if (!entries.length) return '-';
+  return entries.slice(0, 3).map(([key, count]) => `${key}:${count}`).join(' | ');
+}

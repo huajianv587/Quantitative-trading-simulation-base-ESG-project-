@@ -354,40 +354,73 @@ function renderDecision(container, report) {
   const status = container.querySelector('#decision-status');
   if (status) status.textContent = `${report.symbol || ''} / ${report.action || ''}`;
   const verifier = report.verifier_checks || {};
-  const triggers = (report.risk_triggers || []).map((item) => `<li>${esc(item)}</li>`).join('');
+  const triggers = (report.risk_triggers || []).length
+    ? (report.risk_triggers || []).map((item) => `<li>${esc(item)}</li>`).join('')
+    : '<li>No active trigger in the current report.</li>';
   const factors = renderFactorCards(report.factor_cards || [], { maxItems: 3, compact: true });
-  const simulation = report.simulation ? renderSimulationResult(report.simulation) : '';
+  const simulation = report.simulation
+    ? renderSimulationResult(report.simulation)
+    : '<div class="workbench-report-text">No embedded simulation attached yet. Open Simulation to replay the current thesis.</div>';
   const interval = report.confidence_interval || {};
   const auditTrail = Array.isArray(report.audit_trail) ? report.audit_trail.slice(0, 4) : [];
+  const evidenceCount = (report.main_evidence || []).length;
+  const conflictCount = Number(report.evidence_conflicts?.conflict_count || 0);
+  const liveAge = formatLiveAge(report.live_data_age);
+  const dataVersions = formatVersionMap(report.data_versions || {});
+  const modelVersions = formatVersionMap(report.model_versions || {});
+  const providerLadder = formatProviderLadder(report.connector_lineage);
   container.querySelector('#decision-summary').innerHTML = `
     <div class="workbench-metric-grid">
-      ${metric(t('Action', '动作'), String(report.action || '').toUpperCase())}
-      ${metric(t('Expected', '预期收益'), pct(report.expected_return), 'positive')}
-      ${metric(t('Confidence', '置信度'), num(report.confidence))}
-      ${metric(t('Weight Max', '最大仓位'), pct(report.position_weight_range?.max || 0))}
+      ${metric('Action', String(report.action || '').toUpperCase())}
+      ${metric('Expected', pct(report.expected_return), 'positive')}
+      ${metric('Confidence', num(report.confidence))}
+      ${metric('Weight Max', pct(report.position_weight_range?.max || 0))}
+      ${metric('Evidence', evidenceCount || '-', evidenceCount ? 'positive' : '')}
+      ${metric('Live Age', liveAge, liveAge === '-' ? '' : 'risk')}
     </div>
     <div class="workbench-kv-list compact-kv-list">
-      <div class="workbench-kv-row"><span>${t('Confidence Interval', '置信区间')}</span><strong>${pct(interval.lower)} / ${pct(interval.center)} / ${pct(interval.upper)}</strong></div>
+      <div class="workbench-kv-row"><span>Confidence Interval</span><strong>${pct(interval.lower)} / ${pct(interval.center)} / ${pct(interval.upper)}</strong></div>
       <div class="workbench-kv-row"><span>Verifier</span><strong>${esc(verifier.verdict || 'review')} / leakage ${String(!!verifier.leakage_pass)}</strong></div>
-      <div class="workbench-kv-row"><span>${t('Execution Guard', '执行保护')}</span><strong>${esc(verifier.execution_guard || 'shadow_only_no_order_created')}</strong></div>
-      <div class="workbench-kv-row"><span>${t('Evidence Quality', '证据质量')}</span><strong>${num(verifier.as_of_safe_ratio)}</strong></div>
+      <div class="workbench-kv-row"><span>Execution Guard</span><strong>${esc(verifier.execution_guard || 'shadow_only_no_order_created')}</strong></div>
+      <div class="workbench-kv-row"><span>Evidence Quality</span><strong>${num(verifier.as_of_safe_ratio)}</strong></div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">${t('Risk Triggers', '风险触发条件')}</div>
+      <div class="workbench-section__title">Decision Ledger</div>
+      <div class="workbench-kv-list compact-kv-list">
+        <div class="workbench-kv-row"><span>Decision ID</span><strong>${esc(report.decision_id || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>Decision Time</span><strong>${esc(report.decision_time || report.generated_at || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>Evidence Count</span><strong>${esc(evidenceCount || 0)}</strong></div>
+        <div class="workbench-kv-row"><span>Live Age</span><strong>${esc(liveAge)}</strong></div>
+        <div class="workbench-kv-row"><span>Data Versions</span><strong>${esc(dataVersions)}</strong></div>
+        <div class="workbench-kv-row"><span>Model Versions</span><strong>${esc(modelVersions)}</strong></div>
+        <div class="workbench-kv-row"><span>Provider Ladder</span><strong>${esc(providerLadder)}</strong></div>
+      </div>
+    </div>
+    <div class="workbench-section">
+      <div class="workbench-section__title">Verifier Snapshot</div>
+      <div class="preview-step-grid">
+        <div class="preview-step"><span>Verdict</span><strong>${esc(verifier.verdict || 'review')}</strong></div>
+        <div class="preview-step"><span>Leakage</span><strong>${String(!!verifier.leakage_pass)}</strong></div>
+        <div class="preview-step"><span>Conflicts</span><strong>${esc(conflictCount || 0)}</strong></div>
+        <div class="preview-step"><span>Quota Mode</span><strong>${esc(String(report.quota_mode ?? 'shadow'))}</strong></div>
+      </div>
+    </div>
+    <div class="workbench-section">
+      <div class="workbench-section__title">Risk Triggers</div>
       <div class="workbench-report-text"><ul>${triggers}</ul></div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">${t('Factor Contribution', '因子贡献')}</div>
+      <div class="workbench-section__title">Factor Contribution</div>
       ${factors}
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">${t('Audit Snapshot', '审计快照')}</div>
+      <div class="workbench-section__title">Audit Snapshot</div>
       <div class="preview-step-grid">
         ${(auditTrail.length ? auditTrail : ['source linked evidence', 'as-of safe features', 'counter evidence checked', 'shadow log ready']).map((step) => `<div class="preview-step"><span>${esc(step)}</span><strong>ready</strong></div>`).join('')}
       </div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">${t('Embedded Simulation', '内嵌模拟摘要')}</div>
+      <div class="workbench-section__title">Embedded Simulation</div>
       ${simulation}
     </div>`;
 }
@@ -397,9 +430,28 @@ function renderEvidence(container, items) {
 }
 
 function renderCounterEvidence(container, items) {
-  container.querySelector('#counter-panel').innerHTML = items?.length
-    ? renderEvidenceItems(items, { maxItems: 6, scroll: true })
-    : renderCounterReadyState();
+  if (!items?.length) {
+    container.querySelector('#counter-panel').innerHTML = renderCounterReadyState();
+    return;
+  }
+  const providers = Array.from(new Set(items.map((item) => item.provider).filter(Boolean)));
+  const avgConfidence = items.reduce((acc, item) => acc + Number(item.confidence || 0), 0) / Math.max(1, items.length);
+  container.querySelector('#counter-panel').innerHTML = `
+    <div class="workbench-metric-grid">
+      ${metric('Counter', items.length, 'risk')}
+      ${metric('Providers', providers.length || '-')}
+      ${metric('Avg Q', num(avgConfidence))}
+      ${metric('Critic', 'armed', 'risk')}
+    </div>
+    ${renderEvidenceItems(items, { maxItems: 6, scroll: true })}
+    <div class="workbench-section">
+      <div class="workbench-section__title">Critic Focus</div>
+      <div class="factor-checklist">
+        <div class="factor-check-row"><span>Weak source pressure</span><strong>${esc(providers.join(', ') || '-')}</strong></div>
+        <div class="factor-check-row"><span>Freshness check</span><strong class="is-review">active</strong></div>
+        <div class="factor-check-row"><span>Contrarian read</span><strong>enabled</strong></div>
+      </div>
+    </div>`;
 }
 
 function renderAudit(container, decisions) {
@@ -409,6 +461,12 @@ function renderAudit(container, decisions) {
   }
   const first = decisions[0] || {};
   container.querySelector('#audit-panel').innerHTML = `
+    <div class="workbench-metric-grid">
+      ${metric('Records', decisions.length, 'positive')}
+      ${metric('Latest', first.status || first.action || 'recorded')}
+      ${metric('Feature Time', first.feature_time || first.decision_time || 'as-of safe')}
+      ${metric('Model', first.model_version || 'shadow-stack')}
+    </div>
     <div class="workbench-kv-list compact-kv-list">
       ${decisions.slice(0, 5).map((decision) => `
         <div class="workbench-kv-row">
@@ -416,9 +474,9 @@ function renderAudit(container, decisions) {
           <strong>${esc(decision.symbol || decision.model_version || '-')}</strong>
         </div>
       `).join('')}
-      <div class="workbench-kv-row"><span>${t('Latest status', '最新状态')}</span><strong>${esc(first.status || first.action || 'recorded')}</strong></div>
-      <div class="workbench-kv-row"><span>${t('Feature time', '特征时点')}</span><strong>${esc(first.feature_time || first.decision_time || 'as-of safe')}</strong></div>
-      <div class="workbench-kv-row"><span>${t('Model version', '模型版本')}</span><strong>${esc(first.model_version || 'shadow-stack')}</strong></div>
+      <div class="workbench-kv-row"><span>Latest Status</span><strong>${esc(first.status || first.action || 'recorded')}</strong></div>
+      <div class="workbench-kv-row"><span>Feature Time</span><strong>${esc(first.feature_time || first.decision_time || 'as-of safe')}</strong></div>
+      <div class="workbench-kv-row"><span>Model Version</span><strong>${esc(first.model_version || 'shadow-stack')}</strong></div>
     </div>`;
 }
 
@@ -498,4 +556,23 @@ function renderWorkbenchLinks() {
       <button class="workbench-link-row" id="link-connector-center"><strong>Connector Center</strong><span>Free-tier source health, quota guard, and sample payloads.</span></button>
       <button class="workbench-link-row" id="link-market-radar"><strong>Market Radar</strong><span>Live evidence stream with provider attribution.</span></button>
     </div>`;
+}
+
+function formatVersionMap(map) {
+  const entries = Object.entries(map || {}).filter(([, value]) => value != null && String(value).trim());
+  if (!entries.length) return '-';
+  return entries.slice(0, 3).map(([key, value]) => `${key}:${String(value)}`).join(' | ');
+}
+
+function formatProviderLadder(lineage) {
+  const providers = lineage?.free_tier_registry?.providers || [];
+  if (!providers.length) return '-';
+  return providers.slice(0, 4).map((row) => row.provider || row.provider_id || row.display_name || 'source').join(' -> ');
+}
+
+function formatLiveAge(liveAge) {
+  if (!liveAge || liveAge.avg_age_hours == null) return '-';
+  const avg = Number(liveAge.avg_age_hours || 0);
+  const max = Number(liveAge.max_age_hours || 0);
+  return `avg ${avg.toFixed(1)}h / max ${max.toFixed(1)}h`;
 }

@@ -1640,6 +1640,9 @@ html[lang="zh"] .nav-section-label {
 .backtest-bottom-grid {
   align-items: stretch;
 }
+.backtest-bottom-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .connector-main-grid > .run-panel,
 .market-radar-layout > .card,
 .agent-lab-grid > .run-panel,
@@ -1736,6 +1739,9 @@ html[lang="zh"] .nav-section-label {
 .connector-result-scroll {
   min-width: 0;
 }
+.connector-result-scroll {
+  max-height: 320px;
+}
 .connector-result-hint {
   margin: 6px 0 10px;
 }
@@ -1753,6 +1759,11 @@ html[lang="zh"] .nav-section-label {
 .decision-stack > .card,
 .decision-stack > .run-panel {
   min-width: 0;
+}
+.decision-stack--right .card .card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .decision-cockpit-page .workbench-link-grid {
   grid-template-columns: 1fr;
@@ -4274,7 +4285,8 @@ body.light .rl-lab-path {
   .market-radar-layout,
   .decision-layout,
   .factor-lab-top-grid,
-  .backtest-layout {
+  .backtest-layout,
+  .backtest-bottom-grid {
     grid-template-columns: 1fr;
   }
   .research-preview__metrics {

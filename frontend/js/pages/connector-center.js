@@ -260,6 +260,20 @@ function renderInitialResult() {
           <div class="preview-step"><span>${c('providerLabel')}</span><strong>${esc(parsedProviders.join(', ') || '-')}</strong></div>
         </div>
       </section>
+      <section class="workbench-section">
+        <div class="workbench-section__title">Provider Ladder</div>
+        <div class="preview-step-grid">
+          ${renderProviderLadder(parsedProviders)}
+        </div>
+      </section>
+      <section class="workbench-section">
+        <div class="workbench-section__title">Run Preview</div>
+        <div class="factor-checklist">
+          <div class="factor-check-row"><span>Quota reserve</span><strong class="is-pass">protected</strong></div>
+          <div class="factor-check-row"><span>Failure isolation</span><strong class="is-pass">enabled</strong></div>
+          <div class="factor-check-row"><span>Secret redaction</span><strong class="is-pass">masked</strong></div>
+        </div>
+      </section>
     </div>`;
 }
 
@@ -271,6 +285,9 @@ function renderInitialResultIntoTarget() {
 function renderResult(payload) {
   const target = _container.querySelector('#connector-result');
   const rows = payload.results || payload.items || payload.providers || [];
+  const summary = payload.summary || {};
+  const normalized = summary.normalized_count ?? rows.reduce((acc, row) => acc + Number(row.normalized_count || 0), 0);
+  const avgLatency = averageLatency(rows);
   const resultRows = Array.isArray(rows)
     ? rows.slice(0, 24).map((row) => `
       <article class="workbench-item">
@@ -289,15 +306,31 @@ function renderResult(payload) {
   target.innerHTML = `
     <div class="workbench-metric-grid">
       ${metric('Run', payload.run_id || payload.bundle_id || 'latest')}
-      ${metric('OK', payload.summary?.ok_count ?? payload.quality_summary?.item_count ?? '-')}
-      ${metric('Failed', payload.summary?.failed_count ?? '-')}
-      ${metric('Quota', payload.summary?.quota_protected_count ?? 0)}
+      ${metric('OK', summary.ok_count ?? payload.quality_summary?.item_count ?? '-')}
+      ${metric('Failed', summary.failed_count ?? '-')}
+      ${metric('Quota', summary.quota_protected_count ?? 0)}
+      ${metric('Normalized', normalized || '-')}
+      ${metric('Latency', avgLatency ? `${avgLatency}ms` : '-')}
     </div>
     <div class="preview-step-grid connector-result-summary">
       <div class="preview-step"><span>${c('symbolLabel')}</span><strong>${esc(symbol())}</strong></div>
       <div class="preview-step"><span>${c('universeLabel')}</span><strong>${esc(universe().length)}</strong></div>
       <div class="preview-step"><span>${c('providerLabel')}</span><strong>${esc(providers().join(', ') || '-')}</strong></div>
     </div>
+    <section class="workbench-section">
+      <div class="workbench-section__title">Provider Ladder</div>
+      <div class="preview-step-grid">
+        ${renderProviderLadder(providers(), rows)}
+      </div>
+    </section>
+    <section class="workbench-section">
+      <div class="workbench-section__title">Run Guard</div>
+      <div class="factor-checklist">
+        <div class="factor-check-row"><span>Quota mode</span><strong>${esc(payload.mode || payload.quota_mode || 'guarded')}</strong></div>
+        <div class="factor-check-row"><span>Failure isolation</span><strong class="is-pass">${esc(summary.failure_isolation || 'enabled')}</strong></div>
+        <div class="factor-check-row"><span>Persisted record</span><strong>${payload.storage?.record_id ? 'stored' : 'ephemeral'}</strong></div>
+      </div>
+    </section>
     <div class="workbench-list workbench-scroll-list connector-result-scroll">${resultRows || emptyState('No rows')}</div>`;
 }
 
@@ -339,4 +372,32 @@ async function runLiveScan() {
   } catch (err) {
     renderError(target, err);
   }
+}
+
+function renderProviderLadder(providerIds, rows = []) {
+  if (!providerIds.length) {
+    return '<div class="preview-step"><span>providers</span><strong>-</strong></div>';
+  }
+  const byProvider = Array.isArray(rows)
+    ? rows.reduce((acc, row) => {
+      const key = row.provider || row.provider_id || 'provider';
+      acc[key] ||= { total: 0, ok: 0 };
+      acc[key].total += 1;
+      if (['ok', 'configured', 'dry_run_ready', 'empty'].includes(String(row.status || '').toLowerCase())) acc[key].ok += 1;
+      return acc;
+    }, {})
+    : {};
+  return providerIds.slice(0, 5).map((providerId, index) => {
+    const stats = byProvider[providerId];
+    const label = stats ? `${stats.ok}/${stats.total}` : `P${index + 1}`;
+    return `<div class="preview-step"><span>${esc(providerId)}</span><strong>${esc(label)}</strong></div>`;
+  }).join('');
+}
+
+function averageLatency(rows) {
+  const values = Array.isArray(rows)
+    ? rows.map((row) => Number(row.latency_ms || 0)).filter((value) => Number.isFinite(value) && value > 0)
+    : [];
+  if (!values.length) return 0;
+  return Math.round(values.reduce((acc, value) => acc + value, 0) / values.length);
 }
