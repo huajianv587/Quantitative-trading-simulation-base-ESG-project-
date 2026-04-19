@@ -214,6 +214,23 @@ export var api = {
     evaluate: function(payload) { return _post(Q + '/outcomes/evaluate', payload || {}); },
   },
 
+  connectors: {
+    registry: function() { return _get('/api/v1/connectors/registry'); },
+    health: function(providers, live) {
+      var query = '?live=' + encodeURIComponent(live ? 'true' : 'false');
+      if (providers && providers.length) query += '&providers=' + encodeURIComponent(providers.join(','));
+      return _get('/api/v1/connectors/health' + query);
+    },
+    quota: function(providers) {
+      var query = '';
+      if (providers && providers.length) query = '?providers=' + encodeURIComponent(providers.join(','));
+      return _get('/api/v1/connectors/quota' + query);
+    },
+    test: function(payload) { return _post('/api/v1/connectors/test', payload || {}); },
+    liveScan: function(payload) { return _post('/api/v1/connectors/live-scan', payload || {}); },
+    runs: function(limit) { return _get('/api/v1/connectors/runs?limit=' + encodeURIComponent(limit || 20)); },
+  },
+
   reports: {
     generate: function(payload) { return _post('/admin/reports/generate', payload, { scope: 'admin' }); },
     latest: function(reportType, company) {

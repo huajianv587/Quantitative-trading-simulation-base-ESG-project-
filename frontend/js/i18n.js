@@ -2,7 +2,7 @@ const STORAGE_KEY = 'qt-lang';
 
 const STRINGS = {
   en: {
-    'app.logo_tag': 'ALPHA ENGINE · LIVE',
+    'app.logo_tag': 'ALPHA ENGINE | LIVE',
     'nav.platform': 'PLATFORM',
     'nav.quant': 'QUANT ENGINE',
     'nav.research': 'RESEARCH',
@@ -15,6 +15,10 @@ const STRINGS = {
     'page.intelligence': 'Decision Cockpit',
     'page.factor_lab': 'Factor Lab',
     'page.simulation': 'Simulation',
+    'page.connector_center': 'Connector Center',
+    'page.market_radar': 'Market Radar',
+    'page.agent_lab': 'Agent Lab',
+    'page.outcome_center': 'Outcome Center',
     'page.portfolio': 'Portfolio',
     'page.backtest': 'Backtest',
     'page.execution': 'Execution',
@@ -51,34 +55,10 @@ const STRINGS = {
     'auth.or': 'or',
     'auth.headline_login': 'ESG Alpha\nIntelligence',
     'auth.tagline_login': 'Bloomberg-grade quantitative research\npowered by ESG factor models and AI.',
-    'auth.sub_login': 'Sign In · Quant Terminal',
-    'auth.demo_title': 'DEMO ACCESS',
-    'auth.demo_text': 'Register any email to create an account instantly. No verification required.',
-    'auth.stat_sharpe': 'Sharpe Ratio',
-    'auth.stat_signals': 'Live Signals',
-    'auth.stat_universe': 'Universe',
     'auth.headline_register': 'Join the\nAlpha Network',
     'auth.tagline_register': 'Access professional ESG quantitative tools\ntrusted by analysts and portfolio managers.',
-    'auth.sub_register': 'Quant Terminal · ESG Alpha Platform',
-    'auth.terms': 'By creating an account you agree to the <a class="auth-link" href="#">Terms of Service</a>. No email verification required.',
-    'auth.stat_companies': 'Companies',
-    'auth.stat_esg': 'ESG Factors',
-    'auth.stat_market': 'Market Data',
-    'auth.showcase_sharpe_key': 'Avg Sharpe Ratio',
-    'auth.showcase_sharpe_sub': 'ESG Multi-Factor Strategy',
-    'auth.showcase_alpha_key': 'ESG Alpha Premium',
-    'auth.showcase_alpha_sub': 'vs Benchmark YTD',
-    'auth.benefit1': 'Professional K-line and ESG factor analysis',
-    'auth.benefit2': 'AI-powered research chat assistant',
-    'auth.benefit3': 'Real-time signals and backtesting engine',
-    'auth.pw_too_short': 'Too short',
-    'auth.pw_weak': 'Weak',
-    'auth.pw_fair': 'Fair',
-    'auth.pw_good': 'Good',
-    'auth.pw_strong': 'Strong',
-    'auth.pw_mismatch': 'Passwords do not match',
-    'auth.pw_min_len': 'Password must be at least 6 characters',
-    'common.loading': 'Loading…',
+    'auth.terms': 'By creating an account you agree to the Terms of Service.',
+    'common.loading': 'Loading...',
     'common.error': 'Error',
     'common.retry': 'Retry',
     'common.save': 'Save',
@@ -96,7 +76,7 @@ const STRINGS = {
     'common.submit': 'Submit',
     'common.online': 'Online',
     'common.offline': 'Offline',
-    'common.connecting': 'Connecting…',
+    'common.connecting': 'Connecting...',
     'common.backend_offline': 'Backend Offline',
     'common.backend_online': 'Backend Connected',
     'common.features_limited': 'Some features may be unavailable',
@@ -118,12 +98,16 @@ const STRINGS = {
     'page.intelligence': '智能决策',
     'page.factor_lab': '因子实验室',
     'page.simulation': '情景模拟',
+    'page.connector_center': '数据源中心',
+    'page.market_radar': '市场雷达',
+    'page.agent_lab': '智能体实验室',
+    'page.outcome_center': '结果追踪',
     'page.portfolio': '投资组合',
     'page.backtest': '回测',
     'page.execution': '执行',
     'page.validation': '策略验证',
     'page.models': '模型仓库',
-    'page.rl_lab': 'RL Lab',
+    'page.rl_lab': 'RL 实验室',
     'page.chat': '研究对话',
     'page.score': 'ESG 评分',
     'page.reports': '报告中心',
@@ -154,34 +138,10 @@ const STRINGS = {
     'auth.or': '或',
     'auth.headline_login': 'ESG Alpha\n智能平台',
     'auth.tagline_login': '彭博级量化研究\n由 ESG 因子模型与 AI 驱动。',
-    'auth.sub_login': '登录 · Quant Terminal',
-    'auth.demo_title': '演示通道',
-    'auth.demo_text': '注册任意邮箱即可即时创建账户，无需邮箱验证。',
-    'auth.stat_sharpe': '夏普比率',
-    'auth.stat_signals': '实时信号',
-    'auth.stat_universe': '股票池',
     'auth.headline_register': '加入\nAlpha 网络',
     'auth.tagline_register': '使用专业 ESG 量化工具\n服务分析师与基金经理。',
-    'auth.sub_register': 'Quant Terminal · ESG Alpha 平台',
-    'auth.terms': '创建账户即表示您同意 <a class="auth-link" href="#">服务条款</a>。无需邮箱验证。',
-    'auth.stat_companies': '覆盖企业',
-    'auth.stat_esg': 'ESG 因子',
-    'auth.stat_market': '市场数据',
-    'auth.showcase_sharpe_key': '平均夏普比率',
-    'auth.showcase_sharpe_sub': 'ESG 多因子策略',
-    'auth.showcase_alpha_key': 'ESG Alpha 超额',
-    'auth.showcase_alpha_sub': '相对基准年初至今',
-    'auth.benefit1': '专业 K 线与 ESG 因子分析',
-    'auth.benefit2': 'AI 驱动的研究助手',
-    'auth.benefit3': '实时信号与回测引擎',
-    'auth.pw_too_short': '太短',
-    'auth.pw_weak': '弱',
-    'auth.pw_fair': '一般',
-    'auth.pw_good': '良好',
-    'auth.pw_strong': '强',
-    'auth.pw_mismatch': '两次密码不一致',
-    'auth.pw_min_len': '密码至少需要 6 位字符',
-    'common.loading': '加载中…',
+    'auth.terms': '创建账户即表示您同意服务条款。',
+    'common.loading': '加载中...',
     'common.error': '错误',
     'common.retry': '重试',
     'common.save': '保存',
@@ -199,7 +159,7 @@ const STRINGS = {
     'common.submit': '提交',
     'common.online': '在线',
     'common.offline': '离线',
-    'common.connecting': '连接中…',
+    'common.connecting': '连接中...',
     'common.backend_offline': '后端离线',
     'common.backend_online': '后端已连接',
     'common.features_limited': '部分功能可能暂时不可用',
@@ -210,51 +170,38 @@ const STRINGS = {
 };
 
 const AUTO_TEXT_ZH = {
-  'Quant Terminal': 'Quant Terminal',
   'Dashboard': '控制台',
   'Research': '研究',
+  'Decision Cockpit': '智能决策',
+  'Factor Lab': '因子实验室',
+  'Simulation': '情景模拟',
+  'Connector Center': '数据源中心',
+  'Market Radar': '市场雷达',
+  'Agent Lab': '智能体实验室',
+  'Outcome Center': '结果追踪',
   'Portfolio': '投资组合',
   'Backtest': '回测',
   'Execution': '执行',
   'Validation': '策略验证',
   'Models': '模型仓库',
-  'RL Lab': 'RL Lab',
+  'RL Lab': 'RL 实验室',
   'Research Chat': '研究对话',
   'ESG Score': 'ESG 评分',
   'Reports': '报告中心',
   'Data Sync': '数据同步',
   'Push Rules': '推送规则',
   'Subscriptions': '订阅管理',
-  'Overview': '总览',
+  'Sign In': '登录',
+  'Create Account': '注册账户',
   'Online': '在线',
   'Offline': '离线',
-  'Loading…': '加载中…',
-  'Connecting…': '连接中…',
+  'Backend Connected': '后端已连接',
+  'Backend Offline': '后端离线',
+  'Loading...': '加载中...',
+  'Connecting...': '连接中...',
   'Error': '错误',
   'Retry': '重试',
-  'Save': '保存',
-  'Cancel': '取消',
-  'Confirm': '确认',
   'Refresh': '刷新',
-  'Search': '搜索',
-  'Filter': '筛选',
-  'Close': '关闭',
-  'Back': '返回',
-  'Next': '下一步',
-  'Submit': '提交',
-  'Run': '运行',
-  'Generate': '生成',
-  'Export': '导出',
-  'Sync': '同步',
-  'Sync triggered': '已触发同步',
-  'Sync complete': '同步完成',
-  'Data sources refreshed': '数据源已刷新',
-  'Log cleared.': '日志已清空。',
-  'Start Sync': '开始同步',
-  'Starting…': '启动中…',
-  'Portfolio Optimizer': '投资组合优化器',
-  'Clear Portfolio': '清空组合',
-  'Not built yet': '尚未生成',
   'No data available': '暂无数据',
   'Search best params': '搜索最佳参数',
   'Train Policy': '训练策略',
@@ -262,9 +209,9 @@ const AUTO_TEXT_ZH = {
 };
 
 const AUTO_PLACEHOLDER_ZH = {
-  'Search by symbol...': '按股票代码搜索…',
-  'AAPL, MSFT, NVDA...': 'AAPL、MSFT、NVDA…',
-  'AAPL, MSFT… (blank = use preset)': 'AAPL、MSFT…（留空则使用预设）',
+  'Search by symbol...': '按股票代码搜索...',
+  'AAPL, MSFT, NVDA...': 'AAPL, MSFT, NVDA...',
+  'AAPL, MSFT... (blank = default)': 'AAPL, MSFT...（留空则使用默认）',
   'Enter your email': '请输入邮箱',
   'Enter your password': '请输入密码',
   'Your full name': '请输入姓名',
@@ -277,14 +224,10 @@ let _lang = typeof localStorage !== 'undefined' ? (localStorage.getItem(STORAGE_
 let _observer = null;
 let _applying = false;
 
-if (_lang !== 'zh' && _lang !== 'en') {
-  _lang = 'zh';
-}
+if (_lang !== 'zh' && _lang !== 'en') _lang = 'zh';
 
 function syncDocumentLang() {
-  if (typeof document !== 'undefined') {
-    document.documentElement.setAttribute('lang', _lang);
-  }
+  if (typeof document !== 'undefined') document.documentElement.setAttribute('lang', _lang);
 }
 
 syncDocumentLang();
@@ -304,9 +247,7 @@ export function isZh() {
 export function setLang(lang) {
   if (lang !== 'zh' && lang !== 'en') return;
   _lang = lang;
-  if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(STORAGE_KEY, lang);
-  }
+  if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, lang);
   syncDocumentLang();
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('lang-change', { detail: { lang } }));
@@ -329,9 +270,7 @@ function normalizeLooseText(value) {
 }
 
 function preserveOuterWhitespace(source, replacement) {
-  if (typeof source !== 'string' || typeof replacement !== 'string') {
-    return replacement;
-  }
+  if (typeof source !== 'string' || typeof replacement !== 'string') return replacement;
   const leading = source.match(/^\s*/)?.[0] || '';
   const trailing = source.match(/\s*$/)?.[0] || '';
   return `${leading}${replacement}${trailing}`;
@@ -386,9 +325,7 @@ function autoTranslate(root = document) {
     if (!shouldSkipTextNode(textNode)) {
       const current = textNode.textContent;
       const translated = translateLoose(current, 'text');
-      if (translated !== current) {
-        textNode.textContent = translated;
-      }
+      if (translated !== current) textNode.textContent = translated;
     }
     textNode = walker.nextNode();
   }

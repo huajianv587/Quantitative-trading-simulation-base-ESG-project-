@@ -11,7 +11,9 @@ import {
   readUniverse,
   renderError,
   renderFactorCards,
+  renderTokenPreview,
   setLoading,
+  splitTokens,
   statusBadge,
 } from './workbench-utils.js?v=8';
 
@@ -42,9 +44,9 @@ const COPY = {
     queryValue: 'Find ESG, event, novelty, and risk factors with evidence-linked lineage.',
     minIc: 'Min |IC|',
     discover: 'Discover Factors',
-    cards: 'Factor Cards',
-    table: 'IC / RankIC Gate Table',
-    lineage: 'Lineage + Promotion Policy',
+    cards: 'Top Factor Cards',
+    table: 'IC / RankIC Gate Browser',
+    lineage: 'Promotion Policy + Lineage',
     loading: 'Discovering factors...',
     registryLoading: 'Loading factor registry...',
     all: 'All',
@@ -67,13 +69,13 @@ const COPY = {
     review: 'review',
     prev: 'Prev',
     next: 'Next',
-    page: 'Page',
     showing: 'Showing',
     rows: 'rows',
-    topCards: 'Top cards shown here. Use the gate table for the full paged view.',
+    topCards: 'Top cards stay compact here; the full gated matrix is paged below.',
     policy: 'Promotion Policy',
     lineageSteps: 'Lineage Steps',
     failureModes: 'Failure Modes',
+    gateCounts: 'Gate Counts',
     noFailures: 'No blocking failure modes in the current filter.',
     noLineage: 'Lineage will appear after discovery or registry refresh.',
   },
@@ -90,16 +92,16 @@ const COPY = {
     queryValue: '从 ESG、事件、新颖度和风险证据链中发现可回测因子。',
     minIc: '最小 |IC|',
     discover: '发现因子',
-    cards: '因子卡',
-    table: 'IC / RankIC 门禁表',
-    lineage: '血缘与升格规则',
+    cards: '精选因子卡',
+    table: 'IC / RankIC 门禁浏览器',
+    lineage: '升格规则与血缘',
     loading: '正在发现因子...',
     registryLoading: '正在加载因子注册表...',
     all: '全部',
     promoted: '已升格',
     researchOnly: '仅研究',
     lowConfidence: '低置信',
-    rejected: '拒绝',
+    rejected: '已拒绝',
     summary: '因子运行摘要',
     checklist: '升格检查清单',
     total: '候选数',
@@ -115,14 +117,14 @@ const COPY = {
     review: '复核',
     prev: '上一页',
     next: '下一页',
-    page: '第',
     showing: '显示',
     rows: '条',
-    topCards: '这里展示精选因子卡，完整列表请使用下方分页门禁表。',
+    topCards: '上方只保留最强因子的摘要预览，完整矩阵在下方分页浏览。',
     policy: '升格规则',
     lineageSteps: '血缘步骤',
-    failureModes: '失败场景',
-    noFailures: '当前筛选下没有阻塞性失败场景。',
+    failureModes: '失败模式',
+    gateCounts: '门禁计数',
+    noFailures: '当前筛选下没有阻塞性失败模式。',
     noLineage: '运行发现或刷新注册表后会显示血缘。',
   },
 };
@@ -131,10 +133,12 @@ export async function render(container) {
   _container = container;
   container.innerHTML = buildShell();
   bindEvents(container);
+  renderConfigPreview();
   _langCleanup ||= onLangChange(() => {
     if (_container?.isConnected) {
       _container.innerHTML = buildShell();
       bindEvents(_container);
+      renderConfigPreview();
       renderResults(_container, _latest.cards, _latest.payload);
     }
   });
@@ -188,6 +192,20 @@ function buildShell() {
             <label class="form-label">${c('universe')}</label>
             <input class="form-input" id="factor-universe" value="AAPL, MSFT, NVDA, NEE">
           </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Data Mode</label>
+              <select class="form-input" id="factor-mode">
+                <option value="local">local / cached</option>
+                <option value="mixed">mixed free-tier live</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Evidence Run ID</label>
+              <input class="form-input" id="factor-evidence-run" placeholder="optional evidence bundle id">
+            </div>
+          </div>
+          <div id="factor-config-preview" class="config-token-strip"></div>
           <div class="form-group">
             <label class="form-label">${c('query')}</label>
             <textarea class="form-textarea" id="factor-query" rows="3">${c('queryValue')}</textarea>
@@ -204,22 +222,22 @@ function buildShell() {
         </div>
       </section>
 
-      <section class="card factor-card-panel-card">
-        <div class="card-header"><span class="card-title">${c('cards')}</span></div>
-        <div class="card-body" id="factor-card-panel"></div>
+      <section class="card factor-lineage-card">
+        <div class="card-header"><span class="card-title">${c('lineage')}</span></div>
+        <div class="card-body factor-lineage-card__body">
+          <div id="factor-lineage-panel"></div>
+          <section class="factor-card-panel-card factor-card-panel-card--inline">
+            <div class="workbench-section__title">${c('cards')}</div>
+            <div id="factor-card-panel"></div>
+          </section>
+        </div>
       </section>
     </div>
 
-    <div class="grid-2 workbench-main-grid factor-lab-main-grid">
-      <section class="card factor-gate-card">
-        <div class="card-header"><span class="card-title">${c('table')}</span></div>
-        <div class="card-body" id="factor-table-panel"></div>
-      </section>
-      <section class="card factor-lineage-card">
-        <div class="card-header"><span class="card-title">${c('lineage')}</span></div>
-        <div class="card-body" id="factor-lineage-panel"></div>
-      </section>
-    </div>
+    <section class="card factor-gate-card">
+      <div class="card-header"><span class="card-title">${c('table')}</span></div>
+      <div class="card-body" id="factor-table-panel"></div>
+    </section>
   </div>`;
 }
 
@@ -227,11 +245,15 @@ function bindEvents(container) {
   container.querySelector('#btn-factor-refresh')?.addEventListener('click', () => refreshRegistry(container, true));
   container.querySelector('#btn-factor-refresh-bottom')?.addEventListener('click', () => refreshRegistry(container, true));
   container.querySelector('#btn-factor-discover')?.addEventListener('click', () => runDiscover(container));
+  ['#factor-symbol', '#factor-universe', '#factor-mode', '#factor-evidence-run'].forEach((selector) => {
+    container.querySelector(selector)?.addEventListener('input', renderConfigPreview);
+    container.querySelector(selector)?.addEventListener('change', renderConfigPreview);
+  });
   container.querySelector('#factor-min-ic')?.addEventListener('input', () => {
     _view.page = 1;
     renderResults(container, _latest.cards, _latest.payload);
   });
-  container.querySelector('#factor-table-panel')?.addEventListener('click', event => {
+  container.querySelector('#factor-table-panel')?.addEventListener('click', (event) => {
     const statusButton = event.target.closest('[data-factor-status]');
     if (statusButton) {
       _view.status = statusButton.getAttribute('data-factor-status') || '';
@@ -254,28 +276,50 @@ function readConfig(container) {
     universe: readUniverse(container.querySelector('#factor-universe')?.value, symbol),
     query: container.querySelector('#factor-query')?.value || '',
     horizon_days: Number(container.querySelector('#factor-horizon')?.value) || 20,
+    mode: container.querySelector('#factor-mode')?.value || 'local',
+    evidence_run_id: container.querySelector('#factor-evidence-run')?.value || null,
   };
+}
+
+function renderConfigPreview() {
+  if (!_container) return;
+  const cfg = readConfig(_container);
+  const host = _container.querySelector('#factor-config-preview');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="config-token-strip__block">
+      <span class="config-token-strip__label">${c('universe')}</span>
+      ${renderTokenPreview(cfg.universe, { tone: 'accent', maxItems: 6 })}
+    </div>
+    <div class="config-token-strip__block">
+      <span class="config-token-strip__label">Mode</span>
+      ${renderTokenPreview([cfg.mode], { tone: 'neutral', maxItems: 1 })}
+    </div>
+    <div class="config-token-strip__block">
+      <span class="config-token-strip__label">Evidence Run</span>
+      ${renderTokenPreview(cfg.evidence_run_id ? [cfg.evidence_run_id] : [], { tone: 'neutral', maxItems: 1, emptyLabel: getLang() === 'zh' ? '自动选择' : 'auto' })}
+    </div>
+  `;
 }
 
 function normalizeStatus(status) {
   return String(status || 'research_only').trim().toLowerCase().replace(/[\s-]+/g, '_');
 }
 
-function filteredCards(container, cards) {
+function filteredByMinIc(container, cards) {
   const minIc = Math.abs(Number(container.querySelector('#factor-min-ic')?.value || 0));
-  return (cards || []).filter(card => {
-    const status = normalizeStatus(card.status);
-    if (_view.status && status !== _view.status) return false;
-    if (Number.isFinite(minIc) && Math.abs(Number(card.ic || 0)) < minIc) return false;
-    return true;
-  });
+  return (cards || []).filter((card) => !Number.isFinite(minIc) || Math.abs(Number(card.ic || 0)) >= minIc);
+}
+
+function filteredCards(container, cards) {
+  return filteredByMinIc(container, cards).filter((card) => !_view.status || normalizeStatus(card.status) === _view.status);
 }
 
 async function refreshRegistry(container, showToast) {
   setLoading(container.querySelector('#factor-card-panel'), c('registryLoading'));
   try {
     const data = await api.factors.registry(50);
-    _latest = { cards: data.factors || [], payload: data };
+    _latest = { cards: data.factors || data.factor_cards || [], payload: data };
     _view.page = 1;
     renderResults(container, _latest.cards, _latest.payload);
     if (showToast) toast.success(c('refresh'), `${_latest.cards.length} cards`);
@@ -292,6 +336,9 @@ async function runDiscover(container) {
       universe: cfg.universe,
       query: cfg.query,
       horizon_days: cfg.horizon_days,
+      mode: cfg.mode,
+      evidence_run_id: cfg.evidence_run_id,
+      quota_guard: true,
     });
     _latest = { cards: payload.factor_cards || [], payload };
     _view.page = 1;
@@ -305,6 +352,7 @@ async function runDiscover(container) {
 
 function renderResults(container, cards, payload) {
   const allCards = cards || [];
+  const statusBase = filteredByMinIc(container, allCards);
   const visible = filteredCards(container, allCards);
   const pageCount = Math.max(1, Math.ceil(visible.length / _view.pageSize));
   _view.page = Math.min(Math.max(1, _view.page), pageCount);
@@ -313,29 +361,29 @@ function renderResults(container, cards, payload) {
   container.querySelector('#factor-card-panel').innerHTML = `
     <div class="workbench-metric-grid factor-card-metrics">
       ${metric(getLang() === 'zh' ? '因子数' : 'Factors', num(visible.length, 0))}
-      ${metric(c('promoted'), num(visible.filter(card => normalizeStatus(card.status) === 'promoted').length, 0), 'positive')}
-      ${metric('Avg IC', num(avg(visible.map(card => Math.abs(Number(card.ic || 0))))))}
-      ${metric(getLang() === 'zh' ? '低置信' : 'Low Conf', num(visible.filter(card => normalizeStatus(card.status) === 'low_confidence').length, 0))}
+      ${metric(c('promoted'), num(visible.filter((card) => normalizeStatus(card.status) === 'promoted').length, 0), 'positive')}
+      ${metric('Avg IC', num(avg(visible.map((card) => Math.abs(Number(card.ic || 0))))) )}
+      ${metric(getLang() === 'zh' ? '低置信' : 'Low Conf', num(visible.filter((card) => normalizeStatus(card.status) === 'low_confidence').length, 0))}
     </div>
     <p class="workbench-report-text factor-card-hint">${c('topCards')}</p>
-    ${renderFactorCards(visible, { maxItems: 6 })}
+    ${renderFactorCards(visible, { maxItems: 4, compact: true })}
   `;
   renderRunSummary(container, allCards, visible, payload);
-  renderTable(container, visible, pageItems, pageCount);
-  renderLineage(container, payload, visible);
+  renderLineage(container, payload, statusBase);
+  renderTable(container, statusBase, visible, pageItems, pageCount);
 }
 
 function renderRunSummary(container, cards, visible, payload) {
   const counts = statusCounts(cards);
   const cfg = readConfig(container);
-  const avgAbsIc = avg(visible.map(card => Math.abs(Number(card.ic || 0))));
-  const sampleAvg = avg(visible.map(card => Number(card.sample_count || 0)));
+  const avgAbsIc = avg(visible.map((card) => Math.abs(Number(card.ic || 0))));
+  const sampleAvg = avg(visible.map((card) => Number(card.sample_count || 0)));
   const lastRun = payload?.run_id || payload?.registry_id || payload?.generated_at || 'registry';
   const checks = [
     { label: c('asofSafe'), value: c('pass') },
     { label: c('sampleSize'), value: sampleAvg >= 3 ? c('pass') : c('review') },
     { label: c('icGate'), value: avgAbsIc > 0 ? c('pass') : c('review') },
-    { label: c('costGate'), value: visible.some(card => String(card.transaction_cost_sensitivity || '').includes('high')) ? c('review') : c('pass') },
+    { label: c('costGate'), value: visible.some((card) => String(card.transaction_cost_sensitivity || '').includes('high')) ? c('review') : c('pass') },
     { label: c('corrGate'), value: c('review') },
   ];
   container.querySelector('#factor-run-summary').innerHTML = `
@@ -350,13 +398,13 @@ function renderRunSummary(container, cards, visible, payload) {
       <div class="factor-summary-meta">
         <span>${esc(cfg.universe.join(', '))}</span>
         <span>${esc(cfg.horizon_days)}d</span>
-        <span title="${esc(lastRun)}">${esc(String(lastRun).slice(0, 32))}</span>
+        <span title="${esc(lastRun)}">${esc(String(lastRun).slice(0, 36))}</span>
       </div>
     </div>
     <div class="factor-summary-block">
       <div class="workbench-section__title">${c('checklist')}</div>
       <div class="factor-checklist">
-        ${checks.map(item => `
+        ${checks.map((item) => `
           <div class="factor-check-row">
             <span>${esc(item.label)}</span>
             <strong class="${item.value === c('pass') ? 'is-pass' : 'is-review'}">${esc(item.value)}</strong>
@@ -366,14 +414,14 @@ function renderRunSummary(container, cards, visible, payload) {
     </div>`;
 }
 
-function renderTable(container, cards, pageItems, pageCount) {
+function renderTable(container, statusBase, cards, pageItems, pageCount) {
   const statusTabs = `
     <div class="factor-status-tabs" role="tablist" aria-label="Factor status filter">
-      ${STATUS_FILTERS.map(filter => {
+      ${STATUS_FILTERS.map((filter) => {
         const active = _view.status === filter.value ? ' active' : '';
         const count = filter.value
-          ? cards.filter(card => normalizeStatus(card.status) === filter.value).length
-          : cards.length;
+          ? statusBase.filter((card) => normalizeStatus(card.status) === filter.value).length
+          : statusBase.length;
         return `<button class="factor-status-tab${active}" data-factor-status="${esc(filter.value)}" type="button">
           <span>${esc(c(filter.key))}</span><strong>${num(count, 0)}</strong>
         </button>`;
@@ -385,7 +433,7 @@ function renderTable(container, cards, pageItems, pageCount) {
     return;
   }
 
-  const rows = pageItems.map(card => {
+  const rows = pageItems.map((card) => {
     const status = normalizeStatus(card.status);
     return `
       <article class="factor-gate-row" data-factor-row>
@@ -414,17 +462,14 @@ function renderTable(container, cards, pageItems, pageCount) {
   const end = Math.min(cards.length, _view.page * _view.pageSize);
   container.querySelector('#factor-table-panel').innerHTML = `
     ${statusTabs}
-    <div class="factor-gate-table" data-page-size="${_view.pageSize}">
-      <div class="factor-gate-head" aria-hidden="true">
-        <span>Factor</span><span>Family</span><span>Status</span><span>IC</span><span>RankIC</span><span>Stability</span><span>Cost</span>
-      </div>
+    <div class="factor-gate-table factor-gate-table--browser" data-page-size="${_view.pageSize}">
       ${rows}
     </div>
     <div class="factor-pagination">
       <span>${c('showing')} ${start}-${end} / ${cards.length} ${c('rows')}</span>
       <div class="factor-pagination__buttons">
         <button class="factor-page-btn factor-page-prev" type="button" data-factor-page="${_view.page - 1}" ${_view.page <= 1 ? 'disabled' : ''}>${c('prev')}</button>
-        ${Array.from({ length: pageCount }, (_, index) => index + 1).map(page => `
+        ${Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => `
           <button class="factor-page-btn factor-page-number${page === _view.page ? ' active' : ''}" type="button" data-factor-page="${page}">${page}</button>
         `).join('')}
         <button class="factor-page-btn factor-page-next" type="button" data-factor-page="${_view.page + 1}" ${_view.page >= pageCount ? 'disabled' : ''}>${c('next')}</button>
@@ -443,8 +488,15 @@ function renderLineage(container, payload, cards) {
         'cost sensitivity review',
         'registry promotion decision',
       ];
-  const failures = Array.from(new Set(cards.flatMap(card => card.failure_modes || []))).slice(0, 6);
+  const failures = Array.from(new Set(cards.flatMap((card) => card.failure_modes || []))).slice(0, 4);
+  const counts = statusCounts(cards);
   container.querySelector('#factor-lineage-panel').innerHTML = `
+    <div class="workbench-metric-grid factor-lineage-metrics">
+      ${metric(c('promoted'), num(counts.promoted || 0, 0), 'positive')}
+      ${metric(c('researchOnly'), num(counts.research_only || 0, 0))}
+      ${metric(c('lowConfidence'), num(counts.low_confidence || 0, 0))}
+      ${metric(c('rejected'), num(counts.rejected || 0, 0), 'risk')}
+    </div>
     <div class="factor-lineage-stack">
       <section class="workbench-section">
         <div class="workbench-section__title">${c('policy')}</div>
@@ -464,7 +516,7 @@ function renderLineage(container, payload, cards) {
       <section class="workbench-section">
         <div class="workbench-section__title">${c('failureModes')}</div>
         <div class="workbench-list factor-failure-list">
-          ${failures.length ? failures.map(item => `<div class="workbench-kv-row"><span>${esc(item)}</span></div>`).join('') : emptyState(c('noFailures'))}
+          ${failures.length ? failures.map((item) => `<div class="workbench-kv-row"><span>${esc(item)}</span></div>`).join('') : emptyState(c('noFailures'))}
         </div>
       </section>
     </div>`;
@@ -479,6 +531,6 @@ function statusCounts(cards) {
 }
 
 function avg(values) {
-  const clean = values.filter(value => Number.isFinite(value));
+  const clean = values.filter((value) => Number.isFinite(value));
   return clean.length ? clean.reduce((sum, value) => sum + value, 0) / clean.length : 0;
 }

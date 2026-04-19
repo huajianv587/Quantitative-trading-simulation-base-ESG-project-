@@ -184,6 +184,10 @@ class BacktestResult(BaseModel):
     timeline: list[BacktestPoint] = Field(default_factory=list)
     risk_alerts: list[RiskAlert] = Field(default_factory=list)
     experiment_tags: list[str] = Field(default_factory=list)
+    data_source: str = "synthetic fallback"
+    data_source_chain: list[str] = Field(default_factory=list)
+    used_synthetic_fallback: bool = True
+    market_data_warnings: list[str] = Field(default_factory=list)
 
 
 class ExecutionOrder(BaseModel):

@@ -787,6 +787,25 @@ class QuantSystemService:
         running_pytest = any(name == "pytest" or name.startswith("_pytest") for name in sys.modules)
         return not (running_pytest and isinstance(self.market_data, MarketDataGateway))
 
+    @staticmethod
+    def _normalize_market_data_provider_chain(configured: str | None = None) -> list[str]:
+        raw = configured or "twelvedata,alpaca,yfinance,cache"
+        aliases = {
+            "twelve_data": "twelvedata",
+            "twelve-data": "twelvedata",
+            "twelve": "twelvedata",
+            "alpaca_market": "alpaca",
+            "alpaca_iex": "alpaca",
+            "synthetic": "synthetic",
+        }
+        allowed = {"twelvedata", "alpaca", "yfinance", "cache", "synthetic"}
+        values: list[str] = []
+        for item in str(raw).split(","):
+            provider = aliases.get(item.strip().lower(), item.strip().lower())
+            if provider in allowed and provider not in values:
+                values.append(provider)
+        return values or ["twelvedata", "alpaca", "yfinance", "cache"]
+
     def build_dashboard_overview(self) -> dict[str, Any]:
         overview = self.build_platform_overview()
         top_signal = overview["top_signals"][0]
@@ -1677,6 +1696,8 @@ class QuantSystemService:
         benchmark: str | None = None,
         capital_base: float | None = None,
         lookback_days: int = 126,
+        market_data_provider: str | None = None,
+        force_refresh: bool = False,
     ) -> dict[str, Any]:
         benchmark = benchmark or self.default_benchmark
         capital_base = capital_base or self.default_capital
@@ -1689,6 +1710,8 @@ class QuantSystemService:
             positions=portfolio.positions,
             lookback_days=lookback_days,
             persist=True,
+            market_data_provider=market_data_provider,
+            force_refresh=force_refresh,
         )
         artifact_payload = self.storage.load_record("backtests", result.backtest_id)
         self._persist_experiment(
@@ -5136,22 +5159,36 @@ class QuantSystemService:
         positions: list[PortfolioPosition],
         lookback_days: int,
         persist: bool,
+        market_data_provider: str | None = None,
+        force_refresh: bool = False,
     ) -> BacktestResult:
         market_result = None
+        provider_chain = self._normalize_market_data_provider_chain(market_data_provider)
+        warnings: list[str] = []
         if self._should_use_live_market_data():
+            original_order = getattr(self.market_data, "provider_order", None)
+            if provider_chain and hasattr(self.market_data, "provider_order"):
+                self.market_data.provider_order = [provider for provider in provider_chain if provider != "cache"]
             market_result = self._build_market_data_backtest(
                 strategy_name=strategy_name,
                 benchmark=benchmark,
                 capital_base=capital_base,
                 positions=positions,
                 lookback_days=lookback_days,
+                force_refresh=force_refresh,
             )
+            if original_order is not None and hasattr(self.market_data, "provider_order"):
+                self.market_data.provider_order = original_order
+            if market_result is None:
+                warnings.append("Live/cache market data was unavailable; synthetic fallback was used.")
         result = market_result or self._build_synthetic_backtest(
             strategy_name=strategy_name,
             benchmark=benchmark,
             capital_base=capital_base,
             positions=positions,
             lookback_days=lookback_days,
+            provider_chain=provider_chain,
+            warnings=warnings,
         )
 
         if persist:
@@ -5169,22 +5206,36 @@ class QuantSystemService:
         capital_base: float,
         positions: list[PortfolioPosition],
         lookback_days: int,
+        force_refresh: bool = False,
     ) -> BacktestResult | None:
         if not positions:
             return None
 
         try:
             close_frame = pd.DataFrame()
+            provider_labels: list[str] = []
             for position in positions:
-                bars = self.market_data.get_daily_bars(position.symbol, limit=max(lookback_days + 10, 120)).bars
+                bars_result = self.market_data.get_daily_bars(
+                    position.symbol,
+                    limit=max(lookback_days + 10, 120),
+                    force_refresh=force_refresh,
+                )
+                bars = bars_result.bars
                 if bars.empty:
                     return None
+                provider_labels.append(("cache:" if bars_result.cache_hit else "") + bars_result.provider)
                 series = bars.set_index("timestamp")["close"].rename(position.symbol)
                 close_frame = series.to_frame() if close_frame.empty else close_frame.join(series, how="outer")
 
-            benchmark_bars = self.market_data.get_daily_bars(benchmark, limit=max(lookback_days + 10, 120)).bars
+            benchmark_result = self.market_data.get_daily_bars(
+                benchmark,
+                limit=max(lookback_days + 10, 120),
+                force_refresh=force_refresh,
+            )
+            benchmark_bars = benchmark_result.bars
             if benchmark_bars.empty:
                 return None
+            provider_labels.append(("cache:" if benchmark_result.cache_hit else "") + benchmark_result.provider)
             benchmark_close = benchmark_bars.set_index("timestamp")["close"].rename(benchmark)
             close_frame = close_frame.join(benchmark_close, how="outer").sort_index().ffill().dropna()
             if len(close_frame) < max(20, lookback_days // 2):
@@ -5249,6 +5300,9 @@ class QuantSystemService:
                 information_ratio=round(information_ratio, 4),
             )
             alerts = self._build_risk_alerts(metrics)
+            unique_sources = list(dict.fromkeys(provider_labels))
+            live_sources = [source for source in unique_sources if not source.startswith("cache:")]
+            data_source = ", ".join(live_sources or ["cache"])
             return BacktestResult(
                 backtest_id=f"backtest-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
                 strategy_name=strategy_name,
@@ -5260,6 +5314,10 @@ class QuantSystemService:
                 timeline=timeline,
                 risk_alerts=alerts,
                 experiment_tags=["market-data", "walk-forward", "esg", "paper-first"],
+                data_source=data_source,
+                data_source_chain=unique_sources,
+                used_synthetic_fallback=False,
+                market_data_warnings=[],
             )
         except Exception as exc:
             logger.warning(f"Market-data backtest fallback engaged: {exc}")
@@ -5273,6 +5331,8 @@ class QuantSystemService:
         capital_base: float,
         positions: list[PortfolioPosition],
         lookback_days: int,
+        provider_chain: list[str] | None = None,
+        warnings: list[str] | None = None,
     ) -> BacktestResult:
         start = date.today() - timedelta(days=lookback_days)
         nav = 1.0
@@ -5350,6 +5410,10 @@ class QuantSystemService:
             timeline=timeline,
             risk_alerts=self._build_risk_alerts(metrics),
             experiment_tags=["walk-forward", "esg", "multi-factor", "paper-first"],
+            data_source="synthetic fallback",
+            data_source_chain=list(provider_chain or []) + ["synthetic"],
+            used_synthetic_fallback=True,
+            market_data_warnings=warnings or ["Synthetic fallback was used because live/cache market data was unavailable."],
         )
 
     def _build_risk_alerts(self, metrics: BacktestMetrics) -> list[RiskAlert]:

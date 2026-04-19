@@ -3,18 +3,20 @@ import { toast } from '../components/toast.js?v=8';
 import { router } from '../router.js?v=8';
 import { getLang, onLangChange } from '../i18n.js?v=8';
 import {
-  emptyState,
   esc,
   metric,
-  pct,
   num,
+  pct,
   readSymbol,
   readUniverse,
   renderError,
   renderEvidenceItems,
   renderFactorCards,
   renderSimulationResult,
+  renderTokenPreview,
   setLoading,
+  splitTokens,
+  statusBadge,
 } from './workbench-utils.js?v=8';
 
 let _container = null;
@@ -48,10 +50,6 @@ const COPY = {
     counter: 'Counter Evidence',
     audit: 'Audit Trail',
     workbenches: 'Connected Workbenches',
-    factorTitle: 'Factor Lab',
-    factorDesc: 'Discover candidates, gate IC/RankIC, and review FactorCards.',
-    simTitle: 'Simulation',
-    simDesc: 'Replay shocks, Monte Carlo paths, and historical analogs.',
     loadAudit: 'Load Audit',
     scanning: 'Scanning evidence...',
     explaining: 'Building decision report...',
@@ -63,7 +61,7 @@ const COPY = {
   },
   zh: {
     title: '智能决策驾驶舱',
-    subtitle: '证据链、反方检查、风险触发与影子模式决策',
+    subtitle: '证据链、反方检验、风险触发与影子模式决策',
     refresh: '刷新',
     setupTitle: '影子决策设置',
     setupSub: '仅用于研究支持，实盘执行仍由执行层门控。',
@@ -83,10 +81,6 @@ const COPY = {
     counter: '反方证据',
     audit: '审计追踪',
     workbenches: '关联工作台',
-    factorTitle: '因子实验室',
-    factorDesc: '发现候选因子，检查 IC/RankIC，并复核因子卡。',
-    simTitle: '情景模拟',
-    simDesc: '回放冲击、Monte Carlo 路径和历史相似事件。',
     loadAudit: '加载审计',
     scanning: '正在扫描证据...',
     explaining: '正在生成决策报告...',
@@ -102,10 +96,12 @@ export async function render(container) {
   _container = container;
   container.innerHTML = buildShell();
   bindEvents(container);
+  renderConfigPreview();
   _langCleanup ||= onLangChange(() => {
     if (_container?.isConnected) {
       _container.innerHTML = buildShell();
       bindEvents(_container);
+      renderConfigPreview();
       renderCached(_container);
     }
   });
@@ -141,84 +137,89 @@ function buildShell() {
       </div>
     </div>
 
-    <div class="grid-2 workbench-top-grid">
-      <section class="run-panel">
-        <div class="run-panel__header">
-          <div class="run-panel__title">${c('setupTitle')}</div>
-          <div class="run-panel__sub">${c('setupSub')}</div>
-        </div>
-        <div class="run-panel__body">
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">${c('symbol')}</label>
-              <input class="form-input" id="intel-symbol" value="AAPL" autocomplete="off">
+    <div class="decision-layout">
+      <div class="decision-stack decision-stack--left">
+        <section class="run-panel">
+          <div class="run-panel__header">
+            <div class="run-panel__title">${c('setupTitle')}</div>
+            <div class="run-panel__sub">${c('setupSub')}</div>
+          </div>
+          <div class="run-panel__body">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">${c('symbol')}</label>
+                <input class="form-input" id="intel-symbol" value="AAPL" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label class="form-label">${c('horizon')}</label>
+                <input class="form-input" id="intel-horizon" type="number" value="20" min="1" max="252">
+              </div>
             </div>
             <div class="form-group">
-              <label class="form-label">${c('horizon')}</label>
-              <input class="form-input" id="intel-horizon" type="number" value="20" min="1" max="252">
+              <label class="form-label">${c('universe')}</label>
+              <input class="form-input" id="intel-universe" value="AAPL, MSFT, NVDA, NEE">
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Data Mode</label>
+                <select class="form-input" id="intel-mode">
+                  <option value="local">local / frozen-safe</option>
+                  <option value="mixed">mixed free-tier live</option>
+                  <option value="live">live connectors only</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Free Providers</label>
+                <input class="form-input" id="intel-providers" value="local_esg, marketaux, twelvedata">
+              </div>
+            </div>
+            <div id="intel-config-preview" class="config-token-strip"></div>
+            <div class="form-group">
+              <label class="form-label">${c('query')}</label>
+              <textarea class="form-textarea" id="intel-query" rows="3">${c('queryValue')}</textarea>
             </div>
           </div>
-          <div class="form-group">
-            <label class="form-label">${c('universe')}</label>
-            <input class="form-input" id="intel-universe" value="AAPL, MSFT, NVDA, NEE">
+          <div class="run-panel__foot workbench-action-grid intelligence-action-grid">
+            <button class="btn btn-primary workbench-action-btn intelligence-action-btn" id="btn-intel-scan">${c('scan')}</button>
+            <button class="btn btn-primary workbench-action-btn intelligence-action-btn" id="btn-decision-explain">${c('explain')}</button>
+            <button class="btn btn-ghost workbench-action-btn intelligence-action-btn" id="btn-open-factor-lab">${c('openFactor')}</button>
+            <button class="btn btn-ghost workbench-action-btn intelligence-action-btn" id="btn-open-simulation">${c('openSimulation')}</button>
           </div>
-          <div class="form-group">
-            <label class="form-label">${c('query')}</label>
-            <textarea class="form-textarea" id="intel-query" rows="3">${c('queryValue')}</textarea>
+        </section>
+
+        <section class="card">
+          <div class="card-header"><span class="card-title">${c('evidence')}</span></div>
+          <div class="card-body" id="evidence-panel"></div>
+        </section>
+      </div>
+
+      <div class="decision-stack decision-stack--right">
+        <section class="card">
+          <div class="card-header">
+            <span class="card-title">${c('decisionSummary')}</span>
+            <span class="text-xs text-muted font-mono" id="decision-status">${c('ready')}</span>
           </div>
-        </div>
-        <div class="run-panel__foot workbench-action-grid intelligence-action-grid">
-          <button class="btn btn-primary workbench-action-btn intelligence-action-btn" id="btn-intel-scan">${c('scan')}</button>
-          <button class="btn btn-primary workbench-action-btn intelligence-action-btn" id="btn-decision-explain">${c('explain')}</button>
-          <button class="btn btn-ghost workbench-action-btn intelligence-action-btn" id="btn-open-factor-lab">${c('openFactor')}</button>
-          <button class="btn btn-ghost workbench-action-btn intelligence-action-btn" id="btn-open-simulation">${c('openSimulation')}</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="card-header">
-          <span class="card-title">${c('decisionSummary')}</span>
-          <span class="text-xs text-muted font-mono" id="decision-status">${c('ready')}</span>
-        </div>
-        <div class="card-body" id="decision-summary">${renderDecisionReadyState()}</div>
-      </section>
-    </div>
-
-    <div class="grid-2 workbench-main-grid">
-      <section class="card">
-        <div class="card-header"><span class="card-title">${c('evidence')}</span></div>
-        <div class="card-body" id="evidence-panel"></div>
-      </section>
-      <section class="card">
-        <div class="card-header"><span class="card-title">${c('counter')}</span></div>
-        <div class="card-body" id="counter-panel">${renderCounterReadyState()}</div>
-      </section>
-    </div>
-
-    <div class="grid-2 workbench-main-grid">
-      <section class="card">
-        <div class="card-header">
-          <span class="card-title">${c('audit')}</span>
-          <button class="btn btn-ghost btn-sm" id="btn-load-audit">${c('loadAudit')}</button>
-        </div>
-        <div class="card-body" id="audit-panel">${renderAuditReadyState()}</div>
-      </section>
-      <section class="card">
-        <div class="card-header"><span class="card-title">${c('workbenches')}</span></div>
-        <div class="card-body">
-          <div class="workbench-link-grid">
-            <button class="workbench-link-card" id="link-factor-lab">
-              <strong>${c('factorTitle')}</strong>
-              <span>${c('factorDesc')}</span>
-            </button>
-            <button class="workbench-link-card" id="link-simulation">
-              <strong>${c('simTitle')}</strong>
-              <span>${c('simDesc')}</span>
-            </button>
+          <div class="card-body" id="decision-summary">${renderDecisionReadyState()}</div>
+        </section>
+        <section class="card">
+          <div class="card-header"><span class="card-title">${c('counter')}</span></div>
+          <div class="card-body" id="counter-panel">${renderCounterReadyState()}</div>
+        </section>
+        <section class="card">
+          <div class="card-header">
+            <span class="card-title">${c('audit')}</span>
+            <button class="btn btn-ghost btn-sm" id="btn-load-audit">${c('loadAudit')}</button>
           </div>
-          ${renderConnectedActions()}
-        </div>
-      </section>
+          <div class="card-body" id="audit-panel">${renderAuditReadyState()}</div>
+        </section>
+        <section class="card">
+          <div class="card-header"><span class="card-title">${c('workbenches')}</span></div>
+          <div class="card-body">
+            ${renderWorkbenchLinks()}
+            ${renderConnectedActions()}
+          </div>
+        </section>
+      </div>
     </div>
   </div>`;
 }
@@ -231,7 +232,13 @@ function bindEvents(container) {
   container.querySelector('#btn-open-simulation')?.addEventListener('click', () => router.navigate('/simulation'));
   container.querySelector('#link-factor-lab')?.addEventListener('click', () => router.navigate('/factor-lab'));
   container.querySelector('#link-simulation')?.addEventListener('click', () => router.navigate('/simulation'));
+  container.querySelector('#link-connector-center')?.addEventListener('click', () => router.navigate('/connector-center'));
+  container.querySelector('#link-market-radar')?.addEventListener('click', () => router.navigate('/market-radar'));
   container.querySelector('#btn-load-audit')?.addEventListener('click', () => loadAudit(container));
+  ['#intel-symbol', '#intel-universe', '#intel-mode', '#intel-providers'].forEach((selector) => {
+    container.querySelector(selector)?.addEventListener('input', renderConfigPreview);
+    container.querySelector(selector)?.addEventListener('change', renderConfigPreview);
+  });
 }
 
 function readConfig(container) {
@@ -242,7 +249,30 @@ function readConfig(container) {
     universe,
     query: container.querySelector('#intel-query')?.value || '',
     horizon_days: Number(container.querySelector('#intel-horizon')?.value) || 20,
+    mode: container.querySelector('#intel-mode')?.value || 'local',
+    providers: splitTokens(container.querySelector('#intel-providers')?.value || '', { delimiters: /[,|\s]+/ }),
   };
+}
+
+function renderConfigPreview() {
+  if (!_container) return;
+  const cfg = readConfig(_container);
+  const host = _container.querySelector('#intel-config-preview');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="config-token-strip__block">
+      <span class="config-token-strip__label">${t('Universe', '股票池')}</span>
+      ${renderTokenPreview(cfg.universe, { tone: 'accent', maxItems: 6 })}
+    </div>
+    <div class="config-token-strip__block">
+      <span class="config-token-strip__label">${t('Providers', '数据源')}</span>
+      ${renderTokenPreview(cfg.providers, { tone: 'neutral', maxItems: 6 })}
+    </div>
+    <div class="config-token-strip__block">
+      <span class="config-token-strip__label">${t('Mode', '模式')}</span>
+      ${renderTokenPreview([cfg.mode], { tone: 'neutral', maxItems: 1 })}
+    </div>
+  `;
 }
 
 async function refreshEvidence(container, showToast) {
@@ -264,7 +294,10 @@ async function runEvidence(container) {
     _latest.evidence = await api.intelligence.scan({
       universe: cfg.universe,
       query: cfg.query,
-      live_connectors: false,
+      live_connectors: cfg.mode !== 'local',
+      mode: cfg.mode,
+      providers: cfg.providers,
+      quota_guard: true,
       limit: 20,
     });
     renderEvidence(container, _latest.evidence.items || []);
@@ -285,6 +318,9 @@ async function runDecision(container) {
       query: cfg.query,
       horizon_days: cfg.horizon_days,
       include_simulation: true,
+      mode: cfg.mode,
+      providers: cfg.providers,
+      quota_guard: true,
     });
     renderDecision(container, _latest.decision);
     renderEvidence(container, _latest.decision.main_evidence || []);
@@ -301,7 +337,7 @@ async function loadAudit(container) {
   setLoading(container.querySelector('#audit-panel'), c('auditLoading'));
   try {
     _latest.audit = await api.decision.auditTrail(cfg.symbol, 20);
-    renderAudit(container, _latest.audit?.decisions || []);
+    renderAudit(container, _latest.audit?.decisions || _latest.audit?.records || []);
   } catch (err) {
     renderError(container.querySelector('#audit-panel'), err);
   }
@@ -311,50 +347,58 @@ function renderCached(container) {
   if (_latest.decision) renderDecision(container, _latest.decision);
   if (_latest.evidence) renderEvidence(container, _latest.evidence.items || []);
   if (_latest.decision) renderCounterEvidence(container, _latest.decision.counter_evidence || []);
-  if (_latest.audit) renderAudit(container, _latest.audit.decisions || []);
+  if (_latest.audit) renderAudit(container, _latest.audit.decisions || _latest.audit.records || []);
 }
 
 function renderDecision(container, report) {
   const status = container.querySelector('#decision-status');
   if (status) status.textContent = `${report.symbol || ''} / ${report.action || ''}`;
   const verifier = report.verifier_checks || {};
-  const triggers = (report.risk_triggers || []).map(item => `<li>${esc(item)}</li>`).join('');
-  const factors = renderFactorCards(report.factor_cards || [], { maxItems: 3 });
+  const triggers = (report.risk_triggers || []).map((item) => `<li>${esc(item)}</li>`).join('');
+  const factors = renderFactorCards(report.factor_cards || [], { maxItems: 3, compact: true });
   const simulation = report.simulation ? renderSimulationResult(report.simulation) : '';
+  const interval = report.confidence_interval || {};
+  const auditTrail = Array.isArray(report.audit_trail) ? report.audit_trail.slice(0, 4) : [];
   container.querySelector('#decision-summary').innerHTML = `
     <div class="workbench-metric-grid">
-      ${metric(getLang() === 'zh' ? '动作' : 'Action', String(report.action || '').toUpperCase())}
-      ${metric(getLang() === 'zh' ? '期望收益' : 'Expected', pct(report.expected_return), 'positive')}
-      ${metric(getLang() === 'zh' ? '置信度' : 'Confidence', num(report.confidence))}
-      ${metric(getLang() === 'zh' ? '最大仓位' : 'Weight Max', pct(report.position_weight_range?.max || 0))}
+      ${metric(t('Action', '动作'), String(report.action || '').toUpperCase())}
+      ${metric(t('Expected', '预期收益'), pct(report.expected_return), 'positive')}
+      ${metric(t('Confidence', '置信度'), num(report.confidence))}
+      ${metric(t('Weight Max', '最大仓位'), pct(report.position_weight_range?.max || 0))}
     </div>
-    <div class="workbench-report-text">
-      <div><strong>${getLang() === 'zh' ? '置信区间' : 'Interval'}:</strong>
-        ${pct(report.confidence_interval?.lower)} / ${pct(report.confidence_interval?.center)} / ${pct(report.confidence_interval?.upper)}
-      </div>
-      <div><strong>Verifier:</strong>
-        ${esc(verifier.verdict || 'review')} / leakage ${String(!!verifier.leakage_pass)}
-      </div>
-      <div class="workbench-section__title">${getLang() === 'zh' ? '风险触发条件' : 'Risk Triggers'}</div>
-      <ul>${triggers}</ul>
+    <div class="workbench-kv-list compact-kv-list">
+      <div class="workbench-kv-row"><span>${t('Confidence Interval', '置信区间')}</span><strong>${pct(interval.lower)} / ${pct(interval.center)} / ${pct(interval.upper)}</strong></div>
+      <div class="workbench-kv-row"><span>Verifier</span><strong>${esc(verifier.verdict || 'review')} / leakage ${String(!!verifier.leakage_pass)}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Execution Guard', '执行保护')}</span><strong>${esc(verifier.execution_guard || 'shadow_only_no_order_created')}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Evidence Quality', '证据质量')}</span><strong>${num(verifier.as_of_safe_ratio)}</strong></div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">${getLang() === 'zh' ? '因子贡献' : 'Factor Contribution'}</div>
+      <div class="workbench-section__title">${t('Risk Triggers', '风险触发条件')}</div>
+      <div class="workbench-report-text"><ul>${triggers}</ul></div>
+    </div>
+    <div class="workbench-section">
+      <div class="workbench-section__title">${t('Factor Contribution', '因子贡献')}</div>
       ${factors}
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">${getLang() === 'zh' ? '内嵌模拟摘要' : 'Embedded Simulation'}</div>
+      <div class="workbench-section__title">${t('Audit Snapshot', '审计快照')}</div>
+      <div class="preview-step-grid">
+        ${(auditTrail.length ? auditTrail : ['source linked evidence', 'as-of safe features', 'counter evidence checked', 'shadow log ready']).map((step) => `<div class="preview-step"><span>${esc(step)}</span><strong>ready</strong></div>`).join('')}
+      </div>
+    </div>
+    <div class="workbench-section">
+      <div class="workbench-section__title">${t('Embedded Simulation', '内嵌模拟摘要')}</div>
       ${simulation}
     </div>`;
 }
 
 function renderEvidence(container, items) {
-  container.querySelector('#evidence-panel').innerHTML = renderEvidenceItems(items, { maxItems: 10 });
+  container.querySelector('#evidence-panel').innerHTML = renderEvidenceItems(items, { maxItems: 8, scroll: true });
 }
 
 function renderCounterEvidence(container, items) {
   container.querySelector('#counter-panel').innerHTML = items?.length
-    ? renderEvidenceItems(items, { maxItems: 8 })
+    ? renderEvidenceItems(items, { maxItems: 6, scroll: true })
     : renderCounterReadyState();
 }
 
@@ -363,19 +407,19 @@ function renderAudit(container, decisions) {
     container.querySelector('#audit-panel').innerHTML = renderAuditReadyState();
     return;
   }
-  const rows = decisions.map(decision => `
-    <tr>
-      <td>${esc(decision.decision_id || '')}</td>
-      <td>${esc(decision.symbol || '')}</td>
-      <td>${esc((decision.action || '').toUpperCase())}</td>
-      <td class="cell-num">${pct(decision.expected_return)}</td>
-      <td class="cell-num">${num(decision.confidence)}</td>
-    </tr>`).join('');
+  const first = decisions[0] || {};
   container.querySelector('#audit-panel').innerHTML = `
-    <div class="tbl-wrap workbench-table-wrap"><table>
-      <thead><tr><th>ID</th><th>Symbol</th><th>Action</th><th>Exp Ret</th><th>Conf</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>`;
+    <div class="workbench-kv-list compact-kv-list">
+      ${decisions.slice(0, 5).map((decision) => `
+        <div class="workbench-kv-row">
+          <span>${esc(decision.decision_id || decision.status || 'audit')}</span>
+          <strong>${esc(decision.symbol || decision.model_version || '-')}</strong>
+        </div>
+      `).join('')}
+      <div class="workbench-kv-row"><span>${t('Latest status', '最新状态')}</span><strong>${esc(first.status || first.action || 'recorded')}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Feature time', '特征时点')}</span><strong>${esc(first.feature_time || first.decision_time || 'as-of safe')}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Model version', '模型版本')}</span><strong>${esc(first.model_version || 'shadow-stack')}</strong></div>
+    </div>`;
 }
 
 function renderDecisionReadyState() {
@@ -443,5 +487,15 @@ function renderConnectedActions() {
         <div class="factor-check-row"><span>${t('Replay the current thesis in Simulation', '在模拟工作台回放当前判断')}</span><strong>${t('what-if', '推演')}</strong></div>
         <div class="factor-check-row"><span>${t('Keep every recommendation in shadow log', '所有建议进入影子日志')}</span><strong class="is-pass">${t('on', '开启')}</strong></div>
       </div>
+    </div>`;
+}
+
+function renderWorkbenchLinks() {
+  return `
+    <div class="workbench-link-list">
+      <button class="workbench-link-row" id="link-factor-lab"><strong>Factor Lab</strong><span>Discover candidates, gate IC/RankIC, and review FactorCards.</span></button>
+      <button class="workbench-link-row" id="link-simulation"><strong>Simulation</strong><span>Replay shocks, Monte Carlo paths, and historical analogs.</span></button>
+      <button class="workbench-link-row" id="link-connector-center"><strong>Connector Center</strong><span>Free-tier source health, quota guard, and sample payloads.</span></button>
+      <button class="workbench-link-row" id="link-market-radar"><strong>Market Radar</strong><span>Live evidence stream with provider attribution.</span></button>
     </div>`;
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,12 @@ class MarketDataGateway:
         self.alpaca_key = getattr(settings, "ALPACA_API_KEY", "")
         self.alpaca_secret = getattr(settings, "ALPACA_API_SECRET", "")
         self.alpaca_feed = getattr(settings, "MARKET_DATA_ALPACA_FEED", "iex") or "iex"
+        self.twelvedata_key = (
+            os.getenv("TWELVEDATA_API_KEY", "")
+            or os.getenv("TWELVEDATA_API", "")
+            or os.getenv("TWELVE_DATA_API", "")
+            or os.getenv("Twelve_Data_API", "")
+        )
         self.history_days = int(getattr(settings, "MARKET_DATA_HISTORY_DAYS", 240) or 240)
         self.timeout = int(getattr(settings, "ALPACA_API_TIMEOUT", 20) or 20)
         self._init_cache()
@@ -42,6 +49,7 @@ class MarketDataGateway:
             "provider_order": list(self.provider_order),
             "cache_path": str(self.cache_path),
             "cache_ready": self.cache_path.exists(),
+            "twelvedata_ready": bool(self.twelvedata_key),
             "alpaca_market_data_ready": bool(self.alpaca_key and self.alpaca_secret),
             "alpaca_feed": self.alpaca_feed,
             "history_days": self.history_days,
@@ -72,7 +80,9 @@ class MarketDataGateway:
         errors: list[str] = []
         for provider in self.provider_order:
             try:
-                if provider == "alpaca":
+                if provider == "twelvedata":
+                    bars = self._fetch_twelvedata_daily_bars(normalized_symbol, limit=max(limit, self.history_days))
+                elif provider == "alpaca":
                     bars = self._fetch_alpaca_daily_bars(normalized_symbol, limit=max(limit, self.history_days))
                 elif provider == "yfinance":
                     bars = self._fetch_yfinance_daily_bars(normalized_symbol, limit=max(limit, self.history_days))
@@ -111,9 +121,9 @@ class MarketDataGateway:
         raise RuntimeError(f"Unable to load market data for {normalized_symbol}: {'; '.join(errors) or 'no provider available'}")
 
     def _provider_order(self) -> list[str]:
-        configured = str(getattr(settings, "MARKET_DATA_PROVIDER", "alpaca,yfinance") or "alpaca,yfinance")
+        configured = str(getattr(settings, "MARKET_DATA_PROVIDER", "twelvedata,alpaca,yfinance") or "twelvedata,alpaca,yfinance")
         values = [item.strip().lower() for item in configured.split(",") if item.strip()]
-        return values or ["alpaca", "yfinance"]
+        return values or ["twelvedata", "alpaca", "yfinance"]
 
     def _resolve_cache_path(self) -> Path:
         configured = str(getattr(settings, "MARKET_DATA_CACHE_DB", "") or "").strip()
@@ -272,6 +282,45 @@ class MarketDataGateway:
                     "vwap": item.get("vw"),
                 }
                 for item in collected
+            ]
+        )
+        return self._finalize_bars(frame).tail(limit)
+
+    def _fetch_twelvedata_daily_bars(self, symbol: str, limit: int) -> pd.DataFrame:
+        if not self.twelvedata_key:
+            raise RuntimeError("Twelve Data API key is not configured")
+
+        response = requests.get(
+            "https://api.twelvedata.com/time_series",
+            params={
+                "symbol": symbol,
+                "interval": "1day",
+                "outputsize": min(max(limit, 30), 5000),
+                "apikey": self.twelvedata_key,
+            },
+            timeout=self.timeout,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Twelve Data {response.status_code}: {response.text[:400]}")
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("status") == "error":
+            raise RuntimeError(f"Twelve Data error: {payload.get('message') or payload.get('code')}")
+        values = payload.get("values", []) if isinstance(payload, dict) else []
+        if not values:
+            raise RuntimeError(f"Twelve Data returned no daily bars for {symbol}")
+        frame = pd.DataFrame(
+            [
+                {
+                    "timestamp": item.get("datetime"),
+                    "open": item.get("open"),
+                    "high": item.get("high"),
+                    "low": item.get("low"),
+                    "close": item.get("close"),
+                    "volume": item.get("volume", 0),
+                    "trade_count": 0,
+                    "vwap": item.get("close"),
+                }
+                for item in values
             ]
         )
         return self._finalize_bars(frame).tail(limit)

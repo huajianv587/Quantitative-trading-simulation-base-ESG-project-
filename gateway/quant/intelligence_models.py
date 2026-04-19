@@ -119,6 +119,8 @@ class SimulationScenario(BaseModel):
     scenario_name: str = "base_case"
     event_assumption: str = ""
     regime: str = "neutral"
+    event_id: str | None = None
+    evidence_run_id: str | None = None
 
 
 class SimulationResult(BaseModel):

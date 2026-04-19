@@ -16,6 +16,22 @@ CLICK_TARGETS = {
     "frontend/js/pages/simulation.js": [
         "#btn-simulate-scenario",
     ],
+    "frontend/js/pages/connector-center.js": [
+        "#btn-connector-health",
+        "#btn-connector-test",
+        "#btn-connector-live-scan",
+    ],
+    "frontend/js/pages/market-radar.js": [
+        "#btn-market-radar-scan",
+        "#btn-market-radar-refresh",
+    ],
+    "frontend/js/pages/agent-lab.js": [
+        "#btn-agent-workflow",
+    ],
+    "frontend/js/pages/outcome-center.js": [
+        "#btn-outcome-refresh",
+        "#btn-outcome-record",
+    ],
     "frontend/js/pages/portfolio-lab.js": ["#optimize-portfolio-btn", "#generate-execution-btn"],
     "frontend/js/pages/backtests.js": ["#run-backtest-btn"],
     "frontend/js/pages/chat.js": ["#send-btn"],
@@ -36,7 +52,21 @@ def test_click_targets_are_present_in_page_sources():
 
 def test_router_declares_quant_routes():
     router_source = Path("frontend/js/router.js").read_text(encoding="utf-8")
-    for route in ["/overview", "/research", "/intelligence", "/factor-lab", "/simulation", "/portfolio", "/backtests", "/chat", "/score"]:
+    for route in [
+        "/overview",
+        "/research",
+        "/intelligence",
+        "/factor-lab",
+        "/simulation",
+        "/connector-center",
+        "/market-radar",
+        "/agent-lab",
+        "/outcome-center",
+        "/portfolio",
+        "/backtests",
+        "/chat",
+        "/score",
+    ]:
         assert route in router_source
 
 
@@ -51,6 +81,12 @@ def test_intelligence_api_client_declares_public_methods():
         "/decision/audit-trail",
         "/simulate/scenario",
         "/outcomes/evaluate",
+        "/api/v1/connectors/registry",
+        "/api/v1/connectors/health",
+        "/api/v1/connectors/test",
+        "/api/v1/connectors/live-scan",
+        "/api/v1/connectors/runs",
+        "/api/v1/connectors/quota",
     ]:
         assert route in api_source
 

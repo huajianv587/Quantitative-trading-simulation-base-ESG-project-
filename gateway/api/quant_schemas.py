@@ -43,6 +43,8 @@ class QuantBacktestRequest(BaseModel):
     benchmark: str = "SPY"
     capital_base: float = 1_000_000
     lookback_days: int = 126
+    market_data_provider: str | None = None
+    force_refresh: bool = False
 
 
 class QuantExecutionRequest(BaseModel):
@@ -94,6 +96,10 @@ class QuantIntelligenceScanRequest(BaseModel):
     decision_time: str | None = None
     live_connectors: bool = False
     limit: int = 20
+    mode: str = "local"
+    providers: list[str] = Field(default_factory=list)
+    quota_guard: bool = True
+    persist: bool = True
 
 
 class QuantFactorDiscoveryRequest(BaseModel):
@@ -101,6 +107,11 @@ class QuantFactorDiscoveryRequest(BaseModel):
     query: str = "Discover evidence-linked quant factors"
     horizon_days: int = 20
     decision_time: str | None = None
+    evidence_run_id: str | None = None
+    as_of_time: str | None = None
+    mode: str = "local"
+    providers: list[str] = Field(default_factory=list)
+    quota_guard: bool = True
 
 
 class QuantDecisionExplainRequest(BaseModel):
@@ -109,6 +120,10 @@ class QuantDecisionExplainRequest(BaseModel):
     query: str = "Explain the current multi-expert quant decision"
     horizon_days: int = 20
     include_simulation: bool = True
+    evidence_run_id: str | None = None
+    mode: str = "local"
+    providers: list[str] = Field(default_factory=list)
+    quota_guard: bool = True
 
 
 class QuantSimulationScenarioRequest(BaseModel):
@@ -123,6 +138,8 @@ class QuantSimulationScenarioRequest(BaseModel):
     scenario_name: str = "base_case"
     event_assumption: str = ""
     regime: str = "neutral"
+    event_id: str | None = None
+    evidence_run_id: str | None = None
 
 
 class QuantOutcomeEvaluateRequest(BaseModel):

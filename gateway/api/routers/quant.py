@@ -148,6 +148,8 @@ def run_backtest(req: QuantBacktestRequest):
         benchmark=req.benchmark,
         capital_base=req.capital_base,
         lookback_days=req.lookback_days,
+        market_data_provider=req.market_data_provider,
+        force_refresh=req.force_refresh,
     )
 
 
@@ -329,7 +331,11 @@ def scan_intelligence(req: QuantIntelligenceScanRequest):
         query=req.query,
         decision_time=req.decision_time,
         live_connectors=req.live_connectors,
+        mode=req.mode,
+        providers=req.providers or None,
+        quota_guard=req.quota_guard,
         limit=req.limit,
+        persist=req.persist,
     )
 
 
@@ -345,6 +351,11 @@ def discover_factors(req: QuantFactorDiscoveryRequest):
         query=req.query,
         horizon_days=req.horizon_days,
         decision_time=req.decision_time,
+        evidence_run_id=req.evidence_run_id,
+        as_of_time=req.as_of_time,
+        mode=req.mode,
+        providers=req.providers or None,
+        quota_guard=req.quota_guard,
     )
 
 
@@ -367,6 +378,8 @@ def simulate_scenario(req: QuantSimulationScenarioRequest):
         scenario_name=req.scenario_name,
         event_assumption=req.event_assumption,
         regime=req.regime,
+        event_id=req.event_id,
+        evidence_run_id=req.evidence_run_id,
     )
     return _intelligence_service().simulate_scenario(scenario)
 
@@ -380,6 +393,10 @@ def explain_decision(req: QuantDecisionExplainRequest):
             query=req.query,
             horizon_days=req.horizon_days,
             include_simulation=req.include_simulation,
+            evidence_run_id=req.evidence_run_id,
+            mode=req.mode,
+            providers=req.providers or None,
+            quota_guard=req.quota_guard,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

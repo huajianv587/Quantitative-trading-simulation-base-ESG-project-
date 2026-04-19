@@ -199,6 +199,16 @@ function buildShell() {
             <label class="form-label">${c('seed')}</label>
             <input class="form-input" id="sim-seed" type="number" value="42">
           </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Evidence Run ID</label>
+              <input class="form-input" id="sim-evidence-run" placeholder="optional evidence bundle id">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Event ID</label>
+              <input class="form-input" id="sim-event-id" placeholder="optional event id">
+            </div>
+          </div>
           <div class="form-group">
             <label class="form-label">${c('assumption')}</label>
             <textarea class="form-textarea" id="sim-assumption" rows="3">${c('assumptionValue')}</textarea>
@@ -260,6 +270,8 @@ function bindEvents(container) {
     '#sim-slippage',
     '#sim-paths',
     '#sim-seed',
+    '#sim-evidence-run',
+    '#sim-event-id',
     '#sim-assumption',
   ].forEach(selector => container.querySelector(selector)?.addEventListener('input', () => {
     if (!_latest) renderResult(container, null);
@@ -293,6 +305,8 @@ function readScenario(container) {
     scenario_name: container.querySelector('#sim-scenario')?.value || 'base_case',
     regime: container.querySelector('#sim-regime')?.value || 'neutral',
     event_assumption: container.querySelector('#sim-assumption')?.value || '',
+    evidence_run_id: container.querySelector('#sim-evidence-run')?.value || null,
+    event_id: container.querySelector('#sim-event-id')?.value || null,
   };
 }
 

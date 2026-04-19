@@ -278,6 +278,8 @@ function buildShell() {
           <button class="btn btn-primary btn-lg" id="btn-run-research" style="flex:1">
             ${text('run')}
           </button>
+          <button class="btn btn-ghost btn-lg" id="btn-open-market-radar">Market Radar</button>
+          <button class="btn btn-ghost btn-lg" id="btn-open-agent-lab">Agent Lab</button>
         </div>
       </div>
 
@@ -479,6 +481,12 @@ function bindEvents(container) {
     /* Run pipeline */
     if (e.target.closest('#btn-run-research')) {
       await runResearch(container);
+    }
+    if (e.target.closest('#btn-open-market-radar')) {
+      window.location.hash = '#/market-radar';
+    }
+    if (e.target.closest('#btn-open-agent-lab')) {
+      window.location.hash = '#/agent-lab';
     }
     /* Watchlist item select */
     const wlItem = e.target.closest('[data-wl]');

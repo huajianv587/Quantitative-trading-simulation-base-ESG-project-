@@ -9,6 +9,10 @@ const COPY = {
     source: 'Source',
     quality: 'Quality',
     safe: 'As-of safe',
+    noEvidence: 'No evidence',
+    noFactorCards: 'No factor cards',
+    noSimulation: 'No simulation result',
+    noSimulationHint: 'Choose a scenario and run Monte Carlo.',
   },
   zh: {
     loading: '加载中...',
@@ -18,8 +22,37 @@ const COPY = {
     source: '来源',
     quality: '质量',
     safe: '时点安全',
+    noEvidence: '暂无证据',
+    noFactorCards: '暂无因子卡',
+    noSimulation: '暂无模拟结果',
+    noSimulationHint: '选择场景后运行 Monte Carlo。',
   },
 };
+
+const POSITIVE_STATUSES = new Set([
+  'promoted',
+  'configured',
+  'pass',
+  'safe',
+  'ready',
+  'filled',
+  'shadow',
+  'queued',
+  'running',
+  'on',
+  'armed',
+  'protected',
+  'untouched',
+]);
+
+const NEGATIVE_STATUSES = new Set([
+  'rejected',
+  'failed',
+  'missing_key',
+  'error',
+  'risk',
+  'blocked',
+]);
 
 export function lang() {
   return getLang() === 'zh' ? 'zh' : 'en';
@@ -31,7 +64,7 @@ export function text(key) {
 }
 
 export function esc(value) {
-  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
     '&': '&amp;',
     '<': '&lt;',
     '>': '&gt;',
@@ -57,17 +90,14 @@ export function readSymbol(container, selector, fallback = 'AAPL') {
 }
 
 export function readUniverse(raw, symbol) {
-  const values = String(raw || symbol || '')
-    .split(/[,\s]+/)
-    .map(item => item.trim().toUpperCase())
-    .filter(Boolean);
+  const values = splitTokens(raw, { uppercase: true, delimiters: /[,\s]+/ });
   if (symbol && !values.includes(symbol)) values.unshift(symbol);
   return Array.from(new Set(values));
 }
 
 export function setLoading(el, message = text('loading')) {
   if (!el) return;
-  el.innerHTML = `<div class="empty-state"><div class="empty-state__title">${esc(message)}</div></div>`;
+  el.innerHTML = `<div class="empty-state empty-state--compact"><div class="empty-state__title">${esc(message)}</div></div>`;
 }
 
 export function renderError(el, err) {
@@ -102,10 +132,18 @@ export function badge(label, status = 'neutral') {
   return `<span class="badge badge-${safeStatus}">${esc(label)}</span>`;
 }
 
+function humanizeStatus(status) {
+  return String(status || 'neutral').replace(/_/g, ' ').trim();
+}
+
 export function statusBadge(status) {
-  const value = String(status || 'research_only');
-  const tone = value === 'promoted' ? 'filled' : value === 'rejected' ? 'failed' : 'neutral';
-  return badge(value.replace(/_/g, ' '), tone);
+  const normalized = String(status || 'research_only').trim().toLowerCase();
+  const tone = POSITIVE_STATUSES.has(normalized)
+    ? 'filled'
+    : NEGATIVE_STATUSES.has(normalized)
+      ? 'failed'
+      : 'neutral';
+  return badge(humanizeStatus(normalized), tone);
 }
 
 export function pathChip(value, empty = '-') {
@@ -113,65 +151,99 @@ export function pathChip(value, empty = '-') {
   return `<span class="path-chip" title="${esc(raw)}">${esc(raw)}</span>`;
 }
 
+export function splitTokens(raw, options = {}) {
+  const delimiters = options.delimiters || /[,|\s]+/;
+  const uppercase = !!options.uppercase;
+  return String(raw || '')
+    .split(delimiters)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => uppercase ? item.toUpperCase() : item);
+}
+
+export function renderTokenPreview(raw, options = {}) {
+  const tokens = Array.isArray(raw) ? raw : splitTokens(raw, options);
+  const maxItems = Number(options.maxItems || 8);
+  const tone = options.tone || 'neutral';
+  const emptyLabel = options.emptyLabel || (lang() === 'zh' ? '未设置' : 'Not set');
+  if (!tokens.length) {
+    return `<div class="token-preview token-preview--empty"><span class="token-chip token-chip--muted">${esc(emptyLabel)}</span></div>`;
+  }
+  const visible = tokens.slice(0, maxItems);
+  const overflow = tokens.length - visible.length;
+  return `<div class="token-preview">
+    ${visible.map((token) => `<span class="token-chip token-chip--${esc(tone)}">${esc(token)}</span>`).join('')}
+    ${overflow > 0 ? `<span class="token-chip token-chip--muted">+${overflow}</span>` : ''}
+  </div>`;
+}
+
 export function renderEvidenceItems(items, options = {}) {
   const current = lang();
   const maxItems = options.maxItems || 8;
-  const noData = current === 'zh' ? '暂无证据' : 'No evidence';
-  const hint = current === 'zh' ? '点击扫描证据来加载来源链。' : 'Scan evidence to load source-linked items.';
+  const noData = current === 'zh' ? text('noEvidence') : 'No evidence';
+  const hint = current === 'zh'
+    ? '点击扫描证据来加载带来源链的条目。'
+    : 'Scan evidence to load source-linked items.';
   if (!items?.length) return emptyState(noData, hint);
-  return `<div class="workbench-list">${items.slice(0, maxItems).map(item => `
-    <article class="workbench-item">
-      <div class="workbench-item__head">
-        <strong>${esc(item.title || item.item_id || '')}</strong>
-        ${badge(item.item_type || 'evidence', 'neutral')}
-      </div>
-      <p>${esc(item.summary || '')}</p>
-      <div class="workbench-item__meta">
-        <span>${esc(item.symbol || '')}</span>
-        <span>${esc(item.provider || '')}</span>
-        <span>q=${num(item.quality_score)}</span>
-        <span>${esc(item.leakage_guard || '')}</span>
-      </div>
-    </article>
-  `).join('')}</div>`;
+  return `<div class="workbench-list ${options.scroll ? 'workbench-scroll-list' : ''}">
+    ${items.slice(0, maxItems).map((item) => `
+      <article class="workbench-item">
+        <div class="workbench-item__head">
+          <strong>${esc(item.title || item.item_id || '')}</strong>
+          ${badge(item.item_type || 'evidence', 'neutral')}
+        </div>
+        <p>${esc(item.summary || '')}</p>
+        <div class="workbench-item__meta">
+          <span>${esc(item.symbol || '')}</span>
+          <span>${esc(item.provider || '')}</span>
+          <span>q=${num(item.quality_score ?? item.confidence)}</span>
+          <span>${esc(item.leakage_guard || text('safe'))}</span>
+        </div>
+      </article>
+    `).join('')}
+  </div>`;
 }
 
 export function renderFactorCards(cards, options = {}) {
   const current = lang();
   const maxItems = options.maxItems || 12;
-  const noData = current === 'zh' ? '暂无因子卡' : 'No factor cards';
-  const hint = current === 'zh' ? '运行因子发现后会生成 IC、RankIC 与门禁结果。' : 'Run discovery to generate IC, RankIC, and gate results.';
+  const noData = current === 'zh' ? text('noFactorCards') : 'No factor cards';
+  const hint = current === 'zh'
+    ? '运行因子发现后会生成 IC、RankIC 和门禁结果。'
+    : 'Run discovery to generate IC, RankIC, and gate results.';
   if (!cards?.length) return emptyState(noData, hint);
-  return `<div class="factor-card-grid">${cards.slice(0, maxItems).map(card => `
-    <article class="factor-card">
-      <div class="factor-card__head">
-        <div>
-          <strong>${esc(card.name || '')}</strong>
-          <span>${esc(card.family || '')}</span>
+  return `<div class="factor-card-grid ${options.compact ? 'factor-card-grid--compact' : ''}">
+    ${cards.slice(0, maxItems).map((card) => `
+      <article class="factor-card">
+        <div class="factor-card__head">
+          <div>
+            <strong>${esc(card.name || '')}</strong>
+            <span>${esc(card.family || '')}</span>
+          </div>
+          ${statusBadge(card.status)}
         </div>
-        ${statusBadge(card.status)}
-      </div>
-      <p>${esc(card.definition || card.description || '')}</p>
-      <div class="workbench-mini-grid">
-        ${miniMetric('IC', num(card.ic))}
-        ${miniMetric('RankIC', num(card.rank_ic))}
-        ${miniMetric(current === 'zh' ? '稳定性' : 'Stability', num(card.stability_score))}
-        ${miniMetric(current === 'zh' ? '样本' : 'Samples', num(card.sample_count, 0))}
-      </div>
-      <div class="factor-card__foot">
-        <span>${esc(card.transaction_cost_sensitivity || 'cost')}</span>
-        <span>${esc((card.failure_modes || [])[0] || (current === 'zh' ? '门禁通过或待复核' : 'Gate passed or pending review'))}</span>
-      </div>
-    </article>
-  `).join('')}</div>`;
+        <p>${esc(card.definition || card.description || '')}</p>
+        <div class="workbench-mini-grid">
+          ${miniMetric('IC', num(card.ic))}
+          ${miniMetric('RankIC', num(card.rank_ic))}
+          ${miniMetric(current === 'zh' ? '稳定性' : 'Stability', num(card.stability_score))}
+          ${miniMetric(current === 'zh' ? '样本' : 'Samples', num(card.sample_count, 0))}
+        </div>
+        <div class="factor-card__foot">
+          <span>${esc(card.transaction_cost_sensitivity || 'cost')}</span>
+          <span>${esc((card.failure_modes || [])[0] || (current === 'zh' ? '门禁通过或待复核' : 'Gate passed or pending review'))}</span>
+        </div>
+      </article>
+    `).join('')}
+  </div>`;
 }
 
 export function renderSimulationResult(sim) {
   const current = lang();
   if (!sim) {
     return emptyState(
-      current === 'zh' ? '暂无模拟结果' : 'No simulation result',
-      current === 'zh' ? '选择情景后运行 Monte Carlo。' : 'Choose a scenario and run Monte Carlo.',
+      current === 'zh' ? text('noSimulation') : 'No simulation result',
+      current === 'zh' ? text('noSimulationHint') : 'Choose a scenario and run Monte Carlo.',
     );
   }
   const pathRows = Object.entries(sim.path_summary || {}).map(([key, value]) => `
@@ -180,7 +252,7 @@ export function renderSimulationResult(sim) {
   const factorRows = Object.entries(sim.factor_attribution || {}).map(([key, value]) => `
     <div class="workbench-kv-row"><span>${esc(key)}</span><strong>${num(value)}</strong></div>
   `).join('');
-  const analogs = (sim.historical_analogs || []).slice(0, 5).map(item => `
+  const analogs = (sim.historical_analogs || []).slice(0, 5).map((item) => `
     <article class="workbench-item">
       <div class="workbench-item__head">
         <strong>${esc(item.title || item.event_type || '')}</strong>
@@ -193,7 +265,7 @@ export function renderSimulationResult(sim) {
 
   return `
     <div class="workbench-metric-grid">
-      ${metric(current === 'zh' ? '期望收益' : 'Expected', pct(sim.expected_return), 'positive')}
+      ${metric(current === 'zh' ? '预期收益' : 'Expected', pct(sim.expected_return), 'positive')}
       ${metric(current === 'zh' ? '亏损概率' : 'Loss Prob', pct(sim.probability_of_loss))}
       ${metric('VaR 95', pct(sim.value_at_risk_95), 'risk')}
       ${metric('MDD p95', pct(sim.max_drawdown_p95), 'risk')}

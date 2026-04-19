@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from gateway.connectors.free_live import FreeLiveConnectorRegistry
 from gateway.quant.intelligence_models import (
     DecisionReport,
     EvidenceBundle,
@@ -89,25 +90,31 @@ class QuantIntelligenceService:
         query: str = "",
         decision_time: str | None = None,
         live_connectors: bool = False,
+        mode: str = "local",
+        providers: list[str] | None = None,
+        quota_guard: bool = True,
         limit: int = 20,
         persist: bool = True,
     ) -> dict[str, Any]:
         decision_time = decision_time or _iso_now()
+        mode = str(mode or "local").lower().strip()
+        live_enabled = live_connectors or mode in {"live", "mixed"}
         universe = self.quant_service.get_default_universe(universe_symbols)
         signals = self._build_signals(universe, query)
         signal_lookup = {signal.symbol.upper(): signal for signal in signals}
-        connector_status = self._connector_status()
+        connector_status = self._connector_status(providers=providers)
         connector_failures: list[str] = []
         items: list[InformationItem] = []
 
         for member in universe[: max(1, int(limit))]:
             signal = signal_lookup.get(member.symbol.upper())
-            if signal is not None:
+            if signal is not None and mode != "live":
                 items.extend(self._signal_items(member, signal, decision_time))
-            items.extend(self._local_esg_items(member, decision_time))
-            if live_connectors:
+            if mode != "live":
+                items.extend(self._local_esg_items(member, decision_time))
+            if live_enabled:
                 try:
-                    items.extend(self._live_connector_items(member, decision_time))
+                    items.extend(self._live_connector_items(member, decision_time, providers=providers, quota_guard=quota_guard))
                 except Exception as exc:
                     connector_failures.append(f"{member.symbol}: {exc}")
 
@@ -121,7 +128,10 @@ class QuantIntelligenceService:
             items=items,
             connector_status=connector_status
             | {
-                "live_connectors_enabled": live_connectors,
+                "live_connectors_enabled": live_enabled,
+                "requested_mode": mode,
+                "requested_providers": providers or [],
+                "quota_guard": quota_guard,
                 "connector_failures": connector_failures,
                 "failure_isolation": "enabled",
             },
@@ -196,19 +206,28 @@ class QuantIntelligenceService:
         query: str = "",
         horizon_days: int = 20,
         decision_time: str | None = None,
+        evidence_run_id: str | None = None,
+        as_of_time: str | None = None,
+        mode: str = "local",
+        providers: list[str] | None = None,
+        quota_guard: bool = True,
         persist: bool = True,
     ) -> dict[str, Any]:
-        evidence = self.scan(
+        loaded_evidence = self._load_evidence(evidence_run_id)
+        evidence = loaded_evidence or self.scan(
             universe_symbols=universe_symbols,
             query=query or "discover evidence-linked quant factors",
-            decision_time=decision_time,
-            live_connectors=False,
+            decision_time=as_of_time or decision_time,
+            live_connectors=str(mode or "").lower() in {"live", "mixed"},
+            mode=mode,
+            providers=providers,
+            quota_guard=quota_guard,
             persist=False,
         )
         bundle = EvidenceBundle.model_validate(evidence)
         events = self.extract_events(bundle)
         features = self.build_as_of_features(bundle, events, decision_time=bundle.decision_time)
-        universe = self.quant_service.get_default_universe(universe_symbols)
+        universe = self.quant_service.get_default_universe(universe_symbols or bundle.universe)
         signals = self._build_signals(universe, query)
         signal_returns = {signal.symbol: float(signal.expected_return or 0.0) for signal in signals}
 
@@ -218,6 +237,9 @@ class QuantIntelligenceService:
             "run_id": f"factorlab-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{_stable_hash([card.factor_id for card in cards])[:8]}",
             "generated_at": _iso_now(),
             "decision_time": bundle.decision_time,
+            "evidence_run_id": evidence_run_id or bundle.bundle_id,
+            "source_mode": mode,
+            "connector_lineage": bundle.connector_status,
             "query": query,
             "horizon_days": horizon_days,
             "universe": [member.symbol for member in universe],
@@ -262,6 +284,10 @@ class QuantIntelligenceService:
         query: str = "",
         horizon_days: int = 20,
         include_simulation: bool = True,
+        evidence_run_id: str | None = None,
+        mode: str = "local",
+        providers: list[str] | None = None,
+        quota_guard: bool = True,
         persist: bool = True,
     ) -> dict[str, Any]:
         universe_symbols = universe_symbols or [symbol]
@@ -271,15 +297,26 @@ class QuantIntelligenceService:
         if signal is None:
             raise ValueError(f"No signal available for {symbol}")
 
-        evidence = EvidenceBundle.model_validate(
-            self.scan(universe_symbols=[signal.symbol], query=query, persist=False)
+        evidence_payload = self._load_evidence(evidence_run_id) or self.scan(
+            universe_symbols=[signal.symbol],
+            query=query,
+            persist=False,
+            mode=mode,
+            live_connectors=str(mode or "").lower() in {"live", "mixed"},
+            providers=providers,
+            quota_guard=quota_guard,
         )
+        evidence = EvidenceBundle.model_validate(evidence_payload)
         events = self.extract_events(evidence)
         factor_payload = self.discover_factors(
             universe_symbols=[signal.symbol],
             query=query,
             horizon_days=horizon_days,
             decision_time=evidence.decision_time,
+            evidence_run_id=evidence_run_id or evidence.bundle_id,
+            mode=mode,
+            providers=providers,
+            quota_guard=quota_guard,
             persist=False,
         )
         cards = [FactorCard.model_validate(item) for item in factor_payload.get("factor_cards", [])]
@@ -337,6 +374,14 @@ class QuantIntelligenceService:
             ],
         )
         payload = report.model_dump(mode="json")
+        payload["connector_lineage"] = evidence.connector_status
+        payload["evidence_conflicts"] = {
+            "counter_evidence_count": len(counter_evidence),
+            "provider_count": len({item.provider for item in evidence.items}),
+            "future_dated_items": sum(1 for item in evidence.items if item.leakage_guard != "as_of_safe"),
+        }
+        payload["live_data_age"] = self._live_data_age(evidence.items, evidence.decision_time)
+        payload["quota_mode"] = evidence.connector_status.get("quota_guard", quota_guard)
         if persist:
             payload["storage"] = self._persist("quant/decision_reports", report.decision_id, payload)
         return payload
@@ -356,13 +401,15 @@ class QuantIntelligenceService:
         if signal is None:
             raise ValueError(f"No signal available for {scenario.symbol}")
 
+        evidence_payload = self._load_evidence(scenario.evidence_run_id) if scenario.evidence_run_id else None
         evidence = evidence_override or EvidenceBundle.model_validate(
-            self.scan(universe_symbols=[signal.symbol], query=scenario.event_assumption, persist=False)
+            evidence_payload or self.scan(universe_symbols=[signal.symbol], query=scenario.event_assumption, persist=False)
         )
+        event_adjustment = self._event_adjustment(evidence, scenario.event_id)
         rng = random.Random(int(scenario.seed))
         annual_vol = float(signal.predicted_volatility_10d or 0.22)
         daily_vol = max(annual_vol / math.sqrt(252), 0.003)
-        base_return = float(signal.expected_return or 0.0) + float(scenario.shock_bps) / 10000.0
+        base_return = float(signal.expected_return or 0.0) + float(scenario.shock_bps) / 10000.0 + event_adjustment
         cost = (float(scenario.transaction_cost_bps) + float(scenario.slippage_bps)) / 10000.0
         horizon_scale = math.sqrt(max(1, scenario.horizon_days))
         results: list[float] = []
@@ -596,8 +643,20 @@ class QuantIntelligenceService:
             )
         return items
 
-    def _live_connector_items(self, member: UniverseMember, observed_at: str) -> list[InformationItem]:
-        manager = self.data_source_manager or self._default_data_source_manager()
+    def _live_connector_items(
+        self,
+        member: UniverseMember,
+        observed_at: str,
+        *,
+        providers: list[str] | None = None,
+        quota_guard: bool = True,
+    ) -> list[InformationItem]:
+        manager = self.data_source_manager
+        if manager is None:
+            registry_items = self._free_connector_items(member, observed_at, providers=providers, quota_guard=quota_guard)
+            if registry_items:
+                return registry_items
+            manager = self._default_data_source_manager()
         if manager is None:
             return []
         company_data = manager.fetch_company_data(member.company_name, ticker=member.symbol, industry=member.industry)
@@ -618,7 +677,63 @@ class QuantIntelligenceService:
                     published_at=raw.get("published_at") or raw.get("publishedAt"),
                     observed_at=observed_at,
                     confidence=0.72,
-                    metadata={"connector": "DataSourceManager"},
+                    metadata={"connector": "DataSourceManager", "license_note": "external data source terms apply"},
+                )
+            )
+        return items
+
+    def _free_connector_items(
+        self,
+        member: UniverseMember,
+        observed_at: str,
+        *,
+        providers: list[str] | None = None,
+        quota_guard: bool = True,
+    ) -> list[InformationItem]:
+        registry = self._connector_registry()
+        scan = registry.live_scan(
+            universe=[member.symbol],
+            providers=providers,
+            decision_time=observed_at,
+            quota_guard=quota_guard,
+            persist=False,
+        )
+        items: list[InformationItem] = []
+        for raw in scan.get("items", []):
+            item_type = str(raw.get("item_type") or "news")
+            if item_type not in {
+                "news",
+                "filing",
+                "esg_report",
+                "earnings_call",
+                "market_signal",
+                "macro",
+                "risk_event",
+                "rag_evidence",
+                "model_signal",
+                "connector_status",
+            }:
+                item_type = "news"
+            items.append(
+                self._make_item(
+                    item_type=item_type,
+                    provider=str(raw.get("provider") or "free_live_connector"),
+                    source=str(raw.get("source") or raw.get("provider") or "free_live_connector"),
+                    url=raw.get("url"),
+                    symbol=member.symbol,
+                    company_name=member.company_name,
+                    title=str(raw.get("title") or f"{member.symbol} live connector evidence"),
+                    summary=str(raw.get("summary") or raw.get("title") or ""),
+                    published_at=raw.get("published_at"),
+                    observed_at=observed_at,
+                    confidence=float(raw.get("confidence") or 0.66),
+                    checksum=raw.get("checksum"),
+                    metadata={
+                        "connector": "FreeLiveConnectorRegistry",
+                        "free_tier_mode": True,
+                        "license_note": raw.get("license_note"),
+                        **(raw.get("metadata") or {}),
+                    },
                 )
             )
         return items
@@ -631,15 +746,20 @@ class QuantIntelligenceService:
         except Exception:
             return None
 
-    def _connector_status(self) -> dict[str, Any]:
+    def _connector_registry(self) -> FreeLiveConnectorRegistry:
+        return FreeLiveConnectorRegistry(storage_root=self.storage_root)
+
+    def _connector_status(self, providers: list[str] | None = None) -> dict[str, Any]:
+        registry = self._connector_registry()
+        free_status = registry.health(providers=providers, live=False)
         manager = self.data_source_manager or self._default_data_source_manager()
         if manager is None:
-            return {"available": False, "sources": {}, "mode": "local_only"}
+            return {"available": True, "sources": {}, "mode": "free_tier_registry", "free_tier_registry": free_status}
         try:
             status = manager.source_status()
         except Exception:
             status = {}
-        return {"available": True, "sources": status, "mode": "optional_external"}
+        return {"available": True, "sources": status, "mode": "free_tier_registry", "free_tier_registry": free_status}
 
     def _make_item(
         self,
@@ -1073,6 +1193,78 @@ class QuantIntelligenceService:
             except Exception:
                 return None
         return None
+
+    def _load_evidence(self, evidence_run_id: str | None) -> dict[str, Any] | None:
+        if not evidence_run_id:
+            return None
+        safe_id = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in evidence_run_id)
+        candidates = [
+            self.storage_root / "intelligence" / "evidence_lake" / f"{safe_id}.json",
+            self.storage_root / "intelligence" / "connector_runs" / f"{safe_id}.json",
+        ]
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if "bundle_id" in payload and "items" in payload:
+                return payload
+            if "items" in payload:
+                items = [
+                    self._make_item(
+                        item_type=str(item.get("item_type") or "news"),
+                        provider=str(item.get("provider") or "connector_run"),
+                        source=str(item.get("source") or item.get("provider") or "connector_run"),
+                        url=item.get("url"),
+                        symbol=str(item.get("symbol") or "AAPL"),
+                        company_name=str(item.get("company_name") or item.get("symbol") or "Unknown"),
+                        title=str(item.get("title") or "Connector evidence"),
+                        summary=str(item.get("summary") or item.get("title") or ""),
+                        published_at=item.get("published_at"),
+                        observed_at=str(item.get("observed_at") or payload.get("decision_time") or payload.get("generated_at") or _iso_now()),
+                        confidence=float(item.get("confidence") or 0.66),
+                        checksum=item.get("checksum"),
+                        metadata=item.get("metadata") or {},
+                    ).model_dump(mode="json")
+                    for item in payload.get("items", [])
+                ]
+                return {
+                    "bundle_id": safe_id,
+                    "generated_at": payload.get("generated_at") or _iso_now(),
+                    "decision_time": payload.get("decision_time") or payload.get("generated_at") or _iso_now(),
+                    "universe": payload.get("universe") or sorted({item.get("symbol") for item in payload.get("items", []) if item.get("symbol")}),
+                    "query": "connector run evidence",
+                    "items": items,
+                    "connector_status": payload.get("summary") or {},
+                    "quality_summary": self._quality_summary([InformationItem.model_validate(item) for item in items]),
+                    "lineage": payload.get("lineage") or ["connector run loaded as evidence bundle"],
+                }
+        return None
+
+    def _live_data_age(self, items: list[InformationItem], decision_time: str) -> dict[str, Any]:
+        cutoff = _parse_dt(decision_time) or datetime.now(timezone.utc)
+        ages: list[float] = []
+        for item in items:
+            observed = _parse_dt(item.observed_at)
+            if observed is not None:
+                ages.append(max((cutoff - observed).total_seconds() / 3600.0, 0.0))
+        return {
+            "max_age_hours": round(max(ages), 4) if ages else None,
+            "avg_age_hours": round(_mean(ages), 4) if ages else None,
+            "item_count": len(items),
+        }
+
+    def _event_adjustment(self, evidence: EvidenceBundle, event_id: str | None) -> float:
+        if not event_id:
+            return 0.0
+        events = self.extract_events(evidence)
+        for event in events:
+            if event.event_id == event_id or event.item_id == event_id:
+                sign = -1.0 if event.impact_direction == "negative" else 1.0 if event.impact_direction == "positive" else 0.0
+                return sign * float(event.impact_strength) * 0.015
+        return 0.0
 
     def _outcome_summary(self, records: list[dict[str, Any]]) -> dict[str, Any]:
         hits = [record.get("direction_hit") for record in records if record.get("direction_hit") is not None]
