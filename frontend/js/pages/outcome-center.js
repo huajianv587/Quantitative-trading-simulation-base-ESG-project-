@@ -145,7 +145,7 @@ function renderSummaryPreview() {
         <div class="workbench-kv-row"><span>${t('Broker', '券商执行')}</span><strong>${t('shadow only', '仅影子模式')}</strong></div>
       </div>
       <div class="preview-step-grid">
-        <div class="preview-step"><span>${t('Hit rate becomes stable after repeated rows', '重复记录累积后，命中率会逐渐稳定')}</span><strong>${t('queued', '排队中')}</strong></div>
+        <div class="preview-step"><span>${t('Hit rate becomes stable after repeated rows', '重复记录积累后，命中率会逐渐稳定')}</span><strong>${t('queued', '排队中')}</strong></div>
         <div class="preview-step"><span>${t('Brier score tracks confidence calibration', 'Brier 分数用于追踪置信度校准')}</span><strong>${t('armed', '已启用')}</strong></div>
         <div class="preview-step"><span>${t('Drawdown breaches are forwarded to failure mining', '回撤越界会进入失败案例挖掘')}</span><strong>${t('watch', '观察')}</strong></div>
       </div>
@@ -162,7 +162,7 @@ function renderRecordsPreview() {
       </div>
       <div class="workbench-kv-list compact-kv-list">
         <div class="workbench-kv-row"><span>${t('Decision ID', '决策 ID')}</span><strong>${t('optional', '可选')}</strong></div>
-        <div class="workbench-kv-row"><span>${t('Realized vs benchmark', '真实收益与基准')}</span><strong>${t('tracked', '已跟踪')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Realized vs benchmark', '真实收益与基准')}</span><strong>${t('tracked', '已追踪')}</strong></div>
         <div class="workbench-kv-row"><span>${t('Drawdown breach', '回撤越界')}</span><strong>${t('watched', '观察中')}</strong></div>
         <div class="workbench-kv-row"><span>${t('Direction hit', '方向命中')}</span><strong>${t('derived', '自动推导')}</strong></div>
       </div>
@@ -196,13 +196,14 @@ async function recordOutcome() {
     const decisionId = _container.querySelector('#outcome-decision')?.value || 'demo-decision';
     const realizedReturn = Number(_container.querySelector('#outcome-realized')?.value || 0);
     const benchmarkReturn = Number(_container.querySelector('#outcome-benchmark')?.value || 0);
+    const notes = t('UI demo shadow outcome; not a broker execution.', '界面演示用影子结果，不触发券商执行。');
     const payload = await api.outcomes.evaluate({
       symbol,
       decision_id: decisionId || null,
       realized_return: realizedReturn,
       benchmark_return: benchmarkReturn,
       drawdown: -0.02,
-      notes: t('UI demo shadow outcome; not a broker execution.', '界面演示用影子结果，不触发券商执行。'),
+      notes,
     });
     const latestReviewResult = await api.trading.latestReview().catch(() => ({ review: null }));
     _latestReview = latestReviewResult?.review || null;
@@ -213,7 +214,7 @@ async function recordOutcome() {
       benchmark_return: benchmarkReturn,
       excess_return: realizedReturn - benchmarkReturn,
       direction_hit: realizedReturn >= benchmarkReturn,
-      notes: t('UI demo shadow outcome; not a broker execution.', '界面演示用影子结果，不触发券商执行。'),
+      notes,
     };
     renderOutcomes(
       payload.summary || payload,
@@ -252,7 +253,7 @@ function renderOutcomes(summary, latest = null) {
     </div>
     <div class="preview-step-grid">
       <div class="preview-step"><span>${t('Calibration curve', '校准曲线')}</span><strong>${summary.record_count >= 10 ? t('forming', '形成中') : t('waiting', '等待中')}</strong></div>
-      <div class="preview-step"><span>${t('Regret tracking', '遗憾值跟踪')}</span><strong>${summary.mean_excess_return == null ? t('queued', '排队中') : t('active', '活跃')}</strong></div>
+      <div class="preview-step"><span>${t('Regret tracking', '遗憾值追踪')}</span><strong>${summary.mean_excess_return == null ? t('queued', '排队中') : t('active', '活跃')}</strong></div>
       <div class="preview-step"><span>${t('Failure intake', '失败案例接入')}</span><strong>${(summary.drawdown_breaches ?? 0) > 0 ? t('flagged', '已标记') : t('clean', '干净')}</strong></div>
     </div>
     ${reviewBlock}
@@ -281,7 +282,7 @@ function renderOutcomes(summary, latest = null) {
       <div class="workbench-kv-list compact-kv-list">
         <div class="workbench-kv-row"><span>${t('Direction hit', '方向命中')}</span><strong>${record.direction_hit == null ? t('pending', '待处理') : record.direction_hit ? t('yes', '是') : t('no', '否')}</strong></div>
         <div class="workbench-kv-row"><span>${t('Decision ID', '决策 ID')}</span><strong>${record.decision_id || t('optional', '可选')}</strong></div>
-        <div class="workbench-kv-row"><span>${t('Tracking mode', '跟踪模式')}</span><strong>${t('shadow', '影子')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Tracking mode', '追踪模式')}</span><strong>${t('shadow', '影子')}</strong></div>
       </div>
       <div class="preview-step-grid">
         <div class="preview-step"><span>${t('Realized return captured', '真实收益已记录')}</span><strong>${pct(record.realized_return)}</strong></div>

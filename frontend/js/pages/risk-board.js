@@ -28,10 +28,33 @@ const COPY = {
     controls: 'Risk Controls',
     ledger: 'Approval Ledger',
     alerts: 'Risk Alerts',
+    loading: 'Loading risk board...',
+    evaluating: 'Evaluating risk gate...',
+    noApproval: 'No approval yet',
+    noApprovalHint: 'Run Evaluate Risk after at least one debate.',
+    noLedger: 'No risk approvals yet',
+    noAlerts: 'No risk alerts today',
+    verdict: 'Verdict',
+    action: 'Action',
+    weight: 'Weight',
+    notional: 'Notional',
+    drawdown: 'Drawdown',
+    broker: 'Broker',
+    mode: 'Mode',
+    refreshRate: 'Refresh Rate',
+    singleCap: 'Single-name cap',
+    dailyOrders: 'Max daily orders',
+    cashBuffer: 'Min cash buffer',
+    duplicateWindow: 'Duplicate window',
+    trigger: 'Trigger',
+    threshold: 'Threshold',
+    logged: 'logged',
+    watch: 'watch',
+    block: 'block',
   },
   zh: {
     title: '风控板',
-    subtitle: 'Risk Manager 审批、单票上限、回撤门禁与 kill-switch 状态。',
+    subtitle: '查看 Risk Manager 审批、单票上限、回撤门禁，以及 kill switch 姿态。',
     symbol: '股票',
     ttl: '信号 TTL（分钟）',
     refresh: '刷新风控板',
@@ -40,6 +63,29 @@ const COPY = {
     controls: '风控控制',
     ledger: '审批台账',
     alerts: '风险告警',
+    loading: '正在加载风控板...',
+    evaluating: '正在评估风控门禁...',
+    noApproval: '暂无审批结果',
+    noApprovalHint: '至少完成一轮辩论后再运行风控评估。',
+    noLedger: '暂无风控审批记录',
+    noAlerts: '今日暂无风险告警',
+    verdict: '结论',
+    action: '动作',
+    weight: '权重',
+    notional: '名义金额',
+    drawdown: '回撤',
+    broker: '券商',
+    mode: '模式',
+    refreshRate: '刷新频率',
+    singleCap: '单票上限',
+    dailyOrders: '单日最大订单数',
+    cashBuffer: '最小现金缓冲',
+    duplicateWindow: '重复下单窗口',
+    trigger: '触发值',
+    threshold: '阈值',
+    logged: '已记录',
+    watch: '观察',
+    block: '阻止',
   },
 };
 
@@ -146,19 +192,19 @@ function renderShell() {
       <section class="grid-2 workbench-main-grid risk-board-grid">
         <article class="card">
           <div class="card-header"><span class="card-title">${c('latest')}</span></div>
-          <div class="card-body" id="risk-latest">${emptyState(t('Loading risk board', '正在加载风控板'))}</div>
+          <div class="card-body" id="risk-latest">${emptyState(c('loading'))}</div>
         </article>
         <article class="card">
           <div class="card-header"><span class="card-title">${c('controls')}</span></div>
-          <div class="card-body" id="risk-controls">${emptyState(t('Loading risk board', '正在加载风控板'))}</div>
+          <div class="card-body" id="risk-controls">${emptyState(c('loading'))}</div>
         </article>
         <article class="card">
           <div class="card-header"><span class="card-title">${c('ledger')}</span></div>
-          <div class="card-body" id="risk-ledger">${emptyState(t('Loading risk board', '正在加载风控板'))}</div>
+          <div class="card-body" id="risk-ledger">${emptyState(c('loading'))}</div>
         </article>
         <article class="card">
           <div class="card-header"><span class="card-title">${c('alerts')}</span></div>
-          <div class="card-body" id="risk-alerts">${emptyState(t('Loading risk board', '正在加载风控板'))}</div>
+          <div class="card-body" id="risk-alerts">${emptyState(c('loading'))}</div>
         </article>
       </section>
     </div>`;
@@ -181,7 +227,7 @@ function renderPreview() {
 async function refreshBoard() {
   const targets = ['#risk-latest', '#risk-controls', '#risk-ledger', '#risk-alerts']
     .map((selector) => _container.querySelector(selector));
-  targets.forEach((node) => setLoading(node, t('Loading risk board...', '正在加载风控板...')));
+  targets.forEach((node) => setLoading(node, c('loading')));
   try {
     _board = await api.trading.riskBoard(symbol(), 12);
     renderBoard();
@@ -191,7 +237,7 @@ async function refreshBoard() {
 }
 
 async function evaluateRisk() {
-  setLoading(_container.querySelector('#risk-latest'), t('Evaluating risk gate...', '正在评估风控门禁...'));
+  setLoading(_container.querySelector('#risk-latest'), c('evaluating'));
   try {
     await api.trading.riskEvaluate({
       symbol: symbol(),
@@ -208,33 +254,33 @@ function renderBoard() {
   const latest = _board.latest_approval;
   _container.querySelector('#risk-latest').innerHTML = latest ? `
     <div class="workbench-metric-grid">
-      ${metric(t('Verdict', '结论'), riskLabel(latest.verdict), latest.verdict === 'approve' ? 'positive' : 'risk')}
-      ${metric(t('Action', '动作'), riskLabel(latest.approved_action))}
+      ${metric(c('verdict'), riskLabel(latest.verdict), latest.verdict === 'approve' ? 'positive' : 'risk')}
+      ${metric(c('action'), riskLabel(latest.approved_action))}
       ${metric('Kelly', pct(latest.kelly_fraction || 0))}
-      ${metric(t('Weight', '权重'), pct(latest.recommended_weight || 0))}
-      ${metric(t('Notional', '名义金额'), num(latest.recommended_notional || 0, 2))}
-      ${metric(t('Drawdown', '回撤'), pct(latest.drawdown_estimate || 0), 'risk')}
+      ${metric(c('weight'), pct(latest.recommended_weight || 0))}
+      ${metric(c('notional'), num(latest.recommended_notional || 0, 2))}
+      ${metric(c('drawdown'), pct(latest.drawdown_estimate || 0), 'risk')}
     </div>
     <div class="factor-checklist">
-      ${(latest.rationale || []).map((item) => `<div class="factor-check-row"><span>${esc(zhText(item))}</span><strong class="is-pass">${t('logged', '已记录')}</strong></div>`).join('')}
-      ${(latest.risk_flags || []).map((item) => `<div class="factor-check-row"><span>${esc(zhText(item))}</span><strong class="is-watch">${t('watch', '观察')}</strong></div>`).join('')}
-      ${(latest.hard_blocks || []).map((item) => `<div class="factor-check-row"><span>${esc(zhText(item))}</span><strong class="is-risk">${t('block', '阻止')}</strong></div>`).join('')}
+      ${(latest.rationale || []).map((item) => `<div class="factor-check-row"><span>${esc(zhText(item))}</span><strong class="is-pass">${c('logged')}</strong></div>`).join('')}
+      ${(latest.risk_flags || []).map((item) => `<div class="factor-check-row"><span>${esc(zhText(item))}</span><strong class="is-watch">${c('watch')}</strong></div>`).join('')}
+      ${(latest.hard_blocks || []).map((item) => `<div class="factor-check-row"><span>${esc(zhText(item))}</span><strong class="is-risk">${c('block')}</strong></div>`).join('')}
     </div>
-  ` : emptyState(t('No approval yet', '暂无审批结果'), t('Run Evaluate Risk after at least one debate.', '至少完成一轮辩论后再运行风控评估。'));
+  ` : emptyState(c('noApproval'), c('noApprovalHint'));
 
   const controls = _board.controls || {};
   _container.querySelector('#risk-controls').innerHTML = `
     <div class="workbench-metric-grid">
       ${metric('Kill Switch', controls.kill_switch_enabled ? t('on', '开启') : t('off', '关闭'), controls.kill_switch_enabled ? 'risk' : 'positive')}
-      ${metric(t('Broker', '券商'), controls.default_broker || 'alpaca')}
-      ${metric(t('Mode', '模式'), controls.default_mode || 'paper')}
-      ${metric(t('Refresh', '刷新频率'), `${controls.realtime_refresh_seconds || 5}s`)}
+      ${metric(c('broker'), controls.default_broker || 'alpaca')}
+      ${metric(c('mode'), controls.default_mode || 'paper')}
+      ${metric(c('refreshRate'), `${controls.realtime_refresh_seconds || 5}s`)}
     </div>
     <div class="workbench-kv-list compact-kv-list">
-      <div class="workbench-kv-row"><span>${t('Single-name cap', '单票上限')}</span><strong>${pct(controls.single_name_weight_cap || 0)}</strong></div>
-      <div class="workbench-kv-row"><span>${t('Max daily orders', '单日最大订单数')}</span><strong>${esc(controls.max_daily_orders || '-')}</strong></div>
-      <div class="workbench-kv-row"><span>${t('Min cash buffer', '最小现金缓冲')}</span><strong>${esc(controls.min_buying_power_buffer || '-')}</strong></div>
-      <div class="workbench-kv-row"><span>${t('Duplicate window', '重复下单窗口')}</span><strong>${esc(controls.duplicate_order_window_minutes || '-')}m</strong></div>
+      <div class="workbench-kv-row"><span>${c('singleCap')}</span><strong>${pct(controls.single_name_weight_cap || 0)}</strong></div>
+      <div class="workbench-kv-row"><span>${c('dailyOrders')}</span><strong>${esc(controls.max_daily_orders || '-')}</strong></div>
+      <div class="workbench-kv-row"><span>${c('cashBuffer')}</span><strong>${esc(controls.min_buying_power_buffer || '-')}</strong></div>
+      <div class="workbench-kv-row"><span>${c('duplicateWindow')}</span><strong>${esc(controls.duplicate_order_window_minutes || '-')}m</strong></div>
     </div>`;
 
   const approvals = _board.approvals || [];
@@ -249,12 +295,12 @@ function renderBoard() {
           <p>${esc(zhText((item.risk_flags || [])[0] || (item.hard_blocks || [])[0] || 'Risk gate logged.'))}</p>
           <div class="workbench-item__meta">
             <span>${esc(item.generated_at || '')}</span>
-            <span>${t('weight', '权重')}=${pct(item.recommended_weight || 0)}</span>
+            <span>${c('weight')}=${pct(item.recommended_weight || 0)}</span>
             <span>ttl=${esc(item.signal_ttl_minutes || '-')}m</span>
           </div>
         </article>
       `).join('')}
-    </div>` : emptyState(t('No risk approvals yet', '暂无风控审批记录'));
+    </div>` : emptyState(c('noLedger'));
 
   const alerts = _board.alerts || [];
   _container.querySelector('#risk-alerts').innerHTML = alerts.length ? `
@@ -268,10 +314,10 @@ function renderBoard() {
           <p>${esc(zhText(item.agent_analysis || ''))}</p>
           <div class="workbench-item__meta">
             <span>${esc(item.timestamp || '')}</span>
-            <span>${t('trigger', '触发值')}=${num(item.trigger_value || 0)}</span>
-            <span>${t('threshold', '阈值')}=${num(item.threshold || 0)}</span>
+            <span>${c('trigger')}=${num(item.trigger_value || 0)}</span>
+            <span>${c('threshold')}=${num(item.threshold || 0)}</span>
           </div>
         </article>
       `).join('')}
-    </div>` : emptyState(t('No risk alerts today', '今日暂无风险告警'));
+    </div>` : emptyState(c('noAlerts'));
 }

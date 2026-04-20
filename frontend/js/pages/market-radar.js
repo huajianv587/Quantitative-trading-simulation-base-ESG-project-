@@ -173,9 +173,7 @@ function wire() {
     renderFieldPreviews();
     renderItems();
   });
-  _container.querySelector('#radar-universe')?.addEventListener('input', () => {
-    renderFieldPreviews();
-  });
+  _container.querySelector('#radar-universe')?.addEventListener('input', renderFieldPreviews);
   _container.querySelector('#market-radar-feed')?.addEventListener('click', (event) => {
     const itemButton = event.target.closest('[data-radar-item-id]');
     if (itemButton) {

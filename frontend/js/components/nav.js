@@ -1,6 +1,8 @@
 import { t, onLangChange } from '../i18n.js?v=8';
 import { ROUTES } from '../router.js?v=8';
 
+const NAV_STORAGE_KEY = 'qt-nav-open-groups';
+
 const ICONS = {
   grid: '<path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>',
@@ -17,9 +19,118 @@ const ICONS = {
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/>',
 };
 
+const NAV_GROUPS = [
+  {
+    id: 'market_intel',
+    labelKey: 'nav.market_intel',
+    statusKey: 'market',
+    paths: ['/research', '/market-radar', '/connector-center', '/agent-lab'],
+  },
+  {
+    id: 'decision_hub',
+    labelKey: 'nav.decision_hub',
+    statusKey: 'decision',
+    paths: ['/intelligence', '/debate-desk', '/risk-board', '/factor-lab', '/simulation'],
+  },
+  {
+    id: 'trading_exec',
+    labelKey: 'nav.trading_exec',
+    statusKey: 'trading',
+    paths: ['/trading-ops', '/portfolio', '/backtest', '/execution'],
+  },
+  {
+    id: 'governance',
+    labelKey: 'nav.governance',
+    statusKey: 'governance',
+    paths: ['/outcome-center', '/validation', '/models', '/reports', '/data-management', '/rl-lab', '/chat', '/score'],
+  },
+  {
+    id: 'system_admin',
+    labelKey: 'nav.system_admin',
+    statusKey: 'system',
+    paths: ['/push-rules', '/subscriptions'],
+  },
+];
+
 function icon(name) {
   const path = ICONS[name] || ICONS.grid;
   return `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+}
+
+function chevron() {
+  return `<svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+}
+
+function getStoredGroups() {
+  try {
+    const raw = localStorage.getItem(NAV_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setStoredGroups(value) {
+  try {
+    localStorage.setItem(NAV_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function routeMeta(path) {
+  return ROUTES[path];
+}
+
+function groupStatus(group) {
+  const count = group.paths.filter((path) => !!routeMeta(path)).length;
+  const statusMap = {
+    market: t('common.online'),
+    decision: `${count}`,
+    trading: 'paper',
+    governance: `${count}`,
+    system: 'ops',
+  };
+  return statusMap[group.statusKey] || `${count}`;
+}
+
+function normalizeGroupState(currentPath) {
+  const stored = getStoredGroups();
+  const state = {};
+  NAV_GROUPS.forEach((group) => {
+    const hasActive = group.paths.includes(currentPath);
+    state[group.id] = hasActive || Boolean(stored[group.id]);
+  });
+  return state;
+}
+
+function renderGroup(group, currentPath, openState) {
+  const isOpen = openState[group.id];
+  const hasActive = group.paths.includes(currentPath);
+  const children = group.paths
+    .map((path) => ({ path, config: routeMeta(path) }))
+    .filter(({ config }) => config && !config.hidden);
+
+  return `
+    <section class="nav-group ${isOpen ? 'is-open' : ''} ${hasActive ? 'has-active' : ''}" data-group-id="${group.id}">
+      <button class="nav-group__trigger" type="button" data-group-trigger="${group.id}" aria-expanded="${isOpen ? 'true' : 'false'}">
+        <span class="nav-group__label">${t(group.labelKey)}</span>
+        <span class="nav-group__meta">
+          <span class="nav-group__status">${groupStatus(group)}</span>
+          ${chevron()}
+        </span>
+      </button>
+      <div class="nav-group__body">
+        ${children.map(({ path, config }) => `
+          <a class="nav-item ${path === currentPath ? 'active' : ''}" href="#${path}" data-path="${path}">
+            ${icon(config.icon)}
+            <span>${config.labelKey ? t(config.labelKey) : config.label}</span>
+          </a>
+        `).join('')}
+      </div>
+    </section>
+  `;
 }
 
 export function renderNav() {
@@ -27,34 +138,28 @@ export function renderNav() {
   if (!container) return;
 
   const current = window.location.hash.slice(1) || '/dashboard';
-  const groups = {};
-  Object.entries(ROUTES).forEach(([path, config]) => {
-    if (config.hidden) return;
-    const group = config.group || 'other';
-    if (!groups[group]) groups[group] = [];
-    groups[group].push({ path, config });
-  });
+  const openState = normalizeGroupState(current);
 
-  const groupLabels = {
-    core: 'nav.platform',
-    quant: 'nav.quant',
-    research: 'nav.research',
-    ops: 'nav.ops',
-  };
+  const dashboardMeta = ROUTES['/dashboard'];
+  let html = `
+    <div class="nav-section-label">${t('nav.platform')}</div>
+    <a class="nav-item ${(current === '/dashboard' || current === '/overview') ? 'active' : ''}" href="#/dashboard" data-path="/dashboard">
+      ${icon(dashboardMeta.icon)}
+      <span>${t(dashboardMeta.labelKey)}</span>
+    </a>
+  `;
 
-  let html = '';
-  Object.entries(groups).forEach(([group, items]) => {
-    html += `<div class="nav-section-label">${t(groupLabels[group] || group)}</div>`;
-    items.forEach(({ path, config }) => {
-      const active = path === current ? 'active' : '';
-      html += `<a class="nav-item ${active}" href="#${path}" data-path="${path}">
-        ${icon(config.icon)}
-        <span>${config.labelKey ? t(config.labelKey) : config.label}</span>
-      </a>`;
+  html += NAV_GROUPS.map((group) => renderGroup(group, current, openState)).join('');
+  container.innerHTML = html;
+
+  container.querySelectorAll('[data-group-trigger]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const groupId = button.getAttribute('data-group-trigger');
+      const next = { ...getStoredGroups(), [groupId]: !normalizeGroupState(current)[groupId] };
+      setStoredGroups(next);
+      renderNav();
     });
   });
-
-  container.innerHTML = html;
 }
 
 export function updateHealth(online) {

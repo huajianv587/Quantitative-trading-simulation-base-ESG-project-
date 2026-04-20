@@ -11,8 +11,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
   <script src="/app/vendor/echarts/echarts.min.js?v=1"></script>
-  <link rel="stylesheet" href="/app/css/app.css?v=7">
-  <script>window.__APP_VER__ = 'v7';</script>
+  <link rel="stylesheet" href="/app/css/app.css?v=8">
+  <script>window.__APP_VER__ = 'v8';</script>
 </head>
 <body>
   <div id="c-dot"></div>
@@ -47,7 +47,7 @@
           <span class="status-dot" id="health-dot"></span>
           <span id="health-text" class="status-label">Connecting...</span>
         </div>
-        <div class="status-version">v7 · 2026</div>
+        <div class="status-version">v8 · 2026</div>
       </div>
     </aside>
 
@@ -88,7 +88,7 @@
         requestAnimationFrame(lerp);
       })();
       document.addEventListener('mouseover', function(event) {
-        const interactive = event.target && event.target.closest('a,button,input,select,textarea,[role=button],.nav-item,.btn');
+        const interactive = event.target && event.target.closest('a,button,input,select,textarea,[role=button],.nav-item,.btn,.nav-group__trigger');
         document.body.classList.toggle('c-hover', !!interactive);
       });
     })();
@@ -108,6 +108,6 @@
       `;
     });
   </script>
-  <script type="module" src="/app/js/app.js?v=5"></script>
+  <script type="module" src="/app/js/app.js?v=8"></script>
 </body>
 </html>

@@ -1,4 +1,5 @@
 import { api } from '../qtapi.js?v=8';
+import { router } from '../router.js?v=8';
 import { getLang, onLangChange } from '../i18n.js?v=8';
 import {
   emptyState,
@@ -36,6 +37,7 @@ const COPY = {
     conflict: 'Conflict Map',
     consensus: 'Consensus',
     sentiment: 'Sentiment Overlay',
+    handoff: 'Action Bridge',
     noLedger: 'No debate runs yet',
     noLedgerHint: 'Run Debate to create a bull vs bear record.',
     noSelected: 'No debate selected',
@@ -52,27 +54,34 @@ const COPY = {
     freshness: 'Freshness',
     sources: 'Sources',
     snapshot: 'Snapshot',
+    factorCount: 'Factors',
+    roundsCount: 'Rounds',
     roundPrefix: 'Round',
-    bullLabel: 'Bull:',
-    bearLabel: 'Bear:',
-    judgePrefix: 'judge',
-    disputePrefix: 'dispute',
+    bullLabel: 'Bull',
+    bearLabel: 'Bear',
+    judgePrefix: 'Judge',
+    disputePrefix: 'Dispute',
     noMajorConflict: 'No major conflict',
     clear: 'clear',
     linked: 'linked',
     watch: 'watch',
     yes: 'yes',
     no: 'no',
+    openRisk: 'Open Risk Board',
+    openOps: 'Open Trading Ops',
+    openSimulation: 'Open Simulation',
+    openOutcome: 'Open Outcome Center',
+    handoffHint: 'Send the current verdict into risk approval, operations, simulation replay, or outcome tracking.',
   },
   zh: {
     title: '辩论台',
-    subtitle: '多头与空头的结构化辩论、裁判结论，以及可执行的纸面交易建议。',
+    subtitle: '在这里查看多空对抗、裁判结论，以及可执行的纸面交易建议。',
     symbol: '股票',
     universe: '股票池',
     providers: '数据源',
     allProviders: '全部数据源',
     query: '辩论问题',
-    queryValue: '基于 ESG 证据、情绪信号和因子门禁，辩论当前交易观点。',
+    queryValue: '结合 ESG 证据、情绪线索与因子门禁，辩论当前交易观点。',
     run: '运行辩论',
     refresh: '刷新台账',
     triad: '辩论三方',
@@ -81,6 +90,7 @@ const COPY = {
     conflict: '冲突图谱',
     consensus: '共识',
     sentiment: '情绪叠层',
+    handoff: '行动桥',
     noLedger: '还没有辩论记录',
     noLedgerHint: '运行一次辩论，生成多头与空头的对抗记录。',
     noSelected: '还没有选中的辩论',
@@ -93,27 +103,38 @@ const COPY = {
     humanReview: '人工复核',
     polarity: '情绪方向',
     headlines: '标题数',
-    feature: '特征分',
+    feature: '特征值',
     freshness: '新鲜度',
     sources: '来源',
     snapshot: '快照',
+    factorCount: '因子数',
+    roundsCount: '回合数',
     roundPrefix: '回合',
-    bullLabel: '多头：',
-    bearLabel: '空头：',
+    bullLabel: '多头',
+    bearLabel: '空头',
     judgePrefix: '裁判',
     disputePrefix: '分歧',
     noMajorConflict: '暂无主要冲突',
     clear: '清晰',
-    linked: '已连接',
+    linked: '已关联',
     watch: '关注',
     yes: '是',
     no: '否',
+    openRisk: '打开风控板',
+    openOps: '打开交易运维',
+    openSimulation: '打开情景模拟',
+    openOutcome: '打开结果追踪',
+    handoffHint: '把当前 verdict 送往风控审批、交易运维、模拟回放或结果追踪。',
   },
 };
 
 function c(key) {
   const lang = getLang() === 'zh' ? 'zh' : 'en';
   return COPY[lang][key] || COPY.en[key] || key;
+}
+
+function t(en, zh) {
+  return getLang() === 'zh' ? zh : en;
 }
 
 export async function render(container) {
@@ -175,6 +196,8 @@ function renderShell() {
         <div class="run-panel__foot workbench-action-grid">
           <button class="btn btn-primary workbench-action-btn" id="btn-debate-run">${c('run')}</button>
           <button class="btn btn-ghost workbench-action-btn" id="btn-debate-refresh">${c('refresh')}</button>
+          <button class="btn btn-ghost workbench-action-btn" id="btn-debate-open-risk">${c('openRisk')}</button>
+          <button class="btn btn-ghost workbench-action-btn" id="btn-debate-open-ops">${c('openOps')}</button>
         </div>
       </section>
       <section class="grid-2 workbench-main-grid trading-debate-grid">
@@ -193,6 +216,8 @@ function renderShell() {
 function wire() {
   _container.querySelector('#btn-debate-run')?.addEventListener('click', runDebate);
   _container.querySelector('#btn-debate-refresh')?.addEventListener('click', refreshLedger);
+  _container.querySelector('#btn-debate-open-risk')?.addEventListener('click', () => router.navigate('/risk-board'));
+  _container.querySelector('#btn-debate-open-ops')?.addEventListener('click', () => router.navigate('/trading-ops'));
   ['#debate-symbol', '#debate-universe', '#debate-providers'].forEach((selector) => {
     _container.querySelector(selector)?.addEventListener('input', renderFieldPreviews);
   });
@@ -286,7 +311,7 @@ function renderLedger() {
       ${_debates.map((item) => `
         <article class="workbench-item ${_current?.debate_id === item.debate_id ? 'workbench-item--active' : ''}" data-debate-id="${esc(item.debate_id)}">
           <div class="workbench-item__head">
-            <strong>${esc(item.symbol)} | ${esc(item.recommended_action || item.judge_verdict)}</strong>
+            <strong>${esc(item.symbol)} | ${esc(formatAction(item.recommended_action || item.judge_verdict))}</strong>
             ${statusBadge(item.recommended_action || item.judge_verdict)}
           </div>
           <p>${esc(item.bull_thesis || '')}</p>
@@ -311,20 +336,22 @@ function renderCurrent() {
   const triad = [
     [c('bull'), _current.bull_thesis || '-', 'promoted'],
     [c('bear'), _current.bear_thesis || '-', 'research_only'],
-    [c('judge'), `${_current.judge_verdict || '-'} | q=${num(_current.judge_confidence)}`, _current.judge_verdict || 'neutral'],
+    [c('judge'), `${formatAction(_current.judge_verdict)} | q=${num(_current.judge_confidence)}`, _current.judge_verdict || 'neutral'],
   ];
   const sentiment = _current.sentiment_overview || {};
   const sourceMix = Object.entries(sentiment.source_mix || {})
     .map(([key, value]) => `${key}:${value}`)
     .join(' | ') || '-';
+  const rounds = _current.turns || [];
 
   host.innerHTML = `
     <div class="workbench-metric-grid">
-      ${metric(c('judge'), (_current.recommended_action || '-').toUpperCase(), 'positive')}
+      ${metric(c('judge'), formatAction(_current.recommended_action || '-').toUpperCase(), 'positive')}
       ${metric('Confidence', pct(_current.judge_confidence || 0))}
       ${metric('Dispute', pct(_current.dispute_score || 0), 'risk')}
       ${metric('Edge', num(_current.expected_edge || 0), 'positive')}
-      ${metric('Factors', _current.factor_count || 0)}
+      ${metric(c('factorCount'), _current.factor_count || 0)}
+      ${metric(c('roundsCount'), rounds.length || 0)}
       ${metric(c('humanReview'), _current.requires_human_review ? c('yes') : c('no'), _current.requires_human_review ? 'risk' : 'positive')}
     </div>
     <div class="debate-triad-grid">
@@ -355,14 +382,14 @@ function renderCurrent() {
     <section class="workbench-section">
       <div class="workbench-section__title">${c('rounds')}</div>
       <div class="workbench-list">
-        ${(_current.turns || []).map((turn) => `
+        ${rounds.map((turn) => `
           <article class="workbench-item">
             <div class="workbench-item__head">
               <strong>${c('roundPrefix')} ${esc(turn.round_number)}</strong>
               <span>${esc(num(turn.confidence_shift))}</span>
             </div>
-            <p><strong>${c('bullLabel')}</strong> ${esc(turn.bull_point)}</p>
-            <p><strong>${c('bearLabel')}</strong> ${esc(turn.bear_point)}</p>
+            <p><strong>${c('bullLabel')}：</strong>${esc(turn.bull_point)}</p>
+            <p><strong>${c('bearLabel')}：</strong>${esc(turn.bear_point)}</p>
             <div class="token-preview token-preview--dense">
               ${(turn.evidence_focus || []).map((item) => `<span class="token-chip token-chip--neutral">${esc(item)}</span>`).join('')}
             </div>
@@ -380,8 +407,38 @@ function renderCurrent() {
       <section class="workbench-section">
         <div class="workbench-section__title">${c('consensus')}</div>
         <div class="factor-checklist">
-          ${(_current.consensus_points || []).map((item) => `<div class="factor-check-row"><span>${esc(item)}</span><strong class="is-pass">${c('linked')}</strong></div>`).join('')}
+          ${(_current.consensus_points || []).map((item) => `<div class="factor-check-row"><span>${esc(item)}</span><strong class="is-pass">${c('linked')}</strong></div>`).join('') || `<div class="factor-check-row"><span>-</span><strong class="is-pass">${c('linked')}</strong></div>`}
         </div>
       </section>
-    </div>`;
+    </div>
+    <section class="workbench-section">
+      <div class="workbench-section__title">${c('handoff')}</div>
+      <div class="workbench-report-text">${c('handoffHint')}</div>
+      <div class="workbench-link-list">
+        <button class="workbench-link-row" id="link-debate-risk"><strong>${c('openRisk')}</strong><span>${t('Send this verdict into risk approval and single-name caps.', '把当前 verdict 送入风控审批与单票上限。')}</span></button>
+        <button class="workbench-link-row" id="link-debate-ops"><strong>${c('openOps')}</strong><span>${t('Review schedule, watchlist, alerts, and paper auto-submit status.', '查看调度、自选池、告警和纸面自动下单状态。')}</span></button>
+        <button class="workbench-link-row" id="link-debate-sim"><strong>${c('openSimulation')}</strong><span>${t('Replay the current thesis in scenario simulation.', '在情景模拟中回放当前判断。')}</span></button>
+        <button class="workbench-link-row" id="link-debate-outcome"><strong>${c('openOutcome')}</strong><span>${t('Keep the judge verdict in the outcome and review loop.', '把裁判结论送入结果追踪与复盘闭环。')}</span></button>
+      </div>
+    </section>`;
+
+  host.querySelector('#link-debate-risk')?.addEventListener('click', () => router.navigate('/risk-board'));
+  host.querySelector('#link-debate-ops')?.addEventListener('click', () => router.navigate('/trading-ops'));
+  host.querySelector('#link-debate-sim')?.addEventListener('click', () => router.navigate('/simulation'));
+  host.querySelector('#link-debate-outcome')?.addEventListener('click', () => router.navigate('/outcome-center'));
+}
+
+function formatAction(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const map = {
+    long: t('Long', '看多'),
+    short: t('Short', '看空'),
+    neutral: t('Neutral', '中性'),
+    block: t('Block', '阻止'),
+    approve: t('Approve', '批准'),
+    reduce: t('Reduce', '缩减'),
+    reject: t('Reject', '拒绝'),
+    halt: t('Halt', '暂停'),
+  };
+  return map[normalized] || String(value || '-');
 }

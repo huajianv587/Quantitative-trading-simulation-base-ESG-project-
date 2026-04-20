@@ -16,7 +16,6 @@ import {
   renderTokenPreview,
   setLoading,
   splitTokens,
-  statusBadge,
 } from './workbench-utils.js?v=8';
 
 let _container = null;
@@ -30,7 +29,7 @@ let _latest = {
 const COPY = {
   en: {
     title: 'Decision Cockpit',
-    subtitle: 'Evidence chain, critic checks, risk triggers, and shadow-mode decisions',
+    subtitle: 'Evidence chain, critic checks, risk triggers, and shadow-mode decisions.',
     refresh: 'Refresh',
     setupTitle: 'Shadow Decision Setup',
     setupSub: 'Research support only. Broker execution remains gated elsewhere.',
@@ -67,10 +66,10 @@ const COPY = {
   },
   zh: {
     title: '智能决策驾驶舱',
-    subtitle: '证据链、反方检验、风险触发与影子模式决策',
+    subtitle: '证据链、反方检验、风险触发与影子模式决策。',
     refresh: '刷新',
     setupTitle: '影子决策设置',
-    setupSub: '仅用于研究支持，实盘执行仍由执行层门控。',
+    setupSub: '仅用于研究支持，券商执行仍在其他层级受控。',
     symbol: '股票代码',
     horizon: '预测天数',
     universe: '股票池',
@@ -82,7 +81,7 @@ const COPY = {
     openSimulation: '打开情景模拟',
     decisionSummary: '决策报告',
     decisionEmpty: '暂无决策报告',
-    decisionHint: '点击解释决策，生成带证据链的建议。',
+    decisionHint: '点击“解释决策”，生成带证据链的判断。',
     evidence: '证据流',
     counter: '反方证据',
     audit: '审计追踪',
@@ -93,7 +92,7 @@ const COPY = {
     auditLoading: '正在加载审计追踪...',
     noCounter: '最新报告中暂无反方证据。',
     noAudit: '暂无审计记录',
-    noAuditHint: '生成一次决策报告后会进入影子日志。',
+    noAuditHint: '生成一次决策报告后，影子日志会从这里开始。',
     ready: '影子模式',
     dataMode: '数据模式',
     freeProviders: '免费数据源',
@@ -160,6 +159,7 @@ function actionLabel(value) {
     running: t('running', '运行中'),
     pending: t('pending', '待处理'),
     recorded: t('recorded', '已记录'),
+    shadow: t('shadow', '影子'),
   };
   return map[normalized] || String(value || '-');
 }
@@ -395,7 +395,7 @@ function renderCached(container) {
 
 function renderDecision(container, report) {
   const status = container.querySelector('#decision-status');
-  if (status) status.textContent = `${report.symbol || ''} / ${report.action || ''}`;
+  if (status) status.textContent = `${report.symbol || ''} / ${actionLabel(report.action || report.mode || 'shadow')}`;
   const verifier = report.verifier_checks || {};
   const triggers = (report.risk_triggers || []).length
     ? (report.risk_triggers || []).map((item) => `<li>${esc(item)}</li>`).join('')
@@ -424,7 +424,7 @@ function renderDecision(container, report) {
     <div class="workbench-kv-list compact-kv-list">
       <div class="workbench-kv-row"><span>${t('Confidence Interval', '置信区间')}</span><strong>${pct(interval.lower)} / ${pct(interval.center)} / ${pct(interval.upper)}</strong></div>
       <div class="workbench-kv-row"><span>${t('Verifier', '验证器')}</span><strong>${esc(actionLabel(verifier.verdict || 'review'))} / ${t('leakage', '泄漏')} ${boolLabel(!!verifier.leakage_pass)}</strong></div>
-      <div class="workbench-kv-row"><span>${t('Execution Guard', '执行门控')}</span><strong>${esc(verifier.execution_guard || t('shadow_only_no_order_created', '仅影子模式，不创建订单'))}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Execution Guard', '执行门禁')}</span><strong>${esc(verifier.execution_guard || t('shadow only', '仅影子模式'))}</strong></div>
       <div class="workbench-kv-row"><span>${t('Evidence Quality', '证据质量')}</span><strong>${num(verifier.as_of_safe_ratio)}</strong></div>
     </div>
     <div class="workbench-section">
@@ -545,7 +545,7 @@ function renderDecisionReadyState() {
       <div class="factor-checklist">
         <div class="factor-check-row"><span>${t('Scan source-linked evidence', '扫描带来源证据')}</span><strong>${t('next', '下一步')}</strong></div>
         <div class="factor-check-row"><span>${t('Generate factor and risk explanation', '生成因子与风险解释')}</span><strong>${t('ready', '就绪')}</strong></div>
-        <div class="factor-check-row"><span>${t('No broker execution from this page', '本页不触发券商执行')}</span><strong class="is-pass">${t('pass', '通过')}</strong></div>
+        <div class="factor-check-row"><span>${t('No broker execution from this page', '本页不会触发券商执行')}</span><strong class="is-pass">${t('pass', '通过')}</strong></div>
       </div>
     </div>`;
 }
@@ -589,7 +589,7 @@ function renderConnectedActions() {
     <div class="workbench-section connected-actions">
       <div class="workbench-section__title">${t('Connected Actions', '关联动作')}</div>
       <div class="factor-checklist">
-        <div class="factor-check-row"><span>${t('Promote validated factors in Factor Lab', '在因子实验室升格通过门禁的因子')}</span><strong>${t('research', '研究')}</strong></div>
+        <div class="factor-check-row"><span>${t('Promote validated factors in Factor Lab', '在因子实验室升级通过门禁的因子')}</span><strong>${t('research', '研究')}</strong></div>
         <div class="factor-check-row"><span>${t('Replay the current thesis in Simulation', '在模拟工作台回放当前判断')}</span><strong>${t('what-if', '推演')}</strong></div>
         <div class="factor-check-row"><span>${t('Keep every recommendation in shadow log', '所有建议进入影子日志')}</span><strong class="is-pass">${t('on', '开启')}</strong></div>
       </div>

@@ -31,7 +31,7 @@ const COPY = {
   },
   zh: {
     title: '智能体实验室',
-    subtitle: '一键影子工作流：扫描证据、发现因子、解释决策、模拟风险并追踪结果。',
+    subtitle: '一键影子工作流：扫描证据、发现因子、解释决策、模拟风险，并追踪结果。',
     run: '运行影子工作流',
     reset: '重置',
     symbol: '股票',
@@ -45,14 +45,24 @@ const COPY = {
   },
 };
 
-const WORKFLOW_PREVIEW = [
-  ['Live scan', 'Free-tier source sweep'],
-  ['Evidence QA', 'Dedup, freshness, source quality'],
-  ['Factor discovery', 'IC / RankIC candidate gates'],
-  ['Decision explain', 'Evidence, risks, counter evidence'],
-  ['Simulation', 'Monte Carlo and stress replay'],
-  ['Outcome shadow log', 'Post-decision tracking'],
-];
+const WORKFLOW_PREVIEW = {
+  en: [
+    ['Live scan', 'Free-tier source sweep'],
+    ['Evidence QA', 'Dedup, freshness, source quality'],
+    ['Factor discovery', 'IC / RankIC candidate gates'],
+    ['Decision explain', 'Evidence, risks, counter evidence'],
+    ['Simulation', 'Monte Carlo and stress replay'],
+    ['Outcome shadow log', 'Post-decision tracking'],
+  ],
+  zh: [
+    ['实时扫描', '免费数据源快速扫描'],
+    ['证据质检', '去重、新鲜度与来源质量'],
+    ['因子发现', 'IC / RankIC 候选门禁'],
+    ['决策解释', '证据、风险与反方观点'],
+    ['情景模拟', 'Monte Carlo 与压力回放'],
+    ['结果影子日志', '决策后的结果追踪'],
+  ],
+};
 
 function c(key) {
   const lang = getLang() === 'zh' ? 'zh' : 'en';
@@ -75,16 +85,7 @@ function actionLabel(value) {
 }
 
 function workflowPreview() {
-  return getLang() === 'zh'
-    ? [
-      ['实时扫描', '免费数据源快速扫描'],
-      ['证据质检', '去重、新鲜度与来源质量'],
-      ['因子发现', 'IC / RankIC 候选门禁'],
-      ['决策解释', '证据、风险与反方观点'],
-      ['情景模拟', 'Monte Carlo 与压力回放'],
-      ['结果影子日志', '决策后的结果追踪'],
-    ]
-    : WORKFLOW_PREVIEW;
+  return getLang() === 'zh' ? WORKFLOW_PREVIEW.zh : WORKFLOW_PREVIEW.en;
 }
 
 export function render(container) {
@@ -209,7 +210,7 @@ function renderTimelinePreview() {
         ${preview.map(([step, detail]) => `<div class="preview-step"><span>${esc(step)} | ${esc(detail)}</span><strong>${t('queued', '排队中')}</strong></div>`).join('')}
       </div>
       <div class="workbench-section">
-        <div class="workbench-section__title">${t('Workflow Guarantees', '工作流保证')}</div>
+        <div class="workbench-section__title">${t('Workflow Guarantees', '工作流保障')}</div>
         <div class="factor-checklist">
           <div class="factor-check-row"><span>${t('Provider failures stay isolated', '单个数据源失败不会拖垮整条链路')}</span><strong class="is-pass">${t('yes', '是')}</strong></div>
           <div class="factor-check-row"><span>${t('Broker execution remains blocked', '券商执行保持阻止')}</span><strong class="is-pass">${t('shadow', '影子')}</strong></div>
@@ -231,7 +232,7 @@ function renderReportPreview() {
         ${metric(t('Evidence', '证据'), t('pending', '待处理'))}
         ${metric(t('Factors', '因子'), t('pending', '待处理'))}
         ${metric(t('Decision', '决策'), t('shadow', '影子'))}
-        ${metric(t('Outcome', '结果'), t('tracked', '已跟踪'))}
+        ${metric(t('Outcome', '结果'), t('tracked', '已追踪'))}
       </div>
       <div class="workbench-kv-list compact-kv-list">
         <div class="workbench-kv-row"><span>${t('Run bundle', '运行包')}</span><strong>${t('not started', '未开始')}</strong></div>
@@ -374,7 +375,7 @@ async function runWorkflow() {
         </div>
       </div>
       <div class="workbench-section">
-        <div class="workbench-section__title">${t('Workflow Guarantees', '工作流保证')}</div>
+        <div class="workbench-section__title">${t('Workflow Guarantees', '工作流保障')}</div>
         <div class="factor-checklist">
           <div class="factor-check-row"><span>${t('Evidence kept in shadow lake', '证据已保存在影子证据湖')}</span><strong class="is-pass">${t('stored', '已存储')}</strong></div>
           <div class="factor-check-row"><span>${t('Decision stayed broker-safe', '决策保持券商安全')}</span><strong class="is-pass">${t('blocked', '已阻止')}</strong></div>
@@ -392,7 +393,7 @@ async function runWorkflow() {
         </article>
         <article class="workbench-item">
           <div class="workbench-item__head"><strong>${t('Next actions', '下一步动作')}</strong>${statusBadge('research_only')}</div>
-          <p>${t('Promote validated factors, replay the thesis in Simulation, and keep every recommendation in the shadow log.', '升格已验证因子，在模拟器回放当前判断，并把所有建议保留在影子日志中。')}</p>
+          <p>${t('Promote validated factors, replay the thesis in Simulation, and keep every recommendation in the shadow log.', '升级已验证因子，在模拟器回放当前判断，并把所有建议保留在影子日志中。')}</p>
         </article>
       </div>`;
   } catch (err) {

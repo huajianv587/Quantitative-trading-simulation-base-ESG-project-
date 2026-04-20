@@ -9,11 +9,15 @@ function getTheme() {
   return localStorage.getItem('qt-theme') || 'dark';
 }
 
+function themeIcon(mode) {
+  return mode === 'light' ? '☀' : '☾';
+}
+
 function setTheme(mode) {
   localStorage.setItem('qt-theme', mode);
   document.body.classList.toggle('light', mode === 'light');
   const button = document.getElementById('theme-toggle-btn');
-  if (button) button.textContent = mode === 'light' ? '☀' : '☾';
+  if (button) button.textContent = themeIcon(mode);
 }
 
 function initTheme() {
@@ -29,7 +33,7 @@ function buildTopbarActions() {
   const theme = getTheme();
 
   actions.innerHTML = `
-    <button class="theme-toggle" id="theme-toggle-btn" title="Toggle light/dark mode">${theme === 'light' ? '☀' : '☾'}</button>
+    <button class="theme-toggle" id="theme-toggle-btn" title="Toggle light/dark mode">${themeIcon(theme)}</button>
     <div class="topbar-lang-toggle" data-no-autotranslate="true" translate="no">
       <button class="lang-btn${lang === 'zh' ? ' active' : ''}" id="tb-lang-zh" data-lang="zh" data-no-autotranslate="true" translate="no">中</button>
       <button class="lang-btn${lang === 'en' ? ' active' : ''}" id="tb-lang-en" data-lang="en" data-no-autotranslate="true" translate="no">EN</button>

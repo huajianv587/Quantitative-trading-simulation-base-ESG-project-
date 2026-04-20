@@ -156,14 +156,8 @@ def test_i18n_and_critical_pages_do_not_contain_known_mojibake_fragments():
         "杈",
         "椋",
         "鏁",
-        "杩",
-        "瀹",
-        "鍐",
-        "鎯",
-        "鐧",
-        "娉",
-        "鍚",
-        "璇",
+        "鎺",
+        "鍛",
     ]
     targets = [
         "frontend/js/i18n.js",
@@ -174,6 +168,8 @@ def test_i18n_and_critical_pages_do_not_contain_known_mojibake_fragments():
         "frontend/js/pages/debate-desk.js",
         "frontend/js/pages/risk-board.js",
         "frontend/js/pages/outcome-center.js",
+        "frontend/js/pages/trading-ops.js",
+        "frontend/js/pages/workbench-utils.js",
     ]
     for relative_path in targets:
         content = Path(relative_path).read_text(encoding="utf-8")

@@ -13,6 +13,17 @@ const COPY = {
     noFactorCards: 'No factor cards',
     noSimulation: 'No simulation result',
     noSimulationHint: 'Choose a scenario and run Monte Carlo.',
+    notSet: 'Not set',
+    evidenceHint: 'Scan evidence to load source-linked items.',
+    factorHint: 'Run discovery to generate IC, RankIC, and gate results.',
+    factorReviewHint: 'Gate passed or pending review',
+    pathSummary: 'Path Summary',
+    factorAttribution: 'Factor Attribution',
+    historicalAnalogs: 'Historical Analogs',
+    expected: 'Expected',
+    lossProb: 'Loss Prob',
+    stability: 'Stability',
+    samples: 'Samples',
   },
   zh: {
     loading: '正在加载...',
@@ -25,7 +36,18 @@ const COPY = {
     noEvidence: '暂无证据',
     noFactorCards: '暂无因子卡',
     noSimulation: '暂无模拟结果',
-    noSimulationHint: '请选择场景后运行 Monte Carlo。',
+    noSimulationHint: '请选择场景后再运行 Monte Carlo。',
+    notSet: '未设置',
+    evidenceHint: '点击扫描证据即可加载带来源链路的条目。',
+    factorHint: '运行因子发现后会生成 IC、RankIC 和门禁结果。',
+    factorReviewHint: '门禁通过或待复核',
+    pathSummary: '路径分布',
+    factorAttribution: '因子归因',
+    historicalAnalogs: '历史相似事件',
+    expected: '预期收益',
+    lossProb: '亏损概率',
+    stability: '稳定性',
+    samples: '样本',
   },
 };
 
@@ -43,6 +65,18 @@ const POSITIVE_STATUSES = new Set([
   'armed',
   'protected',
   'untouched',
+  'approve',
+  'active',
+  'linked',
+  'logged',
+  'stored',
+  'clear',
+  'tracked',
+  'derived',
+  'guarded',
+  'yes',
+  'buy',
+  'long',
 ]);
 
 const NEGATIVE_STATUSES = new Set([
@@ -52,6 +86,11 @@ const NEGATIVE_STATUSES = new Set([
   'error',
   'risk',
   'blocked',
+  'reject',
+  'halt',
+  'sell',
+  'short',
+  'off',
 ]);
 
 const STATUS_COPY = {
@@ -61,7 +100,7 @@ const STATUS_COPY = {
     pass: '通过',
     safe: '安全',
     ready: '就绪',
-    filled: '已完成',
+    filled: '已填充',
     shadow: '影子',
     queued: '排队中',
     running: '运行中',
@@ -95,12 +134,19 @@ const STATUS_COPY = {
     reject: '拒绝',
     halt: '暂停',
     tagged: '已标注',
-    tracked: '已跟踪',
+    tracked: '已追踪',
     derived: '自动推导',
     masked: '已脱敏',
     off: '关闭',
     yes: '是',
     no: '否',
+    buy: '买入',
+    sell: '卖出',
+    hold: '持有',
+    long: '看多',
+    short: '看空',
+    clear: '清晰',
+    paper: '纸面',
   },
 };
 
@@ -217,7 +263,7 @@ export function renderTokenPreview(raw, options = {}) {
   const tokens = Array.isArray(raw) ? raw : splitTokens(raw, options);
   const maxItems = Number(options.maxItems || 8);
   const tone = options.tone || 'neutral';
-  const emptyLabel = options.emptyLabel || (lang() === 'zh' ? '未设置' : 'Not set');
+  const emptyLabel = options.emptyLabel || text('notSet');
   if (!tokens.length) {
     return `<div class="token-preview token-preview--empty"><span class="token-chip token-chip--muted">${esc(emptyLabel)}</span></div>`;
   }
@@ -230,13 +276,8 @@ export function renderTokenPreview(raw, options = {}) {
 }
 
 export function renderEvidenceItems(items, options = {}) {
-  const current = lang();
   const maxItems = options.maxItems || 8;
-  const noData = current === 'zh' ? text('noEvidence') : 'No evidence';
-  const hint = current === 'zh'
-    ? '点击扫描证据即可加载带来源链接的条目。'
-    : 'Scan evidence to load source-linked items.';
-  if (!items?.length) return emptyState(noData, hint);
+  if (!items?.length) return emptyState(text('noEvidence'), text('evidenceHint'));
   return `<div class="workbench-list ${options.scroll ? 'workbench-scroll-list' : ''}">
     ${items.slice(0, maxItems).map((item) => `
       <article class="workbench-item">
@@ -257,13 +298,8 @@ export function renderEvidenceItems(items, options = {}) {
 }
 
 export function renderFactorCards(cards, options = {}) {
-  const current = lang();
   const maxItems = options.maxItems || 12;
-  const noData = current === 'zh' ? text('noFactorCards') : 'No factor cards';
-  const hint = current === 'zh'
-    ? '运行因子发现后会生成 IC、RankIC 和门禁结果。'
-    : 'Run discovery to generate IC, RankIC, and gate results.';
-  if (!cards?.length) return emptyState(noData, hint);
+  if (!cards?.length) return emptyState(text('noFactorCards'), text('factorHint'));
   return `<div class="factor-card-grid ${options.compact ? 'factor-card-grid--compact' : ''}">
     ${cards.slice(0, maxItems).map((card) => `
       <article class="factor-card">
@@ -278,12 +314,12 @@ export function renderFactorCards(cards, options = {}) {
         <div class="workbench-mini-grid">
           ${miniMetric('IC', num(card.ic))}
           ${miniMetric('RankIC', num(card.rank_ic))}
-          ${miniMetric(current === 'zh' ? '稳定性' : 'Stability', num(card.stability_score))}
-          ${miniMetric(current === 'zh' ? '样本' : 'Samples', num(card.sample_count, 0))}
+          ${miniMetric(text('stability'), num(card.stability_score))}
+          ${miniMetric(text('samples'), num(card.sample_count, 0))}
         </div>
         <div class="factor-card__foot">
           <span>${esc(card.transaction_cost_sensitivity || 'cost')}</span>
-          <span>${esc((card.failure_modes || [])[0] || (current === 'zh' ? '门禁通过或待复核' : 'Gate passed or pending review'))}</span>
+          <span>${esc((card.failure_modes || [])[0] || text('factorReviewHint'))}</span>
         </div>
       </article>
     `).join('')}
@@ -291,12 +327,8 @@ export function renderFactorCards(cards, options = {}) {
 }
 
 export function renderSimulationResult(sim) {
-  const current = lang();
   if (!sim) {
-    return emptyState(
-      current === 'zh' ? text('noSimulation') : 'No simulation result',
-      current === 'zh' ? text('noSimulationHint') : 'Choose a scenario and run Monte Carlo.',
-    );
+    return emptyState(text('noSimulation'), text('noSimulationHint'));
   }
   const pathRows = Object.entries(sim.path_summary || {}).map(([key, value]) => `
     <div class="workbench-kv-row"><span>${esc(key)}</span><strong>${pct(value)}</strong></div>
@@ -317,23 +349,23 @@ export function renderSimulationResult(sim) {
 
   return `
     <div class="workbench-metric-grid">
-      ${metric(current === 'zh' ? '预期收益' : 'Expected', pct(sim.expected_return), 'positive')}
-      ${metric(current === 'zh' ? '亏损概率' : 'Loss Prob', pct(sim.probability_of_loss))}
+      ${metric(text('expected'), pct(sim.expected_return), 'positive')}
+      ${metric(text('lossProb'), pct(sim.probability_of_loss))}
       ${metric('VaR 95', pct(sim.value_at_risk_95), 'risk')}
       ${metric('MDD p95', pct(sim.max_drawdown_p95), 'risk')}
     </div>
     <div class="grid-2 workbench-two-col">
       <section class="workbench-section">
-        <div class="workbench-section__title">${current === 'zh' ? '路径分布' : 'Path Summary'}</div>
+        <div class="workbench-section__title">${text('pathSummary')}</div>
         <div class="workbench-kv-list">${pathRows || emptyState()}</div>
       </section>
       <section class="workbench-section">
-        <div class="workbench-section__title">${current === 'zh' ? '因子归因' : 'Factor Attribution'}</div>
+        <div class="workbench-section__title">${text('factorAttribution')}</div>
         <div class="workbench-kv-list">${factorRows || emptyState()}</div>
       </section>
     </div>
     <section class="workbench-section">
-      <div class="workbench-section__title">${current === 'zh' ? '历史相似事件' : 'Historical Analogs'}</div>
+      <div class="workbench-section__title">${text('historicalAnalogs')}</div>
       <div class="workbench-list">${analogs || emptyState()}</div>
     </section>
   `;
