@@ -301,6 +301,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator('#btn-debate-run')).toBeVisible();
       await page.locator('#btn-debate-run').click();
       await expect(page.locator('#debate-current')).toContainText(/Bull|Judge|Sentiment Overlay|情绪叠层/);
+      await expect(page.locator('#debate-current')).toContainText(/Risk Gate Handoff|风控移交概览/);
       await assertNoWhiteInputsInDarkMode(page, mode.theme === 'dark');
       await assertNoHorizontalOverflow(page, ['.workbench-item', '.workbench-action-btn', '.workbench-metric-card', '.workbench-kv-row']);
       await page.screenshot({ path: screenshotPath('debate-desk', viewport.name, mode.lang, mode.theme, 'after-actions'), fullPage: true });
@@ -320,6 +321,8 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator('#ops-watchlist')).toContainText('MSFT');
       await page.locator('#btn-monitor-start').click();
       await expect(page.locator('#ops-schedule')).toContainText(/websocket|stream/);
+      await expect(page.locator('#ops-schedule')).toContainText(/Execution Path|执行链路/);
+      await expect(page.locator('#ops-schedule')).toContainText(/Autopilot Preview|Autopilot 预览/);
       await page.locator('#btn-run-premarket').click();
       await page.locator('#btn-trading-cycle').click();
       await expect(page.locator('#ops-alerts')).toContainText(/MSFT|volume_spike|Debate/);

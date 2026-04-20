@@ -131,6 +131,15 @@ const COPY = {
     modeLabel: 'Mode',
     evidenceCount: 'Evidence',
     counterCount: 'Counter',
+    roundsLabel: 'Rounds',
+    nextStop: 'Next Stop',
+    executionPath: 'Execution Path',
+    debateReady: 'Debate linked',
+    riskReady: 'Risk linked',
+    paperGate: 'Paper Gate',
+    gateArmed: 'armed',
+    gateGated: 'gated',
+    blockCount: 'Hard Blocks',
   },
   zh: {
     title: '决策驾驶舱',
@@ -235,6 +244,15 @@ const COPY = {
     modeLabel: '模式',
     evidenceCount: '证据数',
     counterCount: '反方数',
+    roundsLabel: '回合数',
+    nextStop: '下一步',
+    executionPath: '执行路径',
+    debateReady: '辩论已接入',
+    riskReady: '风控已接入',
+    paperGate: '纸面门禁',
+    gateArmed: '已武装',
+    gateGated: '受控',
+    blockCount: '阻断数',
   },
 };
 
@@ -638,6 +656,8 @@ function renderDebateSummary(debate) {
     <div class="workbench-kv-list compact-kv-list">
       <div class="workbench-kv-row"><span>${c('latestDebate')}</span><strong>${esc(debate.debate_id || '-')}</strong></div>
       <div class="workbench-kv-row"><span>${c('judge')}</span><strong>${actionLabel(debate.judge_verdict || debate.recommended_action)}</strong></div>
+      <div class="workbench-kv-row"><span>${c('roundsLabel')}</span><strong>${esc((debate.turns || []).length || 0)}</strong></div>
+      <div class="workbench-kv-row"><span>${c('nextStop')}</span><strong>${c('bridgeRisk')}</strong></div>
       <div class="workbench-kv-row"><span>${c('bullLabel')}</span><strong>${esc((debate.bull_thesis || '-').slice(0, 44))}</strong></div>
       <div class="workbench-kv-row"><span>${c('bearLabel')}</span><strong>${esc((debate.bear_thesis || '-').slice(0, 44))}</strong></div>
     </div>
@@ -662,8 +682,14 @@ function renderRiskSummary(approval) {
     <div class="workbench-kv-list compact-kv-list">
       <div class="workbench-kv-row"><span>${c('latestRisk')}</span><strong>${esc(approval.approval_id || '-')}</strong></div>
       <div class="workbench-kv-row"><span>${c('action')}</span><strong>${actionLabel(approval.approved_action || approval.requested_action)}</strong></div>
-      <div class="workbench-kv-row"><span>${c('hardBlock')}</span><strong>${blocks.length ? blocks.length : c('no')}</strong></div>
+      <div class="workbench-kv-row"><span>${c('blockCount')}</span><strong>${blocks.length}</strong></div>
+      <div class="workbench-kv-row"><span>${c('paperGate')}</span><strong>${approval.verdict === 'approve' ? c('gateArmed') : c('gateGated')}</strong></div>
       <div class="workbench-kv-row"><span>${c('notional')}</span><strong>${esc(approval.recommended_notional ?? '-')}</strong></div>
+    </div>
+    <div class="factor-checklist">
+      ${(blocks.length ? blocks.slice(0, 3) : [c('hardBlock')]).map((item) => `
+        <div class="factor-check-row"><span>${esc(item)}</span><strong class="${blocks.length ? 'is-watch' : 'is-pass'}">${blocks.length ? c('hardBlock') : c('no')}</strong></div>
+      `).join('')}
     </div>
   `;
 }
@@ -739,6 +765,9 @@ function renderWorkbenchLinks() {
 }
 
 function renderConnectedActions() {
+  const debateReady = Boolean(_latest.debate);
+  const riskReady = Boolean(_latest.risk);
+  const paperReady = _latest.risk?.verdict === 'approve';
   return `
     <section class="workbench-section">
       <div class="workbench-section__title">${c('nextActions')}</div>
@@ -749,6 +778,15 @@ function renderConnectedActions() {
         <div class="factor-check-row"><span>${c('actionPaper')}</span><strong class="is-pass">${c('paperModeValue')}</strong></div>
       </div>
       <div class="workbench-report-text" style="margin-top:10px">${c('workbenchHint')}</div>
+    </section>
+    <section class="workbench-section">
+      <div class="workbench-section__title">${c('executionPath')}</div>
+      <div class="factor-checklist">
+        <div class="factor-check-row"><span>${c('actionScan')}</span><strong class="is-pass">${c('ready')}</strong></div>
+        <div class="factor-check-row"><span>${c('debate')}</span><strong class="${debateReady ? 'is-pass' : 'is-watch'}">${debateReady ? c('debateReady') : c('bridgeDebate')}</strong></div>
+        <div class="factor-check-row"><span>${c('risk')}</span><strong class="${riskReady ? 'is-pass' : 'is-watch'}">${riskReady ? c('riskReady') : c('bridgeRisk')}</strong></div>
+        <div class="factor-check-row"><span>${c('paperGate')}</span><strong class="${paperReady ? 'is-pass' : 'is-watch'}">${paperReady ? c('gateArmed') : c('gateGated')}</strong></div>
+      </div>
     </section>
   `;
 }

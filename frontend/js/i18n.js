@@ -202,7 +202,7 @@ const STRINGS = {
     'common.backend_online': '后端已连接',
     'common.features_limited': '部分功能可能暂时不可用',
     'common.no_data': '暂无数据',
-    'common.market_open': '市场开盘',
+    'common.market_open': '市场开市',
     'common.market_closed': '市场休市',
     'common.page_failed_load': '页面加载失败',
     'common.page_failed_retry': '请刷新页面后重试。',
@@ -263,7 +263,7 @@ const AUTO_TEXT_ZH = {
 };
 
 const AUTO_PLACEHOLDER_ZH = {
-  'optional decision id': '可选决策 ID',
+  'optional decision id': '可选 decision id',
   'marketaux, local_esg': 'marketaux, local_esg',
   AAPL: 'AAPL',
 };

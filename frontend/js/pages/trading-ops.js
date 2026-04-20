@@ -59,11 +59,19 @@ const COPY = {
     latestRun: 'Latest Run',
     notifier: 'Notifier',
     monitorHealth: 'Monitor Health',
+    watchCount: 'Watchlist Count',
     alertCount: 'Alerts',
     latestReviewCount: 'Latest Review',
+    pnl: 'PnL',
+    trades: 'Trades',
+    approved: 'Approved',
+    blocked: 'Blocked',
     executionPath: 'Execution Path',
     pathHint: 'Every automatic paper submission still passes through debate and risk approval.',
     autoplay: 'Autopilot Preview',
+    systemState: 'System State',
+    strategyMix: 'Strategy Mix',
+    approvalLedger: 'Approval Ledger',
     budgetCap: 'Daily Budget Cap',
     tradeCap: 'Per-Trade Cap',
     maxWeight: 'Max Symbol Weight',
@@ -134,11 +142,19 @@ const COPY = {
     latestRun: '最近运行',
     notifier: '通知器',
     monitorHealth: '监控健康',
+    watchCount: '观察池数量',
     alertCount: '告警数',
     latestReviewCount: '复盘状态',
+    pnl: '盈亏',
+    trades: '成交笔数',
+    approved: '已批准',
+    blocked: '已阻断',
     executionPath: '执行链路',
     pathHint: '任何自动纸面提交都仍需经过 Debate 与 Risk Manager 双重审批。',
     autoplay: 'Autopilot 预览',
+    systemState: '系统状态',
+    strategyMix: '策略组合',
+    approvalLedger: '审批台账',
     budgetCap: '每日预算上限',
     tradeCap: '单笔上限',
     maxWeight: '单票权重上限',
@@ -384,6 +400,7 @@ function renderSnapshot() {
     ${metric(c('paperMode'), monitor.mode || c('paper'), 'positive')}
     ${metric(c('nextJob'), nextJob?.job_name || '-', nextJob ? '' : 'risk')}
     ${metric(c('monitorHealth'), monitor.running ? onOff(true) : onOff(false), monitor.running ? 'positive' : 'risk')}
+    ${metric(c('watchCount'), watchlist.length || 0, watchlist.length ? 'positive' : 'risk')}
     ${metric(c('alertCount'), alerts.length, alerts.length ? 'risk' : 'positive')}
     ${metric(c('latestReviewCount'), review ? c('clear') : c('degradeReview'), review ? 'positive' : 'risk')}
     ${metric(c('budgetGate'), verdictLabel(latestApproval?.verdict || 'review'), paperArmed ? 'positive' : 'risk')}
@@ -424,12 +441,19 @@ function renderSnapshot() {
         <div class="workbench-kv-row"><span>${c('dailyLoss')}</span><strong>-2.50%</strong></div>
         <div class="workbench-kv-row"><span>${c('drawdown')}</span><strong>-6.00%</strong></div>
         <div class="workbench-kv-row"><span>${c('ttl')}</span><strong>${latestApproval?.signal_ttl_minutes || 180}m</strong></div>
+        <div class="workbench-kv-row"><span>${c('strategyMix')}</span><strong>multi-factor / debate / ESG overlay</strong></div>
+        <div class="workbench-kv-row"><span>${c('approvalLedger')}</span><strong>${latestApproval?.approval_id || '-'}</strong></div>
       </div>
+    </section>
+    <section class="workbench-section">
+      <div class="workbench-section__title">${c('systemState')}</div>
       <div class="factor-checklist">
         ${guardRow(c('degradeBroker'), monitor.mode === 'paper' ? 'is-pass' : 'is-watch', monitor.mode === 'paper' ? verdictLabel('configured') : c('degradeBroker'))}
         ${guardRow(c('degradeMonitor'), monitor.running ? 'is-pass' : 'is-watch', monitor.running ? onOff(true) : onOff(false))}
         ${guardRow(c('degradeSchedule'), jobs.length ? 'is-pass' : 'is-watch', jobs.length ? jobs[0].schedule : c('degradeSchedule'))}
         ${guardRow(c('degradeReview'), review ? 'is-pass' : 'is-watch', review ? c('clear') : c('degradeReview'))}
+        ${guardRow(c('notifier'), notifier.telegram_configured ? 'is-pass' : 'is-watch', notifier.telegram_configured ? 'telegram' : c('uiOnly'))}
+        ${guardRow(c('degradeFallback'), _snapshot.degraded ? 'is-watch' : 'is-pass', _snapshot.degraded ? c('degradeFallback') : c('clear'))}
       </div>
     </section>
   `;
@@ -484,10 +508,10 @@ function renderSnapshot() {
 
   _container.querySelector('#ops-review').innerHTML = review ? `
     <div class="workbench-metric-grid">
-      ${metric('PnL', esc(review.pnl ?? '-'), Number(review.pnl || 0) >= 0 ? 'positive' : 'risk')}
-      ${metric('Trades', review.trades_count || 0)}
-      ${metric('Approved', review.approved_decisions || 0, 'positive')}
-      ${metric('Blocked', review.blocked_decisions || 0, 'risk')}
+      ${metric(c('pnl'), esc(review.pnl ?? '-'), Number(review.pnl || 0) >= 0 ? 'positive' : 'risk')}
+      ${metric(c('trades'), review.trades_count || 0)}
+      ${metric(c('approved'), review.approved_decisions || 0, 'positive')}
+      ${metric(c('blocked'), review.blocked_decisions || 0, 'risk')}
     </div>
     <div class="workbench-report-text">${esc(review.report_text || '')}</div>
     <div class="factor-checklist">

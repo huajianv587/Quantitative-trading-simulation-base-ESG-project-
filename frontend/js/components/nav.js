@@ -95,6 +95,13 @@ function groupStatus(group) {
   return statusMap[group.statusKey] || `${count}`;
 }
 
+function groupChildCount(group) {
+  return group.paths.filter((path) => {
+    const config = routeMeta(path);
+    return config && !config.hidden;
+  }).length;
+}
+
 function normalizeGroupState(currentPath) {
   const stored = getStoredGroups();
   const state = {};
@@ -108,23 +115,25 @@ function normalizeGroupState(currentPath) {
 function renderGroup(group, currentPath, openState) {
   const isOpen = openState[group.id];
   const hasActive = group.paths.includes(currentPath);
+  const bodyId = `nav-group-body-${group.id}`;
   const children = group.paths
     .map((path) => ({ path, config: routeMeta(path) }))
     .filter(({ config }) => config && !config.hidden);
 
   return `
     <section class="nav-group ${isOpen ? 'is-open' : ''} ${hasActive ? 'has-active' : ''}" data-group-id="${group.id}">
-      <button class="nav-group__trigger" type="button" data-group-trigger="${group.id}" aria-expanded="${isOpen ? 'true' : 'false'}">
+      <button class="nav-group__trigger" type="button" data-group-trigger="${group.id}" aria-expanded="${isOpen ? 'true' : 'false'}" aria-controls="${bodyId}">
         <span class="nav-group__copy">
           <span class="nav-group__label">${t(group.labelKey)}</span>
           <span class="nav-group__summary">${t(`${group.labelKey}_summary`)}</span>
         </span>
         <span class="nav-group__meta">
           <span class="nav-group__status">${groupStatus(group)}</span>
+          <span class="nav-group__count">${groupChildCount(group)}</span>
           ${chevron()}
         </span>
       </button>
-      <div class="nav-group__body">
+      <div class="nav-group__body" id="${bodyId}">
         ${children.map(({ path, config }) => `
           <a class="nav-item ${path === currentPath ? 'active' : ''}" href="#${path}" data-path="${path}">
             ${icon(config.icon)}

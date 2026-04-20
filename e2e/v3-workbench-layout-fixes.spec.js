@@ -318,6 +318,12 @@ for (const viewport of VIEWPORTS) {
 
       await page.goto('/app/#/connector-center', { waitUntil: 'domcontentloaded' });
       await expect(page.locator('#btn-connector-health')).toBeVisible();
+      if (isDesktop) {
+        await expect(page.locator('[data-group-id="market_intel"]')).toHaveClass(/is-open/);
+        await page.locator('[data-group-trigger="decision_hub"]').click();
+        await expect(page.locator('[data-group-id="decision_hub"]')).toHaveClass(/is-open/);
+        await expect(page.locator('[data-group-id="decision_hub"] .nav-item[href="#/debate-desk"]')).toBeVisible();
+      }
       await assertNoWhiteInputsInDarkMode(page, isDark);
       await page.locator('#btn-connector-health').click();
       await page.locator('#btn-connector-test').click();

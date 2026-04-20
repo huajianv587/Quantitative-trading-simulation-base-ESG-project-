@@ -81,6 +81,14 @@ const COPY = {
     opsHint: 'Inspect paper mode, schedule, alerts, and latest review.',
     simulationHint: 'Replay the active thesis with shocks and Monte Carlo.',
     outcomeHint: 'Track outcome rows, calibration, and post-trade review.',
+    handoffGate: 'Risk Gate Handoff',
+    nextStop: 'Next Stop',
+    paperGate: 'Paper Gate',
+    gateReady: 'ready for risk',
+    gateReview: 'hold for review',
+    gatePaper: 'paper eligible',
+    gatePaperBlocked: 'paper gated',
+    turnsLogged: 'Turns Logged',
   },
   zh: {
     title: '辩论台',
@@ -142,6 +150,14 @@ const COPY = {
     opsHint: '查看纸面模式、调度、告警与最新复盘。',
     simulationHint: '用冲击和 Monte Carlo 回放当前论点。',
     outcomeHint: '查看结果记录、校准摘要与事后复盘。',
+    handoffGate: '风控移交概览',
+    nextStop: '下一步',
+    paperGate: '纸面门禁',
+    gateReady: '可送风控',
+    gateReview: '等待复核',
+    gatePaper: '可纸面提交',
+    gatePaperBlocked: '纸面受阻',
+    turnsLogged: '已记回合',
   },
 };
 
@@ -380,6 +396,9 @@ function renderCurrent() {
   const consensusRows = Array.isArray(_current.consensus_points) ? _current.consensus_points : [];
   const sentiment = _current.sentiment_overview || {};
   const sourceMix = Object.entries(sentiment.source_mix || {});
+  const recommendedAction = _current.recommended_action || _current.judge_verdict;
+  const riskReady = !_current.requires_human_review && !['block', 'neutral'].includes(String(recommendedAction || '').toLowerCase());
+  const paperReady = riskReady && Number(_current.dispute_score || 0) < 0.68;
 
   host.innerHTML = `
     <div class="workbench-metric-grid">
@@ -458,6 +477,21 @@ function renderCurrent() {
         ${bridgeCard('ops', c('openOps'), c('opsHint'))}
         ${bridgeCard('simulation', c('openSimulation'), c('simulationHint'))}
         ${bridgeCard('outcome', c('openOutcome'), c('outcomeHint'))}
+      </div>
+    </section>
+
+    <section class="workbench-section">
+      <div class="workbench-section__title">${c('handoffGate')}</div>
+      <div class="workbench-kv-list compact-kv-list">
+        <div class="workbench-kv-row"><span>${c('nextStop')}</span><strong>${c('openRisk')}</strong></div>
+        <div class="workbench-kv-row"><span>${c('paperGate')}</span><strong>${paperReady ? c('gatePaper') : c('gatePaperBlocked')}</strong></div>
+        <div class="workbench-kv-row"><span>${c('review')}</span><strong>${_current.requires_human_review ? c('reviewYes') : c('reviewNo')}</strong></div>
+        <div class="workbench-kv-row"><span>${c('turnsLogged')}</span><strong>${turns.length}</strong></div>
+      </div>
+      <div class="factor-checklist">
+        <div class="factor-check-row"><span>${c('verdict')}</span><strong class="${riskReady ? 'is-pass' : 'is-watch'}">${actionLabel(recommendedAction)}</strong></div>
+        <div class="factor-check-row"><span>${c('dispute')}</span><strong class="${Number(_current.dispute_score || 0) > 0.35 ? 'is-watch' : 'is-pass'}">${num(_current.dispute_score || 0)}</strong></div>
+        <div class="factor-check-row"><span>${c('handoffGate')}</span><strong class="${riskReady ? 'is-pass' : 'is-watch'}">${riskReady ? c('gateReady') : c('gateReview')}</strong></div>
       </div>
     </section>
   `;

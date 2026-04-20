@@ -81,7 +81,7 @@ const STATUS_COPY = {
     active: '活跃',
     forming: '形成中',
     waiting: '等待中',
-    clean: '干净',
+    clean: '清晰',
     flagged: '已标记',
     stored: '已存储',
     guarded: '已防护',
@@ -107,6 +107,9 @@ const STATUS_COPY = {
     paper: '纸面',
     enabled: '已启用',
     disabled: '已停用',
+    review_only: '仅复核',
+    idle: '空闲',
+    submitted: '已提交',
   },
 };
 
@@ -137,6 +140,7 @@ const POSITIVE_STATUSES = new Set([
   'buy',
   'long',
   'enabled',
+  'submitted',
 ]);
 
 const NEGATIVE_STATUSES = new Set([
@@ -318,59 +322,57 @@ export function renderFactorCards(cards, options = {}) {
           ${miniMetric('IC', num(card.ic))}
           ${miniMetric('RankIC', num(card.rank_ic))}
           ${miniMetric(text('stability'), num(card.stability_score))}
-          ${miniMetric(text('samples'), num(card.sample_count, 0))}
+          ${miniMetric(text('samples'), card.sample_count ?? '-')}
         </div>
-        <div class="factor-card__foot">
-          <span>${esc(card.transaction_cost_sensitivity || 'cost')}</span>
-          <span>${esc((card.failure_modes || [])[0] || text('factorReviewHint'))}</span>
-        </div>
+        <div class="factor-card__meta">${esc(card.gate_summary || text('factorReviewHint'))}</div>
       </article>
     `).join('')}
   </div>`;
 }
 
-export function renderSimulationResult(sim) {
-  if (!sim) {
-    return emptyState(text('noSimulation'), text('noSimulationHint'));
-  }
-
-  const pathRows = Object.entries(sim.path_summary || {}).map(([key, value]) => `
-    <div class="workbench-kv-row"><span>${esc(key)}</span><strong>${pct(value)}</strong></div>
-  `).join('');
-  const factorRows = Object.entries(sim.factor_attribution || {}).map(([key, value]) => `
-    <div class="workbench-kv-row"><span>${esc(key)}</span><strong>${num(value)}</strong></div>
-  `).join('');
-  const analogs = (sim.historical_analogs || []).slice(0, 5).map((item) => `
-    <article class="workbench-item">
-      <div class="workbench-item__head">
-        <strong>${esc(item.title || item.event_type || '')}</strong>
-        ${badge(item.symbol || sim.scenario?.symbol || '', 'neutral')}
-      </div>
-      <p>${esc(item.reason || '')}</p>
-      <div class="workbench-item__meta"><span>${esc(item.event_type || '')}</span><span>q=${num(item.quality_score)}</span></div>
-    </article>
-  `).join('');
-
+export function renderSimulationResult(result) {
+  if (!result) return emptyState(text('noSimulation'), text('noSimulationHint'));
   return `
-    <div class="workbench-metric-grid">
-      ${metric(text('expected'), pct(sim.expected_return), 'positive')}
-      ${metric(text('lossProb'), pct(sim.probability_of_loss))}
-      ${metric('VaR 95', pct(sim.value_at_risk_95), 'risk')}
-      ${metric('MDD p95', pct(sim.max_drawdown_p95), 'risk')}
+    <div class="simulation-kpi-grid">
+      ${metric(text('expected'), pct(result.expected_return || 0), 'positive')}
+      ${metric(text('lossProb'), pct(result.loss_probability || 0), result.loss_probability > 0.4 ? 'risk' : '')}
+      ${metric(text('stability'), num(result.stability_score || 0))}
+      ${metric(text('samples'), result.path_count || 0)}
     </div>
-    <div class="grid-2 workbench-two-col">
-      <section class="workbench-section">
-        <div class="workbench-section__title">${text('pathSummary')}</div>
-        <div class="workbench-kv-list">${pathRows || emptyState()}</div>
-      </section>
-      <section class="workbench-section">
-        <div class="workbench-section__title">${text('factorAttribution')}</div>
-        <div class="workbench-kv-list">${factorRows || emptyState()}</div>
-      </section>
+    <div class="simulation-grid">
+      <article class="card">
+        <div class="card-header"><span class="card-title">${text('pathSummary')}</span></div>
+        <div class="card-body">
+          ${(result.path_summary || []).map((row) => `
+            <div class="factor-check-row">
+              <span>${esc(row.label)}</span>
+              <strong>${esc(row.value)}</strong>
+            </div>
+          `).join('') || emptyState(text('pathSummary'))}
+        </div>
+      </article>
+      <article class="card">
+        <div class="card-header"><span class="card-title">${text('factorAttribution')}</span></div>
+        <div class="card-body">
+          ${(result.factor_attribution || []).map((row) => `
+            <div class="factor-check-row">
+              <span>${esc(row.factor)}</span>
+              <strong>${esc(row.contribution)}</strong>
+            </div>
+          `).join('') || emptyState(text('factorAttribution'))}
+        </div>
+      </article>
+      <article class="card">
+        <div class="card-header"><span class="card-title">${text('historicalAnalogs')}</span></div>
+        <div class="card-body">
+          ${(result.historical_analogs || []).map((row) => `
+            <div class="factor-check-row">
+              <span>${esc(row.label)}</span>
+              <strong>${esc(row.score)}</strong>
+            </div>
+          `).join('') || emptyState(text('historicalAnalogs'))}
+        </div>
+      </article>
     </div>
-    <section class="workbench-section">
-      <div class="workbench-section__title">${text('historicalAnalogs')}</div>
-      <div class="workbench-list">${analogs || emptyState()}</div>
-    </section>
   `;
 }
