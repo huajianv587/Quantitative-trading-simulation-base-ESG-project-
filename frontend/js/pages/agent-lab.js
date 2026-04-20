@@ -59,6 +59,34 @@ function c(key) {
   return COPY[lang][key] || COPY.en[key] || key;
 }
 
+function t(en, zh) {
+  return getLang() === 'zh' ? zh : en;
+}
+
+function actionLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const map = {
+    hold: t('hold', '持有'),
+    long: t('long', '看多'),
+    short: t('short', '看空'),
+    neutral: t('neutral', '中性'),
+  };
+  return map[normalized] || String(value || '-');
+}
+
+function workflowPreview() {
+  return getLang() === 'zh'
+    ? [
+      ['实时扫描', '免费数据源快速扫描'],
+      ['证据质检', '去重、新鲜度与来源质量'],
+      ['因子发现', 'IC / RankIC 候选门禁'],
+      ['决策解释', '证据、风险与反方观点'],
+      ['情景模拟', 'Monte Carlo 与压力回放'],
+      ['结果影子日志', '决策后的结果追踪'],
+    ]
+    : WORKFLOW_PREVIEW;
+}
+
 export function render(container) {
   _container = container;
   renderShell();
@@ -163,28 +191,29 @@ function renderFieldPreviews() {
 }
 
 function renderTimelinePreview() {
+  const preview = workflowPreview();
   return `
     <div class="agent-preview">
       <div>
-        <div class="functional-empty__eyebrow">Shadow Workflow</div>
+        <div class="functional-empty__eyebrow">${t('Shadow Workflow', '影子工作流')}</div>
         <h3>${c('ready')}</h3>
         <p>${c('previewText')}</p>
       </div>
       <div class="workbench-metric-grid">
-        ${metric('Steps', WORKFLOW_PREVIEW.length, 'positive')}
-        ${metric('Mode', 'shadow')}
-        ${metric('Broker', 'blocked', 'risk')}
-        ${metric('Quota', 'guarded')}
+        ${metric(t('Steps', '步骤'), preview.length, 'positive')}
+        ${metric(t('Mode', '模式'), t('shadow', '影子'))}
+        ${metric(t('Broker', '券商执行'), t('blocked', '已阻止'), 'risk')}
+        ${metric(t('Quota', '额度保护'), t('guarded', '已防护'))}
       </div>
       <div class="preview-step-grid">
-        ${WORKFLOW_PREVIEW.map(([step, detail]) => `<div class="preview-step"><span>${esc(step)} | ${esc(detail)}</span><strong>queued</strong></div>`).join('')}
+        ${preview.map(([step, detail]) => `<div class="preview-step"><span>${esc(step)} | ${esc(detail)}</span><strong>${t('queued', '排队中')}</strong></div>`).join('')}
       </div>
       <div class="workbench-section">
-        <div class="workbench-section__title">Workflow Guarantees</div>
+        <div class="workbench-section__title">${t('Workflow Guarantees', '工作流保证')}</div>
         <div class="factor-checklist">
-          <div class="factor-check-row"><span>Provider failures stay isolated</span><strong class="is-pass">yes</strong></div>
-          <div class="factor-check-row"><span>Broker execution remains blocked</span><strong class="is-pass">shadow</strong></div>
-          <div class="factor-check-row"><span>All outputs are run-addressable</span><strong>ledger</strong></div>
+          <div class="factor-check-row"><span>${t('Provider failures stay isolated', '单个数据源失败不会拖垮整条链路')}</span><strong class="is-pass">${t('yes', '是')}</strong></div>
+          <div class="factor-check-row"><span>${t('Broker execution remains blocked', '券商执行保持阻止')}</span><strong class="is-pass">${t('shadow', '影子')}</strong></div>
+          <div class="factor-check-row"><span>${t('All outputs are run-addressable', '所有输出都可按 run 定位')}</span><strong>${t('ledger', '台账')}</strong></div>
         </div>
       </div>
     </div>`;
@@ -194,29 +223,29 @@ function renderReportPreview() {
   return `
     <div class="agent-preview">
       <div>
-        <div class="functional-empty__eyebrow">Report Preview</div>
+        <div class="functional-empty__eyebrow">${t('Report Preview', '报告预览')}</div>
         <h3>${c('noRun')}</h3>
-        <p>The report will include run IDs, evidence counts, factor cards, decision confidence, loss probability, and outcome log state.</p>
+        <p>${t('The report will include run IDs, evidence counts, factor cards, decision confidence, loss probability, and outcome log state.', '报告会包含 run ID、证据数量、因子卡、决策置信度、亏损概率和结果日志状态。')}</p>
       </div>
       <div class="workbench-metric-grid">
-        ${metric('Evidence', 'pending')}
-        ${metric('Factors', 'pending')}
-        ${metric('Decision', 'shadow')}
-        ${metric('Outcome', 'tracked')}
+        ${metric(t('Evidence', '证据'), t('pending', '待处理'))}
+        ${metric(t('Factors', '因子'), t('pending', '待处理'))}
+        ${metric(t('Decision', '决策'), t('shadow', '影子'))}
+        ${metric(t('Outcome', '结果'), t('tracked', '已跟踪'))}
       </div>
       <div class="workbench-kv-list compact-kv-list">
-        <div class="workbench-kv-row"><span>Run bundle</span><strong>not started</strong></div>
-        <div class="workbench-kv-row"><span>Safety</span><strong>frozen-safe</strong></div>
-        <div class="workbench-kv-row"><span>Keys</span><strong>masked</strong></div>
-        <div class="workbench-kv-row"><span>Broker</span><strong>blocked</strong></div>
+        <div class="workbench-kv-row"><span>${t('Run bundle', '运行包')}</span><strong>${t('not started', '未开始')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Safety', '安全性')}</span><strong>${t('frozen-safe', '冻结安全')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Keys', '密钥')}</span><strong>${t('masked', '已脱敏')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Broker', '券商执行')}</span><strong>${t('blocked', '已阻止')}</strong></div>
       </div>
       <div class="workbench-section">
-        <div class="workbench-section__title">Handoff Manifest</div>
+        <div class="workbench-section__title">${t('Handoff Manifest', '交接清单')}</div>
         <div class="preview-step-grid">
-          <div class="preview-step"><span>Evidence bundle</span><strong>pending</strong></div>
-          <div class="preview-step"><span>Factor registry</span><strong>pending</strong></div>
-          <div class="preview-step"><span>Decision report</span><strong>pending</strong></div>
-          <div class="preview-step"><span>Outcome row</span><strong>shadow-only</strong></div>
+          <div class="preview-step"><span>${t('Evidence bundle', '证据包')}</span><strong>${t('pending', '待处理')}</strong></div>
+          <div class="preview-step"><span>${t('Factor registry', '因子注册表')}</span><strong>${t('pending', '待处理')}</strong></div>
+          <div class="preview-step"><span>${t('Decision report', '决策报告')}</span><strong>${t('pending', '待处理')}</strong></div>
+          <div class="preview-step"><span>${t('Outcome row', '结果记录')}</span><strong>${t('shadow-only', '仅影子')}</strong></div>
         </div>
       </div>
     </div>`;
@@ -238,9 +267,9 @@ function timeline(rows) {
 async function runWorkflow() {
   const rows = [];
   const report = _container.querySelector('#agent-report');
-  setLoading(report, 'Running agentic shadow loop...');
+  setLoading(report, t('Running agentic shadow loop...', '正在运行智能体影子闭环...'));
   try {
-    rows.push({ step: 'Live scan', status: 'running', detail: 'Free-tier connector scan' });
+    rows.push({ step: t('Live scan', '实时扫描'), status: 'running', detail: t('Free-tier connector scan', '免费数据源连接器扫描') });
     timeline(rows);
     const evidence = await api.connectors.liveScan({
       universe: universe(),
@@ -251,18 +280,18 @@ async function runWorkflow() {
     });
 
     rows[0] = {
-      step: 'Live scan',
+      step: t('Live scan', '实时扫描'),
       status: 'promoted',
-      detail: `${evidence.items?.length || 0} evidence items`,
+      detail: `${evidence.items?.length || 0} ${t('evidence items', '条证据')}`,
       id: evidence.bundle_id || evidence.run_id,
     };
     rows.push({
-      step: 'Evidence QA',
+      step: t('Evidence QA', '证据质检'),
       status: 'promoted',
-      detail: `${evidence.lineage?.length || 0} lineage checks | quota guard on`,
+      detail: `${evidence.lineage?.length || 0} ${t('lineage checks', '项链路检查')} | ${t('quota guard on', '额度保护已启用')}`,
       id: `items=${evidence.items?.length || 0}`,
     });
-    rows.push({ step: 'Factor discovery', status: 'running', detail: 'IC / RankIC gate' });
+    rows.push({ step: t('Factor discovery', '因子发现'), status: 'running', detail: t('IC / RankIC gate', 'IC / RankIC 门禁') });
     timeline(rows);
     const factors = await api.factors.discover({
       universe: universe(),
@@ -272,12 +301,12 @@ async function runWorkflow() {
     });
 
     rows[2] = {
-      step: 'Factor discovery',
+      step: t('Factor discovery', '因子发现'),
       status: 'promoted',
-      detail: `${factors.factor_cards?.length || 0} factor cards`,
+      detail: `${factors.factor_cards?.length || 0} ${t('factor cards', '张因子卡')}`,
       id: factors.run_id,
     };
-    rows.push({ step: 'Decision explain', status: 'running', detail: 'Multi-expert report' });
+    rows.push({ step: t('Decision explain', '决策解释'), status: 'running', detail: t('Multi-expert report', '多专家报告') });
     timeline(rows);
     const decision = await api.decision.explain({
       symbol: symbol(),
@@ -288,12 +317,12 @@ async function runWorkflow() {
     });
 
     rows[3] = {
-      step: 'Decision explain',
+      step: t('Decision explain', '决策解释'),
       status: 'promoted',
-      detail: `${decision.action || 'hold'} | confidence ${decision.confidence || '-'}`,
+      detail: `${decision.action || t('hold', '持有')} | ${t('confidence', '置信度')} ${decision.confidence || '-'}`,
       id: decision.decision_id,
     };
-    rows.push({ step: 'Simulation', status: 'running', detail: 'Monte Carlo and stress test' });
+    rows.push({ step: t('Simulation', '情景模拟'), status: 'running', detail: t('Monte Carlo and stress test', 'Monte Carlo 与压力测试') });
     timeline(rows);
     const simulation = await api.simulate.scenario({
       symbol: symbol(),
@@ -304,70 +333,70 @@ async function runWorkflow() {
     });
 
     rows[4] = {
-      step: 'Simulation',
+      step: t('Simulation', '情景模拟'),
       status: 'promoted',
-      detail: `loss probability ${pct(simulation.probability_of_loss)}`,
+      detail: `${t('loss probability', '亏损概率')} ${pct(simulation.probability_of_loss)}`,
       id: simulation.simulation_id,
     };
-    rows.push({ step: 'Outcome shadow log', status: 'running', detail: 'Read current calibration summary' });
+    rows.push({ step: t('Outcome shadow log', '结果影子日志'), status: 'running', detail: t('Read current calibration summary', '读取当前校准摘要') });
     timeline(rows);
     const outcomes = await api.outcomes.evaluate({ symbol: symbol(), decision_id: decision.decision_id });
 
     rows[5] = {
-      step: 'Outcome shadow log',
+      step: t('Outcome shadow log', '结果影子日志'),
       status: 'promoted',
-      detail: `${outcomes.record_count || outcomes.summary?.record_count || 0} records`,
+      detail: `${outcomes.record_count || outcomes.summary?.record_count || 0} ${t('records', '条记录')}`,
       id: 'shadow-log',
     };
     timeline(rows);
     report.innerHTML = `
       <div class="workbench-metric-grid">
-        ${metric('Evidence', evidence.items?.length || 0, 'positive')}
-        ${metric('Factors', factors.factor_cards?.length || 0)}
-        ${metric('Action', decision.action || '-')}
-        ${metric('Loss Prob', pct(simulation.probability_of_loss), 'risk')}
-        ${metric('Outcome', outcomes.record_count || outcomes.summary?.record_count || 0)}
-        ${metric('Guard', 'shadow')}
+        ${metric(t('Evidence', '证据'), evidence.items?.length || 0, 'positive')}
+        ${metric(t('Factors', '因子'), factors.factor_cards?.length || 0)}
+        ${metric(t('Action', '动作'), actionLabel(decision.action))}
+        ${metric(t('Loss Prob', '亏损概率'), pct(simulation.probability_of_loss), 'risk')}
+        ${metric(t('Outcome', '结果'), outcomes.record_count || outcomes.summary?.record_count || 0)}
+        ${metric(t('Guard', '门控'), t('shadow', '影子'))}
       </div>
       <div class="workbench-kv-list compact-kv-list">
-        <div class="workbench-kv-row"><span>Evidence bundle</span><strong>${esc(evidence.bundle_id || evidence.run_id || 'latest')}</strong></div>
-        <div class="workbench-kv-row"><span>Factor run</span><strong>${esc(factors.run_id || 'registry')}</strong></div>
-        <div class="workbench-kv-row"><span>Decision ID</span><strong>${esc(decision.decision_id || '-')}</strong></div>
-        <div class="workbench-kv-row"><span>Simulation ID</span><strong>${esc(simulation.simulation_id || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Evidence bundle', '证据包')}</span><strong>${esc(evidence.bundle_id || evidence.run_id || t('latest', '最新'))}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Factor run', '因子运行')}</span><strong>${esc(factors.run_id || t('registry', '注册表'))}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Decision ID', '决策 ID')}</span><strong>${esc(decision.decision_id || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Simulation ID', '模拟 ID')}</span><strong>${esc(simulation.simulation_id || '-')}</strong></div>
       </div>
       <div class="workbench-section">
-        <div class="workbench-section__title">Handoff Manifest</div>
+        <div class="workbench-section__title">${t('Handoff Manifest', '交接清单')}</div>
         <div class="preview-step-grid">
-          <div class="preview-step"><span>Connector lineage</span><strong>${esc((decision.connector_lineage?.free_tier_registry?.providers || []).length || providers().length)}</strong></div>
-          <div class="preview-step"><span>Quota mode</span><strong>${esc(String(decision.quota_mode || evidence.mode || 'guarded'))}</strong></div>
-          <div class="preview-step"><span>Confidence</span><strong>${esc(decision.confidence || '-')}</strong></div>
-          <div class="preview-step"><span>Loss guard</span><strong>${pct(simulation.probability_of_loss)}</strong></div>
+          <div class="preview-step"><span>${t('Connector lineage', '连接器链路')}</span><strong>${esc((decision.connector_lineage?.free_tier_registry?.providers || []).length || providers().length)}</strong></div>
+          <div class="preview-step"><span>${t('Quota mode', '额度模式')}</span><strong>${esc(String(decision.quota_mode || evidence.mode || t('guarded', '已防护')))}</strong></div>
+          <div class="preview-step"><span>${t('Confidence', '置信度')}</span><strong>${esc(decision.confidence || '-')}</strong></div>
+          <div class="preview-step"><span>${t('Loss guard', '亏损防护')}</span><strong>${pct(simulation.probability_of_loss)}</strong></div>
         </div>
       </div>
       <div class="workbench-section">
-        <div class="workbench-section__title">Workflow Guarantees</div>
+        <div class="workbench-section__title">${t('Workflow Guarantees', '工作流保证')}</div>
         <div class="factor-checklist">
-          <div class="factor-check-row"><span>Evidence kept in shadow lake</span><strong class="is-pass">stored</strong></div>
-          <div class="factor-check-row"><span>Decision stayed broker-safe</span><strong class="is-pass">blocked</strong></div>
-          <div class="factor-check-row"><span>Outcome row linked to decision</span><strong>${esc(decision.decision_id ? 'linked' : 'pending')}</strong></div>
+          <div class="factor-check-row"><span>${t('Evidence kept in shadow lake', '证据已保存在影子证据湖')}</span><strong class="is-pass">${t('stored', '已存储')}</strong></div>
+          <div class="factor-check-row"><span>${t('Decision stayed broker-safe', '决策保持券商安全')}</span><strong class="is-pass">${t('blocked', '已阻止')}</strong></div>
+          <div class="factor-check-row"><span>${t('Outcome row linked to decision', '结果记录已关联到决策')}</span><strong>${esc(decision.decision_id ? t('linked', '已关联') : t('pending', '待处理'))}</strong></div>
         </div>
       </div>
       <div class="workbench-list workbench-scroll-list">
         <article class="workbench-item">
-          <div class="workbench-item__head"><strong>${esc(decision.symbol || symbol())} Decision</strong>${statusBadge(decision.action || 'hold')}</div>
-          <p>${esc((decision.main_evidence || [])[0]?.summary || 'Shadow report created.')}</p>
+          <div class="workbench-item__head"><strong>${esc(decision.symbol || symbol())} ${t('Decision', '决策')}</strong>${statusBadge(decision.action || 'hold')}</div>
+          <p>${esc((decision.main_evidence || [])[0]?.summary || t('Shadow report created.', '影子报告已生成。'))}</p>
         </article>
         <article class="workbench-item">
-          <div class="workbench-item__head"><strong>Simulation</strong>${statusBadge('ready')}</div>
-          <p>${esc(`Loss probability ${pct(simulation.probability_of_loss)} | VaR ${pct(simulation.value_at_risk_95)} | MDD ${pct(simulation.max_drawdown_p95)}`)}</p>
+          <div class="workbench-item__head"><strong>${t('Simulation', '情景模拟')}</strong>${statusBadge('ready')}</div>
+          <p>${esc(`${t('Loss probability', '亏损概率')} ${pct(simulation.probability_of_loss)} | VaR ${pct(simulation.value_at_risk_95)} | MDD ${pct(simulation.max_drawdown_p95)}`)}</p>
         </article>
         <article class="workbench-item">
-          <div class="workbench-item__head"><strong>Next actions</strong>${statusBadge('research_only')}</div>
-          <p>Promote validated factors, replay the thesis in Simulation, and keep every recommendation in the shadow log.</p>
+          <div class="workbench-item__head"><strong>${t('Next actions', '下一步动作')}</strong>${statusBadge('research_only')}</div>
+          <p>${t('Promote validated factors, replay the thesis in Simulation, and keep every recommendation in the shadow log.', '升格已验证因子，在模拟器回放当前判断，并把所有建议保留在影子日志中。')}</p>
         </article>
       </div>`;
   } catch (err) {
-    rows.push({ step: 'Workflow failed', status: 'rejected', detail: err.message || String(err) });
+    rows.push({ step: t('Workflow failed', '工作流失败'), status: 'rejected', detail: err.message || String(err) });
     timeline(rows);
     renderError(report, err);
   }

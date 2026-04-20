@@ -3,11 +3,20 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from httpx import Client as HttpxClient, Timeout
 from supabase import create_client, Client
 from supabase.lib.client_options import SyncClientOptions
+from gateway.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+try:
+    from postgrest.exceptions import APIError as PostgrestAPIError
+except Exception:  # pragma: no cover - import path depends on installed supabase stack
+    PostgrestAPIError = Exception
 
 # 从项目根目录（当前文件向上两级）加载 .env 文件
 # Path(__file__) 是当前文件的绝对路径，.parents[2] 回溯两层到项目根
@@ -18,6 +27,7 @@ _client: Client | None = None
 _httpx_client: HttpxClient | None = None
 _in_memory_client = None
 _in_memory_warning_emitted = False
+_table_fallback_warnings: set[str] = set()
 
 
 class _InMemoryResult:
@@ -154,6 +164,78 @@ def _get_in_memory_client():
     if _in_memory_client is None:
         _in_memory_client = _InMemorySupabaseClient()
     return _in_memory_client
+
+
+def _is_missing_table_error(exc: Exception) -> bool:
+    if isinstance(exc, PostgrestAPIError):
+        code = str(getattr(exc, "code", "") or "").upper()
+        message = str(getattr(exc, "message", "") or exc).lower()
+    else:
+        code = str(getattr(exc, "code", "") or "").upper()
+        message = str(exc).lower()
+    if code in {"PGRST205", "42P01"}:
+        return True
+    return (
+        "could not find the table" in message
+        or "schema cache" in message
+        or "relation" in message and "does not exist" in message
+    )
+
+
+def _warn_table_fallback(table_name: str, exc: Exception) -> None:
+    if table_name in _table_fallback_warnings:
+        return
+    _table_fallback_warnings.add(table_name)
+    logger.warning(
+        "[Supabase] Table '%s' unavailable, degrading to in-memory fallback for lightweight features: %s",
+        table_name,
+        exc,
+    )
+
+
+def _run_table_insert(client: Any, table_name: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    response = client.table(table_name).insert(payload).execute()
+    return list(response.data or [])
+
+
+def _run_table_update(
+    client: Any,
+    table_name: str,
+    payload: dict[str, Any],
+    *,
+    match: dict[str, Any],
+) -> list[dict[str, Any]]:
+    query = client.table(table_name).update(payload)
+    for key, value in match.items():
+        query = query.eq(key, value)
+    response = query.execute()
+    return list(response.data or [])
+
+
+def _run_table_list(
+    client: Any,
+    table_name: str,
+    *,
+    limit: int,
+    order_by: str,
+    desc: bool,
+    filters: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    query = client.table(table_name).select("*")
+    for key, value in (filters or {}).items():
+        query = query.eq(key, value)
+    response = query.order(order_by, desc=desc).limit(limit).execute()
+    return list(response.data or [])
+
+
+def _with_table_fallback(table_name: str, operation):
+    try:
+        return operation(get_client())
+    except Exception as exc:
+        if not _is_missing_table_error(exc):
+            raise
+        _warn_table_fallback(table_name, exc)
+        return operation(_get_in_memory_client())
 
 
 def _build_client_options() -> SyncClientOptions:
@@ -326,3 +408,56 @@ def list_sessions(user_id: str) -> list[str]:
         .execute()
     )
     return [r["session_id"] for r in resp.data]  # 只返回 session_id 列表
+def save_table_row(table_name: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Generic helper for lightweight feature modules."""
+    return _with_table_fallback(table_name, lambda client: _run_table_insert(client, table_name, payload))
+
+
+def update_table_row(
+    table_name: str,
+    payload: dict[str, Any],
+    *,
+    match: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Generic helper for lightweight feature modules that need targeted updates."""
+    return _with_table_fallback(
+        table_name,
+        lambda client: _run_table_update(client, table_name, payload, match=match),
+    )
+
+
+def list_table_rows(
+    table_name: str,
+    *,
+    limit: int = 20,
+    order_by: str = "created_at",
+    desc: bool = True,
+    filters: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    return _with_table_fallback(
+        table_name,
+        lambda client: _run_table_list(
+            client,
+            table_name,
+            limit=limit,
+            order_by=order_by,
+            desc=desc,
+            filters=filters,
+        ),
+    )
+
+
+def latest_table_row(
+    table_name: str,
+    *,
+    order_by: str = "created_at",
+    filters: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    rows = list_table_rows(
+        table_name,
+        limit=1,
+        order_by=order_by,
+        desc=True,
+        filters=filters,
+    )
+    return rows[0] if rows else None

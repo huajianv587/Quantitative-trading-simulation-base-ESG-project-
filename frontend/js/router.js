@@ -39,6 +39,9 @@ export const ROUTES = {
   '/connector-center': { module: () => import(`./pages/connector-center.js?${VER}`), labelKey: 'page.connector_center', icon: 'database', group: 'quant' },
   '/market-radar': { module: () => import(`./pages/market-radar.js?${VER}`), labelKey: 'page.market_radar', icon: 'search', group: 'quant' },
   '/agent-lab': { module: () => import(`./pages/agent-lab.js?${VER}`), labelKey: 'page.agent_lab', icon: 'cpu', group: 'quant' },
+  '/debate-desk': { module: () => import(`./pages/debate-desk.js?${VER}`), labelKey: 'page.debate_desk', icon: 'message-square', group: 'quant' },
+  '/risk-board': { module: () => import(`./pages/risk-board.js?${VER}`), labelKey: 'page.risk_board', icon: 'shield', group: 'quant' },
+  '/trading-ops': { module: () => import(`./pages/trading-ops.js?${VER}`), labelKey: 'page.trading_ops', icon: 'zap', group: 'quant' },
   '/outcome-center': { module: () => import(`./pages/outcome-center.js?${VER}`), labelKey: 'page.outcome_center', icon: 'shield', group: 'research' },
   '/portfolio': { module: () => import(`./pages/portfolio.js?${VER}`), labelKey: 'page.portfolio', icon: 'pie', group: 'quant' },
   '/backtest': { module: () => import(`./pages/backtest.js?${VER}`), labelKey: 'page.backtest', icon: 'chart', group: 'quant' },
@@ -129,8 +132,8 @@ class Router {
       console.error('Page load failed:', err);
       this._container.innerHTML = `<div class="empty-state">
         <div class="empty-state__icon">!</div>
-        <div class="empty-state__title">Page failed to load</div>
-        <div class="empty-state__text">${err.message}</div>
+        <div class="empty-state__title">${t('common.page_failed_load')}</div>
+        <div class="empty-state__text">${err.message || t('common.page_failed_retry')}</div>
       </div>`;
     }
   }

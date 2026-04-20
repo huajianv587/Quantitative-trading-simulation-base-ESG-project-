@@ -15,17 +15,17 @@ const COPY = {
     noSimulationHint: 'Choose a scenario and run Monte Carlo.',
   },
   zh: {
-    loading: '加载中...',
+    loading: '正在加载...',
     empty: '暂无数据',
     requestFailed: '请求失败',
-    shadowOnly: '仅用于影子研究模式，不会创建券商订单。',
+    shadowOnly: '仅用于影子模式研究，不会创建券商订单。',
     source: '来源',
     quality: '质量',
     safe: '时点安全',
     noEvidence: '暂无证据',
     noFactorCards: '暂无因子卡',
     noSimulation: '暂无模拟结果',
-    noSimulationHint: '选择场景后运行 Monte Carlo。',
+    noSimulationHint: '请选择场景后运行 Monte Carlo。',
   },
 };
 
@@ -53,6 +53,56 @@ const NEGATIVE_STATUSES = new Set([
   'risk',
   'blocked',
 ]);
+
+const STATUS_COPY = {
+  zh: {
+    promoted: '已升级',
+    configured: '已配置',
+    pass: '通过',
+    safe: '安全',
+    ready: '就绪',
+    filled: '已完成',
+    shadow: '影子',
+    queued: '排队中',
+    running: '运行中',
+    on: '开启',
+    armed: '已启用',
+    protected: '已保护',
+    untouched: '未触碰',
+    rejected: '已拒绝',
+    failed: '失败',
+    missing_key: '缺少密钥',
+    error: '错误',
+    risk: '风险',
+    blocked: '已阻止',
+    research_only: '仅研究',
+    watch: '观察',
+    review: '复核',
+    pending: '待处理',
+    logged: '已记录',
+    linked: '已关联',
+    active: '活跃',
+    forming: '形成中',
+    waiting: '等待中',
+    clean: '干净',
+    flagged: '已标记',
+    stored: '已存储',
+    guarded: '已防护',
+    ui_only: '仅界面',
+    neutral: '中性',
+    approve: '批准',
+    reduce: '缩减',
+    reject: '拒绝',
+    halt: '暂停',
+    tagged: '已标注',
+    tracked: '已跟踪',
+    derived: '自动推导',
+    masked: '已脱敏',
+    off: '关闭',
+    yes: '是',
+    no: '否',
+  },
+};
 
 export function lang() {
   return getLang() === 'zh' ? 'zh' : 'en';
@@ -133,11 +183,13 @@ export function badge(label, status = 'neutral') {
 }
 
 function humanizeStatus(status) {
-  return String(status || 'neutral').replace(/_/g, ' ').trim();
+  const normalized = String(status || 'neutral').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (lang() === 'zh' && STATUS_COPY.zh[normalized]) return STATUS_COPY.zh[normalized];
+  return normalized.replace(/_/g, ' ').trim();
 }
 
 export function statusBadge(status) {
-  const normalized = String(status || 'research_only').trim().toLowerCase();
+  const normalized = String(status || 'research_only').trim().toLowerCase().replace(/[\s-]+/g, '_');
   const tone = POSITIVE_STATUSES.has(normalized)
     ? 'filled'
     : NEGATIVE_STATUSES.has(normalized)
@@ -158,7 +210,7 @@ export function splitTokens(raw, options = {}) {
     .split(delimiters)
     .map((item) => item.trim())
     .filter(Boolean)
-    .map((item) => uppercase ? item.toUpperCase() : item);
+    .map((item) => (uppercase ? item.toUpperCase() : item));
 }
 
 export function renderTokenPreview(raw, options = {}) {
@@ -182,7 +234,7 @@ export function renderEvidenceItems(items, options = {}) {
   const maxItems = options.maxItems || 8;
   const noData = current === 'zh' ? text('noEvidence') : 'No evidence';
   const hint = current === 'zh'
-    ? '点击扫描证据来加载带来源链的条目。'
+    ? '点击扫描证据即可加载带来源链接的条目。'
     : 'Scan evidence to load source-linked items.';
   if (!items?.length) return emptyState(noData, hint);
   return `<div class="workbench-list ${options.scroll ? 'workbench-scroll-list' : ''}">

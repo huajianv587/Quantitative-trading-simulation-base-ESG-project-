@@ -1203,6 +1203,12 @@ body.c-hover #c-ring { width: 46px; height: 46px; border-color: var(--green); bo
 .factor-check-row strong.is-review {
   color: var(--amber);
 }
+.factor-check-row strong.is-watch {
+  color: var(--amber);
+}
+.factor-check-row strong.is-risk {
+  color: var(--danger);
+}
 .factor-card-hint {
   margin: -2px 0 12px;
 }
@@ -1770,6 +1776,55 @@ html[lang="zh"] .nav-section-label {
 }
 .decision-cockpit-page .workbench-link-list {
   margin-bottom: 12px;
+}
+.trading-debate-grid,
+.risk-board-grid,
+.trading-ops-grid {
+  align-items: stretch;
+}
+.trading-debate-grid > .card,
+.risk-board-grid > .card,
+.trading-ops-grid > .card {
+  min-width: 0;
+  height: 100%;
+}
+.trading-ops-grid .card-body,
+.risk-board-grid .card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.debate-triad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 14px;
+}
+.debate-triad-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+}
+.debate-triad-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.debate-triad-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.workbench-item--active {
+  border: 1px solid rgba(0,255,136,0.18);
+  border-radius: 8px;
+  background: rgba(0,255,136,0.04);
+  padding: 10px 10px 9px;
 }
 .factor-lab-top-grid {
   grid-template-columns: minmax(320px, .82fr) minmax(0, 1.18fr);
@@ -4284,6 +4339,10 @@ body.light .rl-lab-path {
   .research-preview__grid,
   .market-radar-layout,
   .decision-layout,
+  .trading-debate-grid,
+  .risk-board-grid,
+  .trading-ops-grid,
+  .debate-triad-grid,
   .factor-lab-top-grid,
   .backtest-layout,
   .backtest-bottom-grid {

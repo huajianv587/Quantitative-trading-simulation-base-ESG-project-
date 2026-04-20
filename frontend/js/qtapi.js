@@ -231,6 +231,35 @@ export var api = {
     runs: function(limit) { return _get('/api/v1/connectors/runs?limit=' + encodeURIComponent(limit || 20)); },
   },
 
+  trading: {
+    scheduleStatus: function() { return _get('/api/v1/trading/schedule/status'); },
+    watchlist: function() { return _get('/api/v1/trading/watchlist'); },
+    watchlistAdd: function(payload) { return _post('/api/v1/trading/watchlist/add', payload || {}); },
+    latestReview: function() { return _get('/api/v1/trading/review/latest'); },
+    alertsToday: function() { return _get('/api/v1/trading/alerts/today'); },
+    sentimentRun: function(payload) { return _post('/api/v1/trading/sentiment/run', payload || {}); },
+    debateRun: function(payload) { return _post('/api/v1/trading/debate/run', payload || {}); },
+    debateRuns: function(symbol, limit) {
+      var query = '?limit=' + encodeURIComponent(limit || 20);
+      if (symbol) query += '&symbol=' + encodeURIComponent(symbol);
+      return _get('/api/v1/trading/debate/runs' + query);
+    },
+    riskEvaluate: function(payload) { return _post('/api/v1/trading/risk/evaluate', payload || {}); },
+    riskBoard: function(symbol, limit) {
+      var query = '?limit=' + encodeURIComponent(limit || 20);
+      if (symbol) query += '&symbol=' + encodeURIComponent(symbol);
+      return _get('/api/v1/trading/risk/board' + query);
+    },
+    cycleRun: function(payload) { return _post('/api/v1/trading/cycle/run', payload || {}, { scope: 'execution' }); },
+    monitorStatus: function() { return _get('/api/v1/trading/monitor/status'); },
+    monitorStart: function() { return _post('/api/v1/trading/monitor/start', {}, { scope: 'execution' }); },
+    monitorStop: function() { return _post('/api/v1/trading/monitor/stop', {}, { scope: 'execution' }); },
+    jobRun: function(jobName, payload) {
+      return _post('/api/v1/trading/jobs/run/' + encodeURIComponent(jobName), payload || {}, { scope: 'execution' });
+    },
+    opsSnapshot: function() { return _get('/api/v1/trading/ops/snapshot'); },
+  },
+
   reports: {
     generate: function(payload) { return _post('/admin/reports/generate', payload, { scope: 'admin' }); },
     latest: function(reportType, company) {

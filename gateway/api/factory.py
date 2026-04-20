@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from gateway.api.routers import admin, agent, auth, connectors, core, ops, quant, quant_rl, reports, scheduler, user
+from gateway.api.routers import admin, agent, auth, connectors, core, ops, quant, quant_rl, reports, scheduler, trading, user
 from gateway.app_runtime import RuntimeContext, runtime
 from gateway.ops.security import authorize_request
 from gateway.utils.logger import get_logger
@@ -39,7 +39,10 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await app_runtime.startup(app)
-        yield
+        try:
+            yield
+        finally:
+            await app_runtime.shutdown(app)
 
     app = FastAPI(title="ESG Agentic RAG Copilot", lifespan=lifespan)
     app.state.runtime = app_runtime
@@ -74,6 +77,7 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
     app.include_router(connectors.router)
     app.include_router(quant.router)
     app.include_router(quant_rl.router)
+    app.include_router(trading.router)
     app.include_router(ops.router)
 
     frontend_path = Path(__file__).resolve().parents[2] / "frontend"

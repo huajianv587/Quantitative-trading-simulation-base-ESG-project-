@@ -18,6 +18,9 @@ const STRINGS = {
     'page.connector_center': 'Connector Center',
     'page.market_radar': 'Market Radar',
     'page.agent_lab': 'Agent Lab',
+    'page.debate_desk': 'Debate Desk',
+    'page.risk_board': 'Risk Board',
+    'page.trading_ops': 'Trading Ops',
     'page.outcome_center': 'Outcome Center',
     'page.portfolio': 'Portfolio',
     'page.backtest': 'Backtest',
@@ -83,6 +86,8 @@ const STRINGS = {
     'common.no_data': 'No data available',
     'common.market_open': 'MARKET OPEN',
     'common.market_closed': 'MARKET CLOSED',
+    'common.page_failed_load': 'Page failed to load',
+    'common.page_failed_retry': 'Refresh this page and try again.',
   },
   zh: {
     'app.logo_tag': '量化引擎 · 在线',
@@ -101,6 +106,9 @@ const STRINGS = {
     'page.connector_center': '数据源中心',
     'page.market_radar': '市场雷达',
     'page.agent_lab': '智能体实验室',
+    'page.debate_desk': '辩论台',
+    'page.risk_board': '风控板',
+    'page.trading_ops': '交易运维',
     'page.outcome_center': '结果追踪',
     'page.portfolio': '投资组合',
     'page.backtest': '回测',
@@ -166,6 +174,8 @@ const STRINGS = {
     'common.no_data': '暂无数据',
     'common.market_open': '市场开盘',
     'common.market_closed': '市场休市',
+    'common.page_failed_load': '页面加载失败',
+    'common.page_failed_retry': '请刷新页面后重试。',
   },
 };
 
@@ -178,6 +188,9 @@ const AUTO_TEXT_ZH = {
   'Connector Center': '数据源中心',
   'Market Radar': '市场雷达',
   'Agent Lab': '智能体实验室',
+  'Debate Desk': '辩论台',
+  'Risk Board': '风控板',
+  'Trading Ops': '交易运维',
   'Outcome Center': '结果追踪',
   'Portfolio': '投资组合',
   'Backtest': '回测',
@@ -199,13 +212,15 @@ const AUTO_TEXT_ZH = {
   'Backend Offline': '后端离线',
   'Loading...': '加载中...',
   'Connecting...': '连接中...',
-  'Error': '错误',
-  'Retry': '重试',
-  'Refresh': '刷新',
+  Error: '错误',
+  Retry: '重试',
+  Refresh: '刷新',
   'No data available': '暂无数据',
+  'Page failed to load': '页面加载失败',
   'Search best params': '搜索最佳参数',
   'Train Policy': '训练策略',
-  'Backtest Latest': '回测最新结果',
+  'Backtest Latest': '最新回测',
+  'All providers': '全部数据源',
 };
 
 const AUTO_PLACEHOLDER_ZH = {
@@ -218,7 +233,9 @@ const AUTO_PLACEHOLDER_ZH = {
 };
 
 const AUTO_TEXT_EN = Object.fromEntries(Object.entries(AUTO_TEXT_ZH).map(([en, zh]) => [zh, en]));
-const AUTO_PLACEHOLDER_EN = Object.fromEntries(Object.entries(AUTO_PLACEHOLDER_ZH).map(([en, zh]) => [zh, en]));
+const AUTO_PLACEHOLDER_EN = Object.fromEntries(
+  Object.entries(AUTO_PLACEHOLDER_ZH).map(([en, zh]) => [zh, en]),
+);
 
 let _lang = typeof localStorage !== 'undefined' ? (localStorage.getItem(STORAGE_KEY) || 'zh') : 'zh';
 let _observer = null;
@@ -393,10 +410,14 @@ function ensureObserver() {
 
 if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      applyLangToPage();
-      ensureObserver();
-    }, { once: true });
+    document.addEventListener(
+      'DOMContentLoaded',
+      () => {
+        applyLangToPage();
+        ensureObserver();
+      },
+      { once: true },
+    );
   } else {
     applyLangToPage();
     ensureObserver();

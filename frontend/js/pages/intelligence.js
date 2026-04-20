@@ -58,6 +58,12 @@ const COPY = {
     noAudit: 'No audit records yet',
     noAuditHint: 'Generate a decision report to start the shadow log.',
     ready: 'shadow mode',
+    dataMode: 'Data Mode',
+    freeProviders: 'Free Providers',
+    modeLocal: 'local / frozen-safe',
+    modeMixed: 'mixed free-tier live',
+    modeLive: 'live connectors only',
+    evidenceUnit: 'items',
   },
   zh: {
     title: '智能决策驾驶舱',
@@ -89,6 +95,12 @@ const COPY = {
     noAudit: '暂无审计记录',
     noAuditHint: '生成一次决策报告后会进入影子日志。',
     ready: '影子模式',
+    dataMode: '数据模式',
+    freeProviders: '免费数据源',
+    modeLocal: '本地 / 冻结安全',
+    modeMixed: '混合免费实时',
+    modeLive: '仅实时连接器',
+    evidenceUnit: '条',
   },
 };
 
@@ -122,6 +134,34 @@ function c(key) {
 
 function t(en, zh) {
   return getLang() === 'zh' ? zh : en;
+}
+
+function localizedCount(value, singular = 'items', zhUnit = '条') {
+  return getLang() === 'zh' ? `${value} ${zhUnit}` : `${value} ${singular}`;
+}
+
+function boolLabel(value) {
+  return value ? t('yes', '是') : t('no', '否');
+}
+
+function actionLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const map = {
+    approve: t('approve', '批准'),
+    reduce: t('reduce', '缩减'),
+    reject: t('reject', '拒绝'),
+    halt: t('halt', '暂停'),
+    long: t('long', '看多'),
+    short: t('short', '看空'),
+    neutral: t('neutral', '中性'),
+    block: t('block', '阻止'),
+    hold: t('hold', '持有'),
+    review: t('review', '复核'),
+    running: t('running', '运行中'),
+    pending: t('pending', '待处理'),
+    recorded: t('recorded', '已记录'),
+  };
+  return map[normalized] || String(value || '-');
 }
 
 function buildShell() {
@@ -161,15 +201,15 @@ function buildShell() {
             </div>
             <div class="form-row">
               <div class="form-group">
-                <label class="form-label">Data Mode</label>
+                <label class="form-label">${c('dataMode')}</label>
                 <select class="form-input" id="intel-mode">
-                  <option value="local">local / frozen-safe</option>
-                  <option value="mixed">mixed free-tier live</option>
-                  <option value="live">live connectors only</option>
+                  <option value="local">${c('modeLocal')}</option>
+                  <option value="mixed">${c('modeMixed')}</option>
+                  <option value="live">${c('modeLive')}</option>
                 </select>
               </div>
               <div class="form-group">
-                <label class="form-label">Free Providers</label>
+                <label class="form-label">${c('freeProviders')}</label>
                 <input class="form-input" id="intel-providers" value="local_esg, marketaux, twelvedata">
               </div>
             </div>
@@ -232,6 +272,9 @@ function bindEvents(container) {
   container.querySelector('#btn-open-simulation')?.addEventListener('click', () => router.navigate('/simulation'));
   container.querySelector('#link-factor-lab')?.addEventListener('click', () => router.navigate('/factor-lab'));
   container.querySelector('#link-simulation')?.addEventListener('click', () => router.navigate('/simulation'));
+  container.querySelector('#link-debate-desk')?.addEventListener('click', () => router.navigate('/debate-desk'));
+  container.querySelector('#link-risk-board')?.addEventListener('click', () => router.navigate('/risk-board'));
+  container.querySelector('#link-trading-ops')?.addEventListener('click', () => router.navigate('/trading-ops'));
   container.querySelector('#link-connector-center')?.addEventListener('click', () => router.navigate('/connector-center'));
   container.querySelector('#link-market-radar')?.addEventListener('click', () => router.navigate('/market-radar'));
   container.querySelector('#btn-load-audit')?.addEventListener('click', () => loadAudit(container));
@@ -281,7 +324,7 @@ async function refreshEvidence(container, showToast) {
   try {
     _latest.evidence = await api.intelligence.evidence(cfg.symbol, 12);
     renderEvidence(container, _latest.evidence?.items || []);
-    if (showToast) toast.success(c('refresh'), `${(_latest.evidence?.items || []).length} items`);
+    if (showToast) toast.success(c('refresh'), localizedCount((_latest.evidence?.items || []).length, 'items', c('evidenceUnit')));
   } catch (err) {
     renderError(container.querySelector('#evidence-panel'), err);
   }
@@ -301,7 +344,7 @@ async function runEvidence(container) {
       limit: 20,
     });
     renderEvidence(container, _latest.evidence.items || []);
-    toast.success(c('scan'), `${_latest.evidence.items?.length || 0} items`);
+    toast.success(c('scan'), localizedCount(_latest.evidence.items?.length || 0, 'items', c('evidenceUnit')));
   } catch (err) {
     renderError(container.querySelector('#evidence-panel'), err);
     toast.error(c('scan'), err.message);
@@ -356,11 +399,11 @@ function renderDecision(container, report) {
   const verifier = report.verifier_checks || {};
   const triggers = (report.risk_triggers || []).length
     ? (report.risk_triggers || []).map((item) => `<li>${esc(item)}</li>`).join('')
-    : '<li>No active trigger in the current report.</li>';
+    : `<li>${esc(t('No active trigger in the current report.', '当前报告中没有激活的风险触发。'))}</li>`;
   const factors = renderFactorCards(report.factor_cards || [], { maxItems: 3, compact: true });
   const simulation = report.simulation
     ? renderSimulationResult(report.simulation)
-    : '<div class="workbench-report-text">No embedded simulation attached yet. Open Simulation to replay the current thesis.</div>';
+    : `<div class="workbench-report-text">${esc(t('No embedded simulation attached yet. Open Simulation to replay the current thesis.', '当前还没有附带内嵌模拟。可打开情景模拟来回放本次判断。'))}</div>`;
   const interval = report.confidence_interval || {};
   const auditTrail = Array.isArray(report.audit_trail) ? report.audit_trail.slice(0, 4) : [];
   const evidenceCount = (report.main_evidence || []).length;
@@ -371,56 +414,61 @@ function renderDecision(container, report) {
   const providerLadder = formatProviderLadder(report.connector_lineage);
   container.querySelector('#decision-summary').innerHTML = `
     <div class="workbench-metric-grid">
-      ${metric('Action', String(report.action || '').toUpperCase())}
-      ${metric('Expected', pct(report.expected_return), 'positive')}
-      ${metric('Confidence', num(report.confidence))}
-      ${metric('Weight Max', pct(report.position_weight_range?.max || 0))}
-      ${metric('Evidence', evidenceCount || '-', evidenceCount ? 'positive' : '')}
-      ${metric('Live Age', liveAge, liveAge === '-' ? '' : 'risk')}
+      ${metric(t('Action', '动作'), actionLabel(report.action))}
+      ${metric(t('Expected', '预期收益'), pct(report.expected_return), 'positive')}
+      ${metric(t('Confidence', '置信度'), num(report.confidence))}
+      ${metric(t('Weight Max', '权重上限'), pct(report.position_weight_range?.max || 0))}
+      ${metric(t('Evidence', '证据数量'), evidenceCount || '-', evidenceCount ? 'positive' : '')}
+      ${metric(t('Live Age', '实时数据时效'), liveAge, liveAge === '-' ? '' : 'risk')}
     </div>
     <div class="workbench-kv-list compact-kv-list">
-      <div class="workbench-kv-row"><span>Confidence Interval</span><strong>${pct(interval.lower)} / ${pct(interval.center)} / ${pct(interval.upper)}</strong></div>
-      <div class="workbench-kv-row"><span>Verifier</span><strong>${esc(verifier.verdict || 'review')} / leakage ${String(!!verifier.leakage_pass)}</strong></div>
-      <div class="workbench-kv-row"><span>Execution Guard</span><strong>${esc(verifier.execution_guard || 'shadow_only_no_order_created')}</strong></div>
-      <div class="workbench-kv-row"><span>Evidence Quality</span><strong>${num(verifier.as_of_safe_ratio)}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Confidence Interval', '置信区间')}</span><strong>${pct(interval.lower)} / ${pct(interval.center)} / ${pct(interval.upper)}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Verifier', '验证器')}</span><strong>${esc(actionLabel(verifier.verdict || 'review'))} / ${t('leakage', '泄漏')} ${boolLabel(!!verifier.leakage_pass)}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Execution Guard', '执行门控')}</span><strong>${esc(verifier.execution_guard || t('shadow_only_no_order_created', '仅影子模式，不创建订单'))}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Evidence Quality', '证据质量')}</span><strong>${num(verifier.as_of_safe_ratio)}</strong></div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">Decision Ledger</div>
+      <div class="workbench-section__title">${t('Decision Ledger', '决策台账')}</div>
       <div class="workbench-kv-list compact-kv-list">
-        <div class="workbench-kv-row"><span>Decision ID</span><strong>${esc(report.decision_id || '-')}</strong></div>
-        <div class="workbench-kv-row"><span>Decision Time</span><strong>${esc(report.decision_time || report.generated_at || '-')}</strong></div>
-        <div class="workbench-kv-row"><span>Evidence Count</span><strong>${esc(evidenceCount || 0)}</strong></div>
-        <div class="workbench-kv-row"><span>Live Age</span><strong>${esc(liveAge)}</strong></div>
-        <div class="workbench-kv-row"><span>Data Versions</span><strong>${esc(dataVersions)}</strong></div>
-        <div class="workbench-kv-row"><span>Model Versions</span><strong>${esc(modelVersions)}</strong></div>
-        <div class="workbench-kv-row"><span>Provider Ladder</span><strong>${esc(providerLadder)}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Decision ID', '决策 ID')}</span><strong>${esc(report.decision_id || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Decision Time', '决策时间')}</span><strong>${esc(report.decision_time || report.generated_at || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Evidence Count', '证据数量')}</span><strong>${esc(evidenceCount || 0)}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Live Age', '实时数据时效')}</span><strong>${esc(liveAge)}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Data Versions', '数据版本')}</span><strong>${esc(dataVersions)}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Model Versions', '模型版本')}</span><strong>${esc(modelVersions)}</strong></div>
+        <div class="workbench-kv-row"><span>${t('Provider Ladder', '来源梯队')}</span><strong>${esc(providerLadder)}</strong></div>
       </div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">Verifier Snapshot</div>
+      <div class="workbench-section__title">${t('Verifier Snapshot', '验证器快照')}</div>
       <div class="preview-step-grid">
-        <div class="preview-step"><span>Verdict</span><strong>${esc(verifier.verdict || 'review')}</strong></div>
-        <div class="preview-step"><span>Leakage</span><strong>${String(!!verifier.leakage_pass)}</strong></div>
-        <div class="preview-step"><span>Conflicts</span><strong>${esc(conflictCount || 0)}</strong></div>
-        <div class="preview-step"><span>Quota Mode</span><strong>${esc(String(report.quota_mode ?? 'shadow'))}</strong></div>
+        <div class="preview-step"><span>${t('Verdict', '结论')}</span><strong>${esc(actionLabel(verifier.verdict || 'review'))}</strong></div>
+        <div class="preview-step"><span>${t('Leakage', '泄漏检查')}</span><strong>${boolLabel(!!verifier.leakage_pass)}</strong></div>
+        <div class="preview-step"><span>${t('Conflicts', '冲突数量')}</span><strong>${esc(conflictCount || 0)}</strong></div>
+        <div class="preview-step"><span>${t('Quota Mode', '额度模式')}</span><strong>${esc(String(report.quota_mode ?? t('shadow', '影子')))}</strong></div>
       </div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">Risk Triggers</div>
+      <div class="workbench-section__title">${t('Risk Triggers', '风险触发')}</div>
       <div class="workbench-report-text"><ul>${triggers}</ul></div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">Factor Contribution</div>
+      <div class="workbench-section__title">${t('Factor Contribution', '因子贡献')}</div>
       ${factors}
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">Audit Snapshot</div>
+      <div class="workbench-section__title">${t('Audit Snapshot', '审计快照')}</div>
       <div class="preview-step-grid">
-        ${(auditTrail.length ? auditTrail : ['source linked evidence', 'as-of safe features', 'counter evidence checked', 'shadow log ready']).map((step) => `<div class="preview-step"><span>${esc(step)}</span><strong>ready</strong></div>`).join('')}
+        ${(auditTrail.length ? auditTrail : [
+          t('source linked evidence', '来源关联证据'),
+          t('as-of safe features', '时点安全特征'),
+          t('counter evidence checked', '反方证据已检查'),
+          t('shadow log ready', '影子日志已就绪'),
+        ]).map((step) => `<div class="preview-step"><span>${esc(step)}</span><strong>${t('ready', '就绪')}</strong></div>`).join('')}
       </div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">Embedded Simulation</div>
+      <div class="workbench-section__title">${t('Embedded Simulation', '内嵌模拟')}</div>
       ${simulation}
     </div>`;
 }
@@ -438,18 +486,18 @@ function renderCounterEvidence(container, items) {
   const avgConfidence = items.reduce((acc, item) => acc + Number(item.confidence || 0), 0) / Math.max(1, items.length);
   container.querySelector('#counter-panel').innerHTML = `
     <div class="workbench-metric-grid">
-      ${metric('Counter', items.length, 'risk')}
-      ${metric('Providers', providers.length || '-')}
-      ${metric('Avg Q', num(avgConfidence))}
-      ${metric('Critic', 'armed', 'risk')}
+      ${metric(t('Counter', '反方条目'), items.length, 'risk')}
+      ${metric(t('Providers', '来源数'), providers.length || '-')}
+      ${metric(t('Avg Q', '平均质量'), num(avgConfidence))}
+      ${metric(t('Critic', '验证器'), t('armed', '已启用'), 'risk')}
     </div>
     ${renderEvidenceItems(items, { maxItems: 6, scroll: true })}
     <div class="workbench-section">
-      <div class="workbench-section__title">Critic Focus</div>
+      <div class="workbench-section__title">${t('Critic Focus', '验证器关注点')}</div>
       <div class="factor-checklist">
-        <div class="factor-check-row"><span>Weak source pressure</span><strong>${esc(providers.join(', ') || '-')}</strong></div>
-        <div class="factor-check-row"><span>Freshness check</span><strong class="is-review">active</strong></div>
-        <div class="factor-check-row"><span>Contrarian read</span><strong>enabled</strong></div>
+        <div class="factor-check-row"><span>${t('Weak source pressure', '弱来源压力')}</span><strong>${esc(providers.join(', ') || '-')}</strong></div>
+        <div class="factor-check-row"><span>${t('Freshness check', '新鲜度检查')}</span><strong class="is-review">${t('active', '活跃')}</strong></div>
+        <div class="factor-check-row"><span>${t('Contrarian read', '反向解读')}</span><strong>${t('enabled', '已启用')}</strong></div>
       </div>
     </div>`;
 }
@@ -462,21 +510,21 @@ function renderAudit(container, decisions) {
   const first = decisions[0] || {};
   container.querySelector('#audit-panel').innerHTML = `
     <div class="workbench-metric-grid">
-      ${metric('Records', decisions.length, 'positive')}
-      ${metric('Latest', first.status || first.action || 'recorded')}
-      ${metric('Feature Time', first.feature_time || first.decision_time || 'as-of safe')}
-      ${metric('Model', first.model_version || 'shadow-stack')}
+      ${metric(t('Records', '记录数'), decisions.length, 'positive')}
+      ${metric(t('Latest', '最新状态'), actionLabel(first.status || first.action || 'recorded'))}
+      ${metric(t('Feature Time', '特征时点'), first.feature_time || first.decision_time || t('as-of safe', '时点安全'))}
+      ${metric(t('Model', '模型'), first.model_version || 'shadow-stack')}
     </div>
     <div class="workbench-kv-list compact-kv-list">
       ${decisions.slice(0, 5).map((decision) => `
         <div class="workbench-kv-row">
-          <span>${esc(decision.decision_id || decision.status || 'audit')}</span>
+          <span>${esc(decision.decision_id || decision.status || t('audit', '审计'))}</span>
           <strong>${esc(decision.symbol || decision.model_version || '-')}</strong>
         </div>
       `).join('')}
-      <div class="workbench-kv-row"><span>Latest Status</span><strong>${esc(first.status || first.action || 'recorded')}</strong></div>
-      <div class="workbench-kv-row"><span>Feature Time</span><strong>${esc(first.feature_time || first.decision_time || 'as-of safe')}</strong></div>
-      <div class="workbench-kv-row"><span>Model Version</span><strong>${esc(first.model_version || 'shadow-stack')}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Latest Status', '最新状态')}</span><strong>${esc(actionLabel(first.status || first.action || 'recorded'))}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Feature Time', '特征时点')}</span><strong>${esc(first.feature_time || first.decision_time || t('as-of safe', '时点安全'))}</strong></div>
+      <div class="workbench-kv-row"><span>${t('Model Version', '模型版本')}</span><strong>${esc(first.model_version || 'shadow-stack')}</strong></div>
     </div>`;
 }
 
@@ -530,7 +578,7 @@ function renderAuditReadyState() {
       <div class="workbench-kv-list compact-kv-list">
         <div class="workbench-kv-row"><span>${t('Data snapshot', '数据快照')}</span><strong>${t('waiting', '等待生成')}</strong></div>
         <div class="workbench-kv-row"><span>${t('Model version', '模型版本')}</span><strong>shadow-stack</strong></div>
-        <div class="workbench-kv-row"><span>${t('Feature time', '特征时点')}</span><strong>as-of safe</strong></div>
+        <div class="workbench-kv-row"><span>${t('Feature time', '特征时点')}</span><strong>${t('as-of safe', '时点安全')}</strong></div>
         <div class="workbench-kv-row"><span>${t('Outcome log', '结果复盘')}</span><strong>${t('after decision', '决策后记录')}</strong></div>
       </div>
     </div>`;
@@ -551,10 +599,13 @@ function renderConnectedActions() {
 function renderWorkbenchLinks() {
   return `
     <div class="workbench-link-list">
-      <button class="workbench-link-row" id="link-factor-lab"><strong>Factor Lab</strong><span>Discover candidates, gate IC/RankIC, and review FactorCards.</span></button>
-      <button class="workbench-link-row" id="link-simulation"><strong>Simulation</strong><span>Replay shocks, Monte Carlo paths, and historical analogs.</span></button>
-      <button class="workbench-link-row" id="link-connector-center"><strong>Connector Center</strong><span>Free-tier source health, quota guard, and sample payloads.</span></button>
-      <button class="workbench-link-row" id="link-market-radar"><strong>Market Radar</strong><span>Live evidence stream with provider attribution.</span></button>
+      <button class="workbench-link-row" id="link-factor-lab"><strong>${t('Factor Lab', '因子实验室')}</strong><span>${t('Discover candidates, gate IC/RankIC, and review FactorCards.', '发现候选因子、执行 IC/RankIC 门禁，并检查因子卡。')}</span></button>
+      <button class="workbench-link-row" id="link-simulation"><strong>${t('Simulation', '情景模拟')}</strong><span>${t('Replay shocks, Monte Carlo paths, and historical analogs.', '回放冲击、Monte Carlo 路径与历史相似事件。')}</span></button>
+      <button class="workbench-link-row" id="link-debate-desk"><strong>${t('Debate Desk', '辩论台')}</strong><span>${t('Run bull vs bear rounds, judge verdicts, and confidence shifts.', '查看多空辩论回合、裁判结论与置信度变化。')}</span></button>
+      <button class="workbench-link-row" id="link-risk-board"><strong>${t('Risk Board', '风控板')}</strong><span>${t('Review risk approvals, Kelly caps, drawdown gates, and blockers.', '查看风控审批、Kelly 上限、回撤门禁与阻断项。')}</span></button>
+      <button class="workbench-link-row" id="link-trading-ops"><strong>${t('Trading Ops', '交易运维')}</strong><span>${t('Manage schedules, watchlist state, alerts, and latest review status.', '管理调度、自选池、告警与最新复盘状态。')}</span></button>
+      <button class="workbench-link-row" id="link-connector-center"><strong>${t('Connector Center', '数据源中心')}</strong><span>${t('Free-tier source health, quota guard, and sample payloads.', '查看免费数据源健康状态、额度保护与样例载荷。')}</span></button>
+      <button class="workbench-link-row" id="link-market-radar"><strong>${t('Market Radar', '市场雷达')}</strong><span>${t('Live evidence stream with provider attribution.', '浏览带来源归因的实时证据流。')}</span></button>
     </div>`;
 }
 
@@ -574,5 +625,7 @@ function formatLiveAge(liveAge) {
   if (!liveAge || liveAge.avg_age_hours == null) return '-';
   const avg = Number(liveAge.avg_age_hours || 0);
   const max = Number(liveAge.max_age_hours || 0);
-  return `avg ${avg.toFixed(1)}h / max ${max.toFixed(1)}h`;
+  return getLang() === 'zh'
+    ? `平均 ${avg.toFixed(1)}h / 最大 ${max.toFixed(1)}h`
+    : `avg ${avg.toFixed(1)}h / max ${max.toFixed(1)}h`;
 }

@@ -46,6 +46,7 @@ class RuntimeContext:
     report_generator: Any = None
     report_scheduler: Any = None
     quant_system: Any = None
+    trading_service: Any = None
     report_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     sync_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -326,7 +327,34 @@ class RuntimeContext:
 
         self.ensure_optional_services(start_scheduler=True)
 
+        if self.quant_system is not None and self.trading_service is None:
+            try:
+                from gateway.trading.service import get_trading_service
+
+                self.trading_service = get_trading_service(
+                    quant_system=self.quant_system,
+                    get_client=self.get_client,
+                )
+                logger.info("[Runtime] Trading agent service initialized")
+            except Exception as exc:
+                logger.warning(f"[Runtime] Trading agent service init failed: {exc}")
+
+        if self.trading_service is not None and hasattr(self.trading_service, "startup"):
+            try:
+                await self.trading_service.startup()
+                logger.info("[Runtime] Trading agent service started")
+            except Exception as exc:
+                logger.warning(f"[Runtime] Trading agent service startup failed: {exc}")
+
         logger.info("[Startup] All modules initialized successfully")
+
+    async def shutdown(self, app: FastAPI) -> None:
+        if self.trading_service is not None and hasattr(self.trading_service, "shutdown"):
+            try:
+                await self.trading_service.shutdown()
+                logger.info("[Runtime] Trading agent service stopped")
+            except Exception as exc:
+                logger.warning(f"[Runtime] Trading agent service shutdown failed: {exc}")
 
 
 def build_runtime() -> RuntimeContext:
