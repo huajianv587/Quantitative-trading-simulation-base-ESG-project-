@@ -86,11 +86,11 @@ function routeMeta(path) {
 function groupStatus(group) {
   const count = group.paths.filter((path) => !!routeMeta(path)).length;
   const statusMap = {
-    market: t('common.online'),
+    market: t('nav.status.live'),
     decision: `${count}`,
-    trading: 'paper',
-    governance: `${count}`,
-    system: 'ops',
+    trading: t('nav.status.paper'),
+    governance: t('nav.status.audit'),
+    system: t('nav.status.ops'),
   };
   return statusMap[group.statusKey] || `${count}`;
 }
@@ -115,7 +115,10 @@ function renderGroup(group, currentPath, openState) {
   return `
     <section class="nav-group ${isOpen ? 'is-open' : ''} ${hasActive ? 'has-active' : ''}" data-group-id="${group.id}">
       <button class="nav-group__trigger" type="button" data-group-trigger="${group.id}" aria-expanded="${isOpen ? 'true' : 'false'}">
-        <span class="nav-group__label">${t(group.labelKey)}</span>
+        <span class="nav-group__copy">
+          <span class="nav-group__label">${t(group.labelKey)}</span>
+          <span class="nav-group__summary">${t(`${group.labelKey}_summary`)}</span>
+        </span>
         <span class="nav-group__meta">
           <span class="nav-group__status">${groupStatus(group)}</span>
           ${chevron()}

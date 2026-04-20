@@ -489,6 +489,23 @@ body.c-hover #c-ring { width: 46px; height: 46px; border-color: var(--green); bo
   flex: 1;
 }
 
+.nav-group__copy {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+}
+
+.nav-group__summary {
+  min-width: 0;
+  color: var(--text-dim);
+  font-family: var(--f-mono);
+  font-size: 8px;
+  line-height: 1.45;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
 .nav-group__meta {
   display: flex;
   align-items: center;

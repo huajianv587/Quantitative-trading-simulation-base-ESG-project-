@@ -5,13 +5,23 @@ const STRINGS = {
     'app.logo_tag': 'ALPHA ENGINE · LIVE',
     'nav.platform': 'PLATFORM',
     'nav.quant': 'QUANT ENGINE',
-    'nav.research': 'RESEARCH',
+    'nav.research': 'RESEARCH TOOLS',
     'nav.ops': 'OPERATIONS',
     'nav.market_intel': 'MARKET INTELLIGENCE',
+    'nav.market_intel_summary': 'Research and live information flow',
     'nav.decision_hub': 'DECISION HUB',
+    'nav.decision_hub_summary': 'Debate, factor, and risk gates',
     'nav.trading_exec': 'TRADING EXECUTION',
+    'nav.trading_exec_summary': 'Paper submit and monitoring',
     'nav.governance': 'GOVERNANCE & REVIEW',
+    'nav.governance_summary': 'Audit, outcomes, and model review',
     'nav.system_admin': 'SYSTEM ADMIN',
+    'nav.system_admin_summary': 'Rules, access, and settings',
+    'nav.status.live': 'live',
+    'nav.status.review': 'review',
+    'nav.status.paper': 'paper',
+    'nav.status.audit': 'audit',
+    'nav.status.ops': 'ops',
     'page.login': 'Sign In',
     'page.register_auth': 'Register',
     'page.reset_pw': 'Reset Password',
@@ -101,16 +111,26 @@ const STRINGS = {
     'nav.research': '研究工具',
     'nav.ops': '运营管理',
     'nav.market_intel': '市场智能',
+    'nav.market_intel_summary': '研究与实时信息流',
     'nav.decision_hub': '决策中枢',
+    'nav.decision_hub_summary': '辩论、因子与风控门禁',
     'nav.trading_exec': '交易执行',
+    'nav.trading_exec_summary': '纸面提交与监控',
     'nav.governance': '治理与复盘',
+    'nav.governance_summary': '审计、结果与模型复核',
     'nav.system_admin': '系统管理',
+    'nav.system_admin_summary': '规则、权限与设置',
+    'nav.status.live': '在线',
+    'nav.status.review': '复核',
+    'nav.status.paper': '纸面',
+    'nav.status.audit': '审计',
+    'nav.status.ops': '运维',
     'page.login': '登录',
     'page.register_auth': '注册',
     'page.reset_pw': '重置密码',
     'page.dashboard': '控制台',
     'page.research': '研究',
-    'page.intelligence': '智能决策',
+    'page.intelligence': '决策驾驶舱',
     'page.factor_lab': '因子实验室',
     'page.simulation': '情景模拟',
     'page.connector_center': '数据源中心',
@@ -157,7 +177,7 @@ const STRINGS = {
     'auth.headline_login': 'ESG Alpha\n智能平台',
     'auth.tagline_login': '彭博级量化研究\n由 ESG 因子模型与 AI 驱动。',
     'auth.headline_register': '加入\nAlpha 网络',
-    'auth.tagline_register': '使用专业 ESG 量化工具\n服务分析师与投资经理。',
+    'auth.tagline_register': '使用面向分析师与投资经理的\n专业 ESG 量化工具。',
     'auth.terms': '创建账户即表示您同意服务条款。',
     'common.loading': '正在加载...',
     'common.error': '错误',
@@ -182,7 +202,7 @@ const STRINGS = {
     'common.backend_online': '后端已连接',
     'common.features_limited': '部分功能可能暂时不可用',
     'common.no_data': '暂无数据',
-    'common.market_open': '市场开市',
+    'common.market_open': '市场开盘',
     'common.market_closed': '市场休市',
     'common.page_failed_load': '页面加载失败',
     'common.page_failed_retry': '请刷新页面后重试。',
@@ -192,7 +212,7 @@ const STRINGS = {
 const AUTO_TEXT_ZH = {
   Dashboard: '控制台',
   Research: '研究',
-  'Decision Cockpit': '智能决策',
+  'Decision Cockpit': '决策驾驶舱',
   'Factor Lab': '因子实验室',
   Simulation: '情景模拟',
   'Connector Center': '数据源中心',
@@ -227,11 +247,12 @@ const AUTO_TEXT_ZH = {
   Refresh: '刷新',
   'No data available': '暂无数据',
   'Page failed to load': '页面加载失败',
-  'All providers': '全部数据源',
+  'Refresh this page and try again.': '请刷新页面后重试。',
+  'All providers': '全部来源',
   'All symbols': '全部股票',
   'No scan yet': '尚未扫描',
   'Loading evidence': '正在加载证据',
-  'Loading evidence lake': '正在加载证据库',
+  'Loading evidence lake': '正在加载证据湖',
   'Scanning free-tier providers': '正在扫描免费数据源',
   'Loading trading ops': '正在加载交易运维',
   'Loading risk board': '正在加载风控板',
@@ -239,222 +260,107 @@ const AUTO_TEXT_ZH = {
   'No approval yet': '暂无审批结果',
   'No risk approvals yet': '暂无风控审批记录',
   'No risk alerts today': '今日暂无风险告警',
-  'No review yet': '暂无复盘',
-  'No alerts today': '今日暂无告警',
-  'No watchlist rows yet': '暂无自选池条目',
-  'Run Debate': '运行辩论',
-  'Run Trading Cycle': '运行交易闭环',
-  'Start Monitor': '启动监控',
-  'Stop Monitor': '停止监控',
-  'Sentiment Overlay': '情绪叠层',
-  Approve: '批准',
-  approve: '批准',
-  Reduce: '缩减',
-  reduce: '缩减',
-  Reject: '拒绝',
-  reject: '拒绝',
-  Halt: '暂停',
-  halt: '暂停',
 };
 
 const AUTO_PLACEHOLDER_ZH = {
-  'Search by symbol...': '按股票代码搜索...',
-  'AAPL, MSFT, NVDA...': 'AAPL, MSFT, NVDA...',
-  'AAPL, MSFT... (blank = default)': 'AAPL, MSFT...（留空则使用默认）',
-  'Enter your email': '请输入邮箱',
-  'Enter your password': '请输入密码',
-  'Your full name': '请输入姓名',
-  'optional decision id': '可选的 decision id',
+  'optional decision id': '可选决策 ID',
+  'marketaux, local_esg': 'marketaux, local_esg',
+  AAPL: 'AAPL',
 };
 
-const AUTO_TEXT_EN = Object.fromEntries(Object.entries(AUTO_TEXT_ZH).map(([en, zh]) => [zh, en]));
-const AUTO_PLACEHOLDER_EN = Object.fromEntries(
-  Object.entries(AUTO_PLACEHOLDER_ZH).map(([en, zh]) => [zh, en]),
-);
-
-let _lang = typeof localStorage !== 'undefined' ? (localStorage.getItem(STORAGE_KEY) || 'zh') : 'zh';
-let _observer = null;
-let _applying = false;
-
-if (_lang !== 'zh' && _lang !== 'en') _lang = 'zh';
-
-function syncDocumentLang() {
-  if (typeof document !== 'undefined') document.documentElement.setAttribute('lang', _lang);
+function currentLang() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  return raw === 'zh' ? 'zh' : 'en';
 }
 
-syncDocumentLang();
+function setDocumentLang(lang) {
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+}
 
 export function getLang() {
-  return _lang;
+  return currentLang();
 }
 
 export function getLocale() {
-  return _lang === 'zh' ? 'zh-CN' : 'en-US';
+  return currentLang() === 'zh' ? 'zh-CN' : 'en-US';
 }
 
 export function isZh() {
-  return _lang === 'zh';
-}
-
-export function setLang(lang) {
-  if (lang !== 'zh' && lang !== 'en') return;
-  _lang = lang;
-  if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, lang);
-  syncDocumentLang();
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('lang-change', { detail: { lang } }));
-  }
-  applyLangToPage();
+  return currentLang() === 'zh';
 }
 
 export function t(key) {
-  return STRINGS[_lang]?.[key] ?? STRINGS.en[key] ?? key;
+  const lang = currentLang();
+  return STRINGS[lang]?.[key] || STRINGS.en[key] || key;
 }
 
-export function onLangChange(fn) {
-  const handler = (event) => fn(event.detail.lang);
-  window.addEventListener('lang-change', handler);
-  return () => window.removeEventListener('lang-change', handler);
+const listeners = new Set();
+
+export function onLangChange(callback) {
+  if (typeof callback !== 'function') return () => {};
+  listeners.add(callback);
+  return () => listeners.delete(callback);
 }
 
-function normalizeLooseText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function preserveOuterWhitespace(source, replacement) {
-  if (typeof source !== 'string' || typeof replacement !== 'string') return replacement;
-  const leading = source.match(/^\s*/)?.[0] || '';
-  const trailing = source.match(/\s*$/)?.[0] || '';
-  return `${leading}${replacement}${trailing}`;
-}
-
-export function translateLoose(source, kind = 'text') {
-  if (typeof source !== 'string') return source;
-  const trimmed = normalizeLooseText(source);
-  if (!trimmed) return source;
-
-  const directMap = kind === 'placeholder' ? AUTO_PLACEHOLDER_ZH : AUTO_TEXT_ZH;
-  const reverseMap = kind === 'placeholder' ? AUTO_PLACEHOLDER_EN : AUTO_TEXT_EN;
-  const translated = _lang === 'zh' ? directMap[trimmed] : reverseMap[trimmed];
-  return translated ? preserveOuterWhitespace(source, translated) : source;
-}
-
-function applyStaticTranslations(root = document) {
-  root.querySelectorAll?.('[data-i18n]').forEach((el) => {
-    const key = el.getAttribute('data-i18n');
-    if (key) el.textContent = t(key);
-  });
-
-  root.querySelectorAll?.('[data-i18n-placeholder]').forEach((el) => {
-    const key = el.getAttribute('data-i18n-placeholder');
-    if (key) el.setAttribute('placeholder', t(key));
-  });
-
-  root.querySelectorAll?.('[data-i18n-title]').forEach((el) => {
-    const key = el.getAttribute('data-i18n-title');
-    if (key) el.setAttribute('title', t(key));
-  });
-}
-
-function shouldSkipTextNode(node) {
-  const parent = node?.parentElement;
-  if (!parent) return true;
-  if (parent.closest('[data-i18n]')) return true;
-  if (parent.closest('[data-no-autotranslate="true"]')) return true;
-  return ['SCRIPT', 'STYLE', 'TEXTAREA'].includes(parent.tagName);
-}
-
-function autoTranslate(root = document) {
-  if (typeof document === 'undefined' || !root) return;
-
-  const target = root.nodeType === Node.TEXT_NODE ? root.parentNode : root;
-  if (!target) return;
-
-  const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
-  let textNode = root.nodeType === Node.TEXT_NODE ? root : walker.nextNode();
-
-  while (textNode) {
-    if (!shouldSkipTextNode(textNode)) {
-      const current = textNode.textContent;
-      const translated = translateLoose(current, 'text');
-      if (translated !== current) textNode.textContent = translated;
-    }
-    textNode = walker.nextNode();
-  }
-
-  const elements = target.querySelectorAll ? [target, ...target.querySelectorAll('*')] : [];
-  elements.forEach((el) => {
-    if (!(el instanceof Element) || el.closest('[data-no-autotranslate="true"]')) return;
-
-    if (el.hasAttribute('placeholder') && !el.hasAttribute('data-i18n-placeholder')) {
-      const translated = translateLoose(el.getAttribute('placeholder'), 'placeholder');
-      if (translated) el.setAttribute('placeholder', translated);
-    }
-
-    if (el.hasAttribute('title') && !el.hasAttribute('data-i18n-title')) {
-      const translated = translateLoose(el.getAttribute('title'), 'text');
-      if (translated) el.setAttribute('title', translated);
-    }
-
-    if (el.tagName === 'INPUT') {
-      const type = (el.getAttribute('type') || '').toLowerCase();
-      if (['button', 'submit', 'reset'].includes(type) && el.hasAttribute('value')) {
-        const translated = translateLoose(el.getAttribute('value'), 'text');
-        if (translated) el.setAttribute('value', translated);
-      }
+export function setLang(lang) {
+  const next = lang === 'zh' ? 'zh' : 'en';
+  localStorage.setItem(STORAGE_KEY, next);
+  setDocumentLang(next);
+  listeners.forEach((listener) => {
+    try {
+      listener(next);
+    } catch (error) {
+      console.error('onLangChange listener failed', error);
     }
   });
+}
+
+function translateText(value) {
+  if (!value || currentLang() !== 'zh') return value;
+  return AUTO_TEXT_ZH[value.trim()] || value;
+}
+
+function translatePlaceholder(value) {
+  if (!value || currentLang() !== 'zh') return value;
+  return AUTO_PLACEHOLDER_ZH[value.trim()] || value;
+}
+
+export function translateLoose(value) {
+  return translateText(value);
 }
 
 export function applyLangToPage(root = document) {
-  if (typeof document === 'undefined' || !root) return;
-  _applying = true;
-  try {
-    applyStaticTranslations(root);
-    autoTranslate(root);
-  } finally {
-    _applying = false;
-  }
-}
+  setDocumentLang(currentLang());
 
-function ensureObserver() {
-  if (typeof MutationObserver === 'undefined' || typeof document === 'undefined' || _observer) return;
-
-  _observer = new MutationObserver((mutations) => {
-    if (_applying) return;
-    for (const mutation of mutations) {
-      if (mutation.type === 'childList') {
-        mutation.addedNodes.forEach((node) => {
-          if (node.nodeType === Node.TEXT_NODE || node.nodeType === Node.ELEMENT_NODE) {
-            applyLangToPage(node);
-          }
-        });
-      }
-      if (mutation.type === 'characterData' && mutation.target) {
-        applyLangToPage(mutation.target);
-      }
-    }
+  root.querySelectorAll('[data-i18n]').forEach((node) => {
+    const key = node.getAttribute('data-i18n');
+    if (key) node.textContent = t(key);
   });
 
-  _observer.observe(document.body || document.documentElement, {
-    childList: true,
-    characterData: true,
-    subtree: true,
+  root.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
+    const key = node.getAttribute('data-i18n-placeholder');
+    if (key && 'placeholder' in node) node.placeholder = t(key);
+  });
+
+  if (currentLang() !== 'zh') return;
+
+  root.querySelectorAll('button, a, span, strong, h1, h2, h3, h4, label, option').forEach((node) => {
+    if (node.closest('[data-no-autotranslate="true"]')) return;
+    if (node.hasAttribute('data-i18n')) return;
+    const text = node.textContent?.trim();
+    if (!text) return;
+    const translated = translateText(text);
+    if (translated !== text) node.textContent = translated;
+  });
+
+  root.querySelectorAll('input[placeholder], textarea[placeholder]').forEach((node) => {
+    if (node.closest('[data-no-autotranslate="true"]')) return;
+    if (node.hasAttribute('data-i18n-placeholder')) return;
+    const placeholder = node.getAttribute('placeholder');
+    if (!placeholder) return;
+    const translated = translatePlaceholder(placeholder);
+    if (translated !== placeholder) node.setAttribute('placeholder', translated);
   });
 }
 
-if (typeof document !== 'undefined') {
-  if (document.readyState === 'loading') {
-    document.addEventListener(
-      'DOMContentLoaded',
-      () => {
-        applyLangToPage();
-        ensureObserver();
-      },
-      { once: true },
-    );
-  } else {
-    applyLangToPage();
-    ensureObserver();
-  }
-}
+setDocumentLang(currentLang());

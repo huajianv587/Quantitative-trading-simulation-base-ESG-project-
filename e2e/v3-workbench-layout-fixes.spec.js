@@ -354,7 +354,7 @@ for (const viewport of VIEWPORTS) {
       await page.locator('#btn-intel-scan').click();
       await page.locator('#btn-decision-explain').click();
       await expect(page.locator('#decision-summary')).toContainText(/Verifier|Risk|Decision|决策|风险|验证/);
-      await expect(page.locator('.decision-stack--right > .card')).toHaveCount(4);
+      await expect(page.locator('.decision-stack--right > .card')).toHaveCount(6);
       if (isDesktop) await assertCardStackTight(page, '.decision-stack--right', 28);
       await assertNoHorizontalOverflow(page, overflowSelectors);
       await page.screenshot({ path: screenshotPath('intelligence', viewport.name, mode.lang, mode.theme, 'after-actions'), fullPage: true });

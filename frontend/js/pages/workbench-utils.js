@@ -51,51 +51,9 @@ const COPY = {
   },
 };
 
-const POSITIVE_STATUSES = new Set([
-  'promoted',
-  'configured',
-  'pass',
-  'safe',
-  'ready',
-  'filled',
-  'shadow',
-  'queued',
-  'running',
-  'on',
-  'armed',
-  'protected',
-  'untouched',
-  'approve',
-  'active',
-  'linked',
-  'logged',
-  'stored',
-  'clear',
-  'tracked',
-  'derived',
-  'guarded',
-  'yes',
-  'buy',
-  'long',
-]);
-
-const NEGATIVE_STATUSES = new Set([
-  'rejected',
-  'failed',
-  'missing_key',
-  'error',
-  'risk',
-  'blocked',
-  'reject',
-  'halt',
-  'sell',
-  'short',
-  'off',
-]);
-
 const STATUS_COPY = {
   zh: {
-    promoted: '已升级',
+    promoted: '已晋升',
     configured: '已配置',
     pass: '通过',
     safe: '安全',
@@ -147,16 +105,61 @@ const STATUS_COPY = {
     short: '看空',
     clear: '清晰',
     paper: '纸面',
+    enabled: '已启用',
+    disabled: '已停用',
   },
 };
+
+const POSITIVE_STATUSES = new Set([
+  'promoted',
+  'configured',
+  'pass',
+  'safe',
+  'ready',
+  'filled',
+  'shadow',
+  'queued',
+  'running',
+  'on',
+  'armed',
+  'protected',
+  'untouched',
+  'approve',
+  'active',
+  'linked',
+  'logged',
+  'stored',
+  'clear',
+  'tracked',
+  'derived',
+  'guarded',
+  'yes',
+  'buy',
+  'long',
+  'enabled',
+]);
+
+const NEGATIVE_STATUSES = new Set([
+  'rejected',
+  'failed',
+  'missing_key',
+  'error',
+  'risk',
+  'blocked',
+  'reject',
+  'halt',
+  'sell',
+  'short',
+  'off',
+  'disabled',
+]);
 
 export function lang() {
   return getLang() === 'zh' ? 'zh' : 'en';
 }
 
 export function text(key) {
-  const current = lang();
-  return COPY[current]?.[key] || COPY.en[key] || key;
+  return COPY[lang()]?.[key] || COPY.en[key] || key;
 }
 
 export function esc(value) {
@@ -185,6 +188,16 @@ export function readSymbol(container, selector, fallback = 'AAPL') {
   return (container.querySelector(selector)?.value || fallback).trim().toUpperCase();
 }
 
+export function splitTokens(raw, options = {}) {
+  const delimiters = options.delimiters || /[,\s]+/;
+  const uppercase = !!options.uppercase;
+  return String(raw || '')
+    .split(delimiters)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => (uppercase ? item.toUpperCase() : item));
+}
+
 export function readUniverse(raw, symbol) {
   const values = splitTokens(raw, { uppercase: true, delimiters: /[,\s]+/ });
   if (symbol && !values.includes(symbol)) values.unshift(symbol);
@@ -196,16 +209,16 @@ export function setLoading(el, message = text('loading')) {
   el.innerHTML = `<div class="empty-state empty-state--compact"><div class="empty-state__title">${esc(message)}</div></div>`;
 }
 
-export function renderError(el, err) {
-  if (!el) return;
-  el.innerHTML = emptyState(text('requestFailed'), err?.message || String(err || ''));
-}
-
 export function emptyState(title = text('empty'), detail = '') {
   return `<div class="empty-state">
     <div class="empty-state__title">${esc(title)}</div>
     ${detail ? `<div class="empty-state__text">${esc(detail)}</div>` : ''}
   </div>`;
+}
+
+export function renderError(el, err) {
+  if (!el) return;
+  el.innerHTML = emptyState(text('requestFailed'), err?.message || String(err || ''));
 }
 
 export function metric(label, value, tone = '') {
@@ -235,7 +248,7 @@ function humanizeStatus(status) {
 }
 
 export function statusBadge(status) {
-  const normalized = String(status || 'research_only').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const normalized = String(status || 'neutral').trim().toLowerCase().replace(/[\s-]+/g, '_');
   const tone = POSITIVE_STATUSES.has(normalized)
     ? 'filled'
     : NEGATIVE_STATUSES.has(normalized)
@@ -247,16 +260,6 @@ export function statusBadge(status) {
 export function pathChip(value, empty = '-') {
   const raw = String(value || empty);
   return `<span class="path-chip" title="${esc(raw)}">${esc(raw)}</span>`;
-}
-
-export function splitTokens(raw, options = {}) {
-  const delimiters = options.delimiters || /[,|\s]+/;
-  const uppercase = !!options.uppercase;
-  return String(raw || '')
-    .split(delimiters)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => (uppercase ? item.toUpperCase() : item));
 }
 
 export function renderTokenPreview(raw, options = {}) {
@@ -330,6 +333,7 @@ export function renderSimulationResult(sim) {
   if (!sim) {
     return emptyState(text('noSimulation'), text('noSimulationHint'));
   }
+
   const pathRows = Object.entries(sim.path_summary || {}).map(([key, value]) => `
     <div class="workbench-kv-row"><span>${esc(key)}</span><strong>${pct(value)}</strong></div>
   `).join('');

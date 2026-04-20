@@ -5,6 +5,7 @@ import {
   emptyState,
   esc,
   metric,
+  miniMetric,
   num,
   pct,
   renderError,
@@ -22,109 +23,125 @@ let _current = null;
 const COPY = {
   en: {
     title: 'Debate Desk',
-    subtitle: 'Bull vs bear structured debate, judge verdict, and executable paper-mode conclusion.',
+    subtitle: 'Structured bull vs bear debate with judge verdict, conflict map, and direct handoff into risk approval.',
     symbol: 'Symbol',
     universe: 'Universe',
     providers: 'Providers',
-    allProviders: 'All providers',
     query: 'Debate Query',
-    queryValue: 'Debate the current thesis with ESG evidence, sentiment, and factor gates.',
+    queryValue: 'Debate the current thesis with ESG evidence, factor gates, sentiment, and regime risk.',
     run: 'Run Debate',
     refresh: 'Refresh Ledger',
-    triad: 'Debate Triad',
-    rounds: 'Rebuttal Rounds',
+    current: 'Current Debate',
     ledger: 'Debate Ledger',
+    rounds: 'Rebuttal Rounds',
     conflict: 'Conflict Map',
     consensus: 'Consensus',
     sentiment: 'Sentiment Overlay',
     handoff: 'Action Bridge',
     noLedger: 'No debate runs yet',
-    noLedgerHint: 'Run Debate to create a bull vs bear record.',
+    noLedgerHint: 'Run Debate to create a bull vs bear record and judge verdict.',
     noSelected: 'No debate selected',
-    noSelectedHint: 'The triad view will appear here.',
+    noSelectedHint: 'The latest debate, conflict points, and handoff actions will appear here.',
     loadingLedger: 'Loading debate ledger...',
     running: 'Running structured debate...',
     bull: 'Bull',
     bear: 'Bear',
     judge: 'Judge',
-    humanReview: 'Human Review',
+    confidence: 'Confidence',
+    dispute: 'Dispute',
+    review: 'Human Review',
+    expected: 'Expected Edge',
+    factors: 'Factors',
+    roundsCount: 'Rounds',
+    noMajorConflict: 'No major conflict logged.',
+    noConsensus: 'No consensus points logged.',
     polarity: 'Polarity',
     headlines: 'Headlines',
-    feature: 'Feature',
     freshness: 'Freshness',
-    sources: 'Sources',
-    snapshot: 'Snapshot',
-    factorCount: 'Factors',
-    roundsCount: 'Rounds',
-    roundPrefix: 'Round',
-    bullLabel: 'Bull',
-    bearLabel: 'Bear',
-    judgePrefix: 'Judge',
-    disputePrefix: 'Dispute',
-    noMajorConflict: 'No major conflict',
-    clear: 'clear',
-    linked: 'linked',
-    watch: 'watch',
-    yes: 'yes',
-    no: 'no',
-    openRisk: 'Open Risk Board',
-    openOps: 'Open Trading Ops',
-    openSimulation: 'Open Simulation',
-    openOutcome: 'Open Outcome Center',
-    handoffHint: 'Send the current verdict into risk approval, operations, simulation replay, or outcome tracking.',
+    feature: 'Feature',
+    sourceMix: 'Source Mix',
+    handoffHint: 'Move the current verdict into risk approval, ops monitoring, simulation replay, or outcome tracking.',
+    openRisk: 'Go to Risk Board',
+    openOps: 'Go to Trading Ops',
+    openSimulation: 'Go to Simulation',
+    openOutcome: 'Go to Outcome Center',
+    latestRun: 'Latest Run',
+    generated: 'Generated',
+    verdict: 'Verdict',
+    reviewYes: 'required',
+    reviewNo: 'clear',
+    rebuttalTitle: 'Round',
+    long: 'long',
+    short: 'short',
+    neutral: 'neutral',
+    block: 'block',
+    hold: 'hold',
+    confidenceShift: 'Confidence Shift',
+    riskHint: 'Open position sizing, hard blocks, and capital caps.',
+    opsHint: 'Inspect paper mode, schedule, alerts, and latest review.',
+    simulationHint: 'Replay the active thesis with shocks and Monte Carlo.',
+    outcomeHint: 'Track outcome rows, calibration, and post-trade review.',
   },
   zh: {
     title: '辩论台',
-    subtitle: '在这里查看多空对抗、裁判结论，以及可执行的纸面交易建议。',
+    subtitle: '查看多空结构化辩论、裁判结论、冲突点与风险移交。',
     symbol: '股票',
     universe: '股票池',
     providers: '数据源',
-    allProviders: '全部数据源',
     query: '辩论问题',
-    queryValue: '结合 ESG 证据、情绪线索与因子门禁，辩论当前交易观点。',
+    queryValue: '结合 ESG 证据、因子门禁、情绪与宏观 regime 风险，对当前交易观点进行多空辩论。',
     run: '运行辩论',
     refresh: '刷新台账',
-    triad: '辩论三方',
-    rounds: '交锋回合',
+    current: '当前辩论',
     ledger: '辩论台账',
+    rounds: '交锋回合',
     conflict: '冲突图谱',
     consensus: '共识',
     sentiment: '情绪叠层',
-    handoff: '行动桥',
-    noLedger: '还没有辩论记录',
-    noLedgerHint: '运行一次辩论，生成多头与空头的对抗记录。',
-    noSelected: '还没有选中的辩论',
-    noSelectedHint: '三方观点会显示在这里。',
+    handoff: '行动桥接',
+    noLedger: '暂无辩论记录',
+    noLedgerHint: '运行一次辩论后，这里会出现多头、空头与裁判结论。',
+    noSelected: '尚未选中辩论',
+    noSelectedHint: '最新辩论、冲突点、共识点与风险移交会展示在这里。',
     loadingLedger: '正在加载辩论台账...',
     running: '正在运行结构化辩论...',
     bull: '多头',
     bear: '空头',
     judge: '裁判',
-    humanReview: '人工复核',
+    confidence: '置信度',
+    dispute: '分歧度',
+    review: '人工复核',
+    expected: '预期优势',
+    factors: '因子数',
+    roundsCount: '回合数',
+    noMajorConflict: '暂无主要冲突记录。',
+    noConsensus: '暂无共识记录。',
     polarity: '情绪方向',
     headlines: '标题数',
-    feature: '特征值',
     freshness: '新鲜度',
-    sources: '来源',
-    snapshot: '快照',
-    factorCount: '因子数',
-    roundsCount: '回合数',
-    roundPrefix: '回合',
-    bullLabel: '多头',
-    bearLabel: '空头',
-    judgePrefix: '裁判',
-    disputePrefix: '分歧',
-    noMajorConflict: '暂无主要冲突',
-    clear: '清晰',
-    linked: '已关联',
-    watch: '关注',
-    yes: '是',
-    no: '否',
-    openRisk: '打开风控板',
-    openOps: '打开交易运维',
-    openSimulation: '打开情景模拟',
-    openOutcome: '打开结果追踪',
-    handoffHint: '把当前 verdict 送往风控审批、交易运维、模拟回放或结果追踪。',
+    feature: '特征值',
+    sourceMix: '来源混合',
+    handoffHint: '把当前裁决送往风控审批、交易运维、情景模拟或结果追踪。',
+    openRisk: '去风控板',
+    openOps: '去交易运维',
+    openSimulation: '去情景模拟',
+    openOutcome: '去结果追踪',
+    latestRun: '最近一次运行',
+    generated: '生成时间',
+    verdict: '结论',
+    reviewYes: '需要',
+    reviewNo: '无需',
+    rebuttalTitle: '回合',
+    long: '看多',
+    short: '看空',
+    neutral: '中性',
+    block: '阻断',
+    hold: '持有',
+    confidenceShift: '置信度变化',
+    riskHint: '查看仓位 sizing、硬性阻断与资本上限。',
+    opsHint: '查看纸面模式、调度、告警与最新复盘。',
+    simulationHint: '用冲击和 Monte Carlo 回放当前论点。',
+    outcomeHint: '查看结果记录、校准摘要与事后复盘。',
   },
 };
 
@@ -133,8 +150,16 @@ function c(key) {
   return COPY[lang][key] || COPY.en[key] || key;
 }
 
-function t(en, zh) {
-  return getLang() === 'zh' ? zh : en;
+function actionLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const map = {
+    long: c('long'),
+    short: c('short'),
+    neutral: c('neutral'),
+    block: c('block'),
+    hold: c('hold'),
+  };
+  return map[normalized] || String(value || '-');
 }
 
 export async function render(container) {
@@ -143,13 +168,12 @@ export async function render(container) {
   wire();
   renderFieldPreviews();
   _langCleanup = onLangChange(() => {
-    if (_container) {
-      renderShell();
-      wire();
-      renderFieldPreviews();
-      renderCurrent();
-      renderLedger();
-    }
+    if (!_container?.isConnected) return;
+    renderShell();
+    wire();
+    renderFieldPreviews();
+    renderCurrent();
+    renderLedger();
   });
   await refreshLedger();
 }
@@ -202,7 +226,7 @@ function renderShell() {
       </section>
       <section class="grid-2 workbench-main-grid trading-debate-grid">
         <article class="card">
-          <div class="card-header"><span class="card-title">${c('triad')}</span></div>
+          <div class="card-header"><span class="card-title">${c('current')}</span></div>
           <div class="card-body" id="debate-current">${emptyState(c('loadingLedger'))}</div>
         </article>
         <article class="card">
@@ -228,6 +252,18 @@ function wire() {
     _current = _debates.find((item) => String(item.debate_id) === String(debateId)) || _current;
     renderCurrent();
     renderLedger();
+  });
+  _container.querySelector('#debate-current')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-debate-link]');
+    if (!button) return;
+    const routeMap = {
+      risk: '/risk-board',
+      ops: '/trading-ops',
+      simulation: '/simulation',
+      outcome: '/outcome-center',
+    };
+    const route = routeMap[button.getAttribute('data-debate-link')];
+    if (route) router.navigate(route);
   });
 }
 
@@ -260,7 +296,6 @@ function renderFieldPreviews() {
   _container.querySelector('#debate-provider-preview').innerHTML = renderTokenPreview(providers(), {
     tone: 'neutral',
     maxItems: 6,
-    emptyLabel: c('allProviders'),
   });
 }
 
@@ -269,7 +304,7 @@ async function refreshLedger() {
   try {
     const payload = await api.trading.debateRuns(symbol(), 12);
     _debates = payload.debates || [];
-    _current = _debates[0] || _current;
+    _current = _debates[0] || null;
     renderLedger();
     renderCurrent();
   } catch (err) {
@@ -306,19 +341,26 @@ function renderLedger() {
     host.innerHTML = emptyState(c('noLedger'), c('noLedgerHint'));
     return;
   }
+
   host.innerHTML = `
-    <div class="workbench-list workbench-scroll-list">
+    <div class="workbench-mini-grid">
+      ${miniMetric(c('latestRun'), _debates[0]?.symbol || '-')}
+      ${miniMetric(c('roundsCount'), String(_debates[0]?.turns?.length || 0))}
+      ${miniMetric(c('confidence'), num(_debates[0]?.judge_confidence || 0))}
+      ${miniMetric(c('dispute'), num(_debates[0]?.dispute_score || 0))}
+    </div>
+    <div class="workbench-list workbench-scroll-list debate-ledger-scroll">
       ${_debates.map((item) => `
         <article class="workbench-item ${_current?.debate_id === item.debate_id ? 'workbench-item--active' : ''}" data-debate-id="${esc(item.debate_id)}">
           <div class="workbench-item__head">
-            <strong>${esc(item.symbol)} | ${esc(formatAction(item.recommended_action || item.judge_verdict))}</strong>
+            <strong>${esc(item.symbol)} | ${esc(actionLabel(item.recommended_action || item.judge_verdict))}</strong>
             ${statusBadge(item.recommended_action || item.judge_verdict)}
           </div>
-          <p>${esc(item.bull_thesis || '')}</p>
+          <p>${esc(item.bull_thesis || item.bear_thesis || '')}</p>
           <div class="workbench-item__meta">
-            <span>${esc(item.generated_at || '')}</span>
-            <span>${c('judgePrefix')}=${num(item.judge_confidence)}</span>
-            <span>${c('disputePrefix')}=${num(item.dispute_score)}</span>
+            <span>${c('generated')}=${esc(item.generated_at || '')}</span>
+            <span>${c('confidence')}=${num(item.judge_confidence || 0)}</span>
+            <span>${c('dispute')}=${num(item.dispute_score || 0)}</span>
           </div>
         </article>
       `).join('')}
@@ -333,112 +375,116 @@ function renderCurrent() {
     return;
   }
 
-  const triad = [
-    [c('bull'), _current.bull_thesis || '-', 'promoted'],
-    [c('bear'), _current.bear_thesis || '-', 'research_only'],
-    [c('judge'), `${formatAction(_current.judge_verdict)} | q=${num(_current.judge_confidence)}`, _current.judge_verdict || 'neutral'],
-  ];
+  const turns = Array.isArray(_current.turns) ? _current.turns : [];
+  const conflictRows = Array.isArray(_current.conflict_points) ? _current.conflict_points : [];
+  const consensusRows = Array.isArray(_current.consensus_points) ? _current.consensus_points : [];
   const sentiment = _current.sentiment_overview || {};
-  const sourceMix = Object.entries(sentiment.source_mix || {})
-    .map(([key, value]) => `${key}:${value}`)
-    .join(' | ') || '-';
-  const rounds = _current.turns || [];
+  const sourceMix = Object.entries(sentiment.source_mix || {});
 
   host.innerHTML = `
     <div class="workbench-metric-grid">
-      ${metric(c('judge'), formatAction(_current.recommended_action || '-').toUpperCase(), 'positive')}
-      ${metric('Confidence', pct(_current.judge_confidence || 0))}
-      ${metric('Dispute', pct(_current.dispute_score || 0), 'risk')}
-      ${metric('Edge', num(_current.expected_edge || 0), 'positive')}
-      ${metric(c('factorCount'), _current.factor_count || 0)}
-      ${metric(c('roundsCount'), rounds.length || 0)}
-      ${metric(c('humanReview'), _current.requires_human_review ? c('yes') : c('no'), _current.requires_human_review ? 'risk' : 'positive')}
+      ${metric(c('verdict'), actionLabel(_current.judge_verdict || _current.recommended_action), 'positive')}
+      ${metric(c('confidence'), num(_current.judge_confidence || 0))}
+      ${metric(c('dispute'), num(_current.dispute_score || 0), Number(_current.dispute_score || 0) > 0.35 ? 'risk' : '')}
+      ${metric(c('expected'), pct(_current.expected_edge || _current.confidence_shift || 0), 'positive')}
+      ${metric(c('factors'), _current.factor_count || 0)}
+      ${metric(c('review'), _current.requires_human_review ? c('reviewYes') : c('reviewNo'), _current.requires_human_review ? 'risk' : 'positive')}
     </div>
+
     <div class="debate-triad-grid">
-      ${triad.map(([label, value, status]) => `
-        <article class="debate-triad-card">
-          <div class="debate-triad-card__head">
-            <strong>${esc(label)}</strong>
-            ${statusBadge(status)}
-          </div>
-          <p>${esc(value)}</p>
-        </article>
-      `).join('')}
+      ${triadCard(c('bull'), _current.bull_thesis, statusBadge('long'))}
+      ${triadCard(c('bear'), _current.bear_thesis, statusBadge('short'))}
+      ${triadCard(c('judge'), summarizeJudge(_current), statusBadge(_current.recommended_action || _current.judge_verdict))}
     </div>
-    <section class="workbench-section">
-      <div class="workbench-section__title">${c('sentiment')}</div>
-      <div class="workbench-metric-grid">
-        ${metric(c('polarity'), num(sentiment.polarity || 0), (Number(sentiment.polarity || 0) || 0) >= 0 ? 'positive' : 'risk')}
-        ${metric('Confidence', pct(sentiment.confidence || 0))}
-        ${metric(c('headlines'), sentiment.headline_count || 0)}
-        ${metric(c('feature'), num(sentiment.feature_value || 50), 'positive')}
-      </div>
-      <div class="workbench-kv-list compact-kv-list">
-        <div class="workbench-kv-row"><span>${c('freshness')}</span><strong>${pct(sentiment.freshness_score || 0)}</strong></div>
-        <div class="workbench-kv-row"><span>${c('sources')}</span><strong>${esc(sourceMix)}</strong></div>
-        <div class="workbench-kv-row"><span>${c('snapshot')}</span><strong>${esc(_current.sentiment_snapshot_id || '-')}</strong></div>
-      </div>
-    </section>
-    <section class="workbench-section">
-      <div class="workbench-section__title">${c('rounds')}</div>
-      <div class="workbench-list">
-        ${rounds.map((turn) => `
-          <article class="workbench-item">
-            <div class="workbench-item__head">
-              <strong>${c('roundPrefix')} ${esc(turn.round_number)}</strong>
-              <span>${esc(num(turn.confidence_shift))}</span>
-            </div>
-            <p><strong>${c('bullLabel')}：</strong>${esc(turn.bull_point)}</p>
-            <p><strong>${c('bearLabel')}：</strong>${esc(turn.bear_point)}</p>
-            <div class="token-preview token-preview--dense">
-              ${(turn.evidence_focus || []).map((item) => `<span class="token-chip token-chip--neutral">${esc(item)}</span>`).join('')}
-            </div>
-          </article>
-        `).join('')}
-      </div>
-    </section>
-    <div class="grid-2 compact-control-grid">
+
+    <div class="debate-current-grid">
+      <section class="workbench-section">
+        <div class="workbench-section__title">${c('rounds')}</div>
+        <div class="workbench-list workbench-scroll-list workbench-scroll-list--short">
+          ${turns.length ? turns.map((turn) => `
+            <article class="workbench-item">
+              <div class="workbench-item__head">
+                <strong>${c('rebuttalTitle')} ${esc(turn.round_number || '')}</strong>
+                <span class="text-xs text-muted">${esc((turn.evidence_focus || []).join(' / '))}</span>
+              </div>
+              <p>${esc(turn.bull_point || '')}</p>
+              <p>${esc(turn.bear_point || '')}</p>
+              <div class="workbench-item__meta">
+                <span>${c('confidenceShift')} Δ=${num(turn.confidence_shift || 0)}</span>
+              </div>
+            </article>
+          `).join('') : emptyState(c('rounds'), c('noSelectedHint'))}
+        </div>
+      </section>
+
       <section class="workbench-section">
         <div class="workbench-section__title">${c('conflict')}</div>
         <div class="factor-checklist">
-          ${(_current.conflict_points || []).map((item) => `<div class="factor-check-row"><span>${esc(item)}</span><strong class="is-watch">${c('watch')}</strong></div>`).join('') || `<div class="factor-check-row"><span>${c('noMajorConflict')}</span><strong class="is-pass">${c('clear')}</strong></div>`}
+          ${(conflictRows.length ? conflictRows : [c('noMajorConflict')]).map((row) => `
+            <div class="factor-check-row"><span>${esc(row)}</span><strong class="${conflictRows.length ? 'is-watch' : 'is-pass'}">${conflictRows.length ? c('dispute') : c('reviewNo')}</strong></div>
+          `).join('')}
         </div>
-      </section>
-      <section class="workbench-section">
         <div class="workbench-section__title">${c('consensus')}</div>
         <div class="factor-checklist">
-          ${(_current.consensus_points || []).map((item) => `<div class="factor-check-row"><span>${esc(item)}</span><strong class="is-pass">${c('linked')}</strong></div>`).join('') || `<div class="factor-check-row"><span>-</span><strong class="is-pass">${c('linked')}</strong></div>`}
+          ${(consensusRows.length ? consensusRows : [c('noConsensus')]).map((row) => `
+            <div class="factor-check-row"><span>${esc(row)}</span><strong class="is-pass">${consensusRows.length ? c('consensus') : c('reviewNo')}</strong></div>
+          `).join('')}
         </div>
       </section>
     </div>
+
+    <section class="workbench-section">
+      <div class="workbench-section__title">${c('sentiment')}</div>
+      <div class="workbench-mini-grid debate-sentiment-grid">
+        ${miniMetric(c('polarity'), num(sentiment.polarity || 0))}
+        ${miniMetric(c('confidence'), num(sentiment.confidence || 0))}
+        ${miniMetric(c('headlines'), sentiment.headline_count || 0)}
+        ${miniMetric(c('feature'), num(sentiment.feature_value || 0))}
+        ${miniMetric(c('freshness'), num(sentiment.freshness_score || 0))}
+        ${miniMetric(c('sourceMix'), sourceMix.length || 0)}
+      </div>
+      <div class="workbench-kv-list compact-kv-list">
+        ${sourceMix.length ? sourceMix.map(([key, value]) => `
+          <div class="workbench-kv-row"><span>${esc(key)}</span><strong>${esc(value)}</strong></div>
+        `).join('') : `<div class="workbench-kv-row"><span>${c('sourceMix')}</span><strong>-</strong></div>`}
+      </div>
+    </section>
+
     <section class="workbench-section">
       <div class="workbench-section__title">${c('handoff')}</div>
-      <div class="workbench-report-text">${c('handoffHint')}</div>
-      <div class="workbench-link-list">
-        <button class="workbench-link-row" id="link-debate-risk"><strong>${c('openRisk')}</strong><span>${t('Send this verdict into risk approval and single-name caps.', '把当前 verdict 送入风控审批与单票上限。')}</span></button>
-        <button class="workbench-link-row" id="link-debate-ops"><strong>${c('openOps')}</strong><span>${t('Review schedule, watchlist, alerts, and paper auto-submit status.', '查看调度、自选池、告警和纸面自动下单状态。')}</span></button>
-        <button class="workbench-link-row" id="link-debate-sim"><strong>${c('openSimulation')}</strong><span>${t('Replay the current thesis in scenario simulation.', '在情景模拟中回放当前判断。')}</span></button>
-        <button class="workbench-link-row" id="link-debate-outcome"><strong>${c('openOutcome')}</strong><span>${t('Keep the judge verdict in the outcome and review loop.', '把裁判结论送入结果追踪与复盘闭环。')}</span></button>
+      <p class="workbench-section__hint">${c('handoffHint')}</p>
+      <div class="workbench-link-grid">
+        ${bridgeCard('risk', c('openRisk'), c('riskHint'))}
+        ${bridgeCard('ops', c('openOps'), c('opsHint'))}
+        ${bridgeCard('simulation', c('openSimulation'), c('simulationHint'))}
+        ${bridgeCard('outcome', c('openOutcome'), c('outcomeHint'))}
       </div>
-    </section>`;
-
-  host.querySelector('#link-debate-risk')?.addEventListener('click', () => router.navigate('/risk-board'));
-  host.querySelector('#link-debate-ops')?.addEventListener('click', () => router.navigate('/trading-ops'));
-  host.querySelector('#link-debate-sim')?.addEventListener('click', () => router.navigate('/simulation'));
-  host.querySelector('#link-debate-outcome')?.addEventListener('click', () => router.navigate('/outcome-center'));
+    </section>
+  `;
 }
 
-function formatAction(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  const map = {
-    long: t('Long', '看多'),
-    short: t('Short', '看空'),
-    neutral: t('Neutral', '中性'),
-    block: t('Block', '阻止'),
-    approve: t('Approve', '批准'),
-    reduce: t('Reduce', '缩减'),
-    reject: t('Reject', '拒绝'),
-    halt: t('Halt', '暂停'),
-  };
-  return map[normalized] || String(value || '-');
+function triadCard(title, body, badgeHtml) {
+  return `
+    <article class="debate-triad-card">
+      <div class="debate-triad-card__head">
+        <strong>${esc(title)}</strong>
+        ${badgeHtml}
+      </div>
+      <p>${esc(body || '-')}</p>
+    </article>
+  `;
+}
+
+function summarizeJudge(item) {
+  const review = item.requires_human_review ? c('reviewYes') : c('reviewNo');
+  return `${c('verdict')}: ${actionLabel(item.recommended_action || item.judge_verdict)} | ${c('confidence')}: ${num(item.judge_confidence || 0)} | ${c('review')}: ${review}`;
+}
+
+function bridgeCard(link, title, hint) {
+  return `
+    <button type="button" class="workbench-link-card workbench-link-card--action" data-debate-link="${esc(link)}">
+      <strong>${esc(title)}</strong>
+      <span>${esc(hint)}</span>
+    </button>
+  `;
 }
