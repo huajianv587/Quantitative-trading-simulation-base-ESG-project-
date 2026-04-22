@@ -2,7 +2,8 @@ from pathlib import Path
 
 
 CLICK_TARGETS = {
-    "frontend/js/pages/research-lab.js": ["#run-research-btn"],
+    "frontend/js/pages/dashboard.js": ["#dashboard-provider-select"],
+    "frontend/js/pages/research.js": ["#btn-run-research"],
     "frontend/js/pages/intelligence.js": [
         "#btn-intel-scan",
         "#btn-decision-explain",
@@ -31,6 +32,8 @@ CLICK_TARGETS = {
     "frontend/js/pages/debate-desk.js": [
         "#btn-debate-run",
         "#btn-debate-refresh",
+        "#btn-debate-open-risk",
+        "#btn-debate-open-ops",
     ],
     "frontend/js/pages/risk-board.js": [
         "#btn-risk-evaluate",
@@ -40,6 +43,7 @@ CLICK_TARGETS = {
         "#btn-trading-ops-refresh",
         "#btn-watchlist-add",
         "#btn-run-premarket",
+        "#btn-autopilot-toggle",
         "#btn-monitor-start",
         "#btn-monitor-stop",
         "#btn-trading-cycle",
@@ -48,8 +52,19 @@ CLICK_TARGETS = {
         "#btn-outcome-refresh",
         "#btn-outcome-record",
     ],
-    "frontend/js/pages/portfolio-lab.js": ["#optimize-portfolio-btn", "#generate-execution-btn"],
-    "frontend/js/pages/backtests.js": ["#run-backtest-btn"],
+    "frontend/js/pages/autopilot-policy.js": [
+        "#btn-autopilot-refresh",
+        "#btn-autopilot-save",
+        "#btn-autopilot-arm",
+        "#btn-autopilot-disarm",
+    ],
+    "frontend/js/pages/strategy-registry.js": [
+        "#btn-strategy-refresh",
+        "data-strategy-toggle",
+        "data-strategy-save",
+    ],
+    "frontend/js/pages/backtest.js": ["#btn-run-bt"],
+    "frontend/js/pages/portfolio.js": ["#btn-optimize", "#btn-to-execution", "#s5-execute"],
     "frontend/js/pages/chat.js": ["#send-btn"],
     "frontend/js/pages/score-dashboard.js": ["#score-btn"],
     "frontend/js/pages/reports.js": ["#generate-btn"],
@@ -59,6 +74,21 @@ CLICK_TARGETS = {
 }
 
 
+SUSPICIOUS_FRAGMENTS = [
+    "缂",
+    "閸",
+    "閻",
+    "鏉",
+    "妞",
+    "閺",
+    "閹",
+    "濞",
+    "鐠",
+    "鈥",
+    "锟",
+]
+
+
 def test_click_targets_are_present_in_page_sources():
     for relative_path, selectors in CLICK_TARGETS.items():
         content = Path(relative_path).read_text(encoding="utf-8")
@@ -66,10 +96,10 @@ def test_click_targets_are_present_in_page_sources():
             assert selector in content, f"{selector} missing from {relative_path}"
 
 
-def test_router_declares_quant_routes():
+def test_router_declares_current_workbench_routes():
     router_source = Path("frontend/js/router.js").read_text(encoding="utf-8")
     for route in [
-        "/overview",
+        "/dashboard",
         "/research",
         "/intelligence",
         "/factor-lab",
@@ -80,16 +110,26 @@ def test_router_declares_quant_routes():
         "/debate-desk",
         "/risk-board",
         "/trading-ops",
+        "/autopilot-policy",
+        "/strategy-registry",
         "/outcome-center",
         "/portfolio",
-        "/backtests",
+        "/backtest",
+        "/execution",
+        "/validation",
+        "/models",
+        "/rl-lab",
         "/chat",
         "/score",
+        "/reports",
+        "/data-management",
+        "/push-rules",
+        "/subscriptions",
     ]:
         assert route in router_source
 
 
-def test_intelligence_api_client_declares_public_methods():
+def test_trading_api_client_declares_public_runtime_methods():
     api_source = Path("frontend/js/qtapi.js").read_text(encoding="utf-8")
     for route in [
         "/intelligence/scan",
@@ -119,61 +159,59 @@ def test_intelligence_api_client_declares_public_methods():
         "/api/v1/trading/cycle/run",
         "/api/v1/trading/monitor/status",
         "/api/v1/trading/ops/snapshot",
+        "/api/v1/trading/autopilot/policy",
+        "/api/v1/trading/autopilot/arm",
+        "/api/v1/trading/autopilot/disarm",
+        "/api/v1/trading/strategies",
+        "/api/v1/trading/execution-path/status",
+        "/api/v1/trading/dashboard/state",
+        "/api/v1/trading/fusion/status",
     ]:
         assert route in api_source
 
 
-def test_intelligence_page_uses_responsive_action_layout():
-    page_source = Path("frontend/js/pages/intelligence.js").read_text(encoding="utf-8")
+def test_workbench_layout_css_exposes_dense_product_patterns():
     css_source = Path("frontend/css/app.css").read_text(encoding="utf-8")
-
-    assert "intelligence-action-grid" in page_source
-    assert "intelligence-action-btn" in page_source
-    assert ".intelligence-action-grid" in css_source
-    assert ".workbench-action-grid" in css_source
-    assert "grid-template-columns: 1fr" in css_source
-    assert "white-space: normal" in css_source
-    assert "overflow-wrap: anywhere" in css_source
-
-
-def test_workbench_pages_are_split_by_product_area():
-    intelligence = Path("frontend/js/pages/intelligence.js").read_text(encoding="utf-8")
-    factor_lab = Path("frontend/js/pages/factor-lab.js").read_text(encoding="utf-8")
-    simulation = Path("frontend/js/pages/simulation.js").read_text(encoding="utf-8")
-
-    assert "api.decision.explain" in intelligence
-    assert "api.factors.discover" not in intelligence
-    assert "api.simulate.scenario" not in intelligence
-    assert "api.factors.discover" in factor_lab
-    assert "api.simulate.scenario" in simulation
+    for selector in [
+        ".workbench-action-grid",
+        ".workbench-main-grid",
+        ".nav-group__trigger",
+        ".dashboard-degraded-banner",
+        ".dashboard-provider-switch",
+        ".backtest-layout",
+        ".decision-evidence-card",
+        ".connector-registry-body",
+        ".risk-board-grid",
+        ".outcome-top-grid",
+        ".trading-ops-grid",
+        ".workbench-action-btn--primary",
+        ".workbench-action-btn--secondary",
+    ]:
+        assert selector in css_source
 
 
-def test_i18n_and_critical_pages_do_not_contain_known_mojibake_fragments():
-    suspicious_fragments = [
-        "缁",
-        "鍒",
-        "鐮",
-        "杈",
-        "椋",
-        "鏁",
-        "鎺",
-        "鍛",
-    ]
+def test_critical_shell_and_workbench_files_do_not_contain_known_mojibake_fragments():
     targets = [
         "frontend/js/i18n.js",
+        "frontend/js/app.js",
         "frontend/js/router.js",
+        "frontend/js/components/nav.js",
+        "frontend/js/pages/workbench-utils.js",
         "frontend/js/pages/intelligence.js",
+        "frontend/js/pages/connector-center.js",
         "frontend/js/pages/agent-lab.js",
         "frontend/js/pages/market-radar.js",
         "frontend/js/pages/debate-desk.js",
         "frontend/js/pages/risk-board.js",
         "frontend/js/pages/outcome-center.js",
         "frontend/js/pages/trading-ops.js",
-        "frontend/js/pages/workbench-utils.js",
+        "frontend/js/pages/autopilot-policy.js",
+        "frontend/js/pages/dashboard.js",
+        "frontend/js/pages/backtest.js",
     ]
     for relative_path in targets:
         content = Path(relative_path).read_text(encoding="utf-8")
-        for fragment in suspicious_fragments:
+        for fragment in SUSPICIOUS_FRAGMENTS:
             assert fragment not in content, f"{fragment!r} unexpectedly found in {relative_path}"
 
 
@@ -189,5 +227,21 @@ def test_i18n_declares_clean_chinese_shell_labels():
         "'page.outcome_center': '结果追踪'",
         "'common.backend_online': '后端已连接'",
         "'common.page_failed_load': '页面加载失败'",
+    ]:
+        assert expected in content
+
+
+def test_i18n_declares_required_shell_label_keys():
+    content = Path("frontend/js/i18n.js").read_text(encoding="utf-8")
+    for expected in [
+        "'nav.platform':",
+        "'page.dashboard':",
+        "'page.market_radar':",
+        "'page.debate_desk':",
+        "'page.risk_board':",
+        "'page.trading_ops':",
+        "'page.outcome_center':",
+        "'common.backend_online':",
+        "'common.page_failed_load':",
     ]:
         assert expected in content

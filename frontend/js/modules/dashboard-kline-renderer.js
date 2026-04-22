@@ -131,6 +131,7 @@ function writeAuditState(state, viewport, candleWidth) {
     selectedScenario: state.selectedScenario,
     predictionEnabled: state.predictionEnabled,
     marketSource: state.source,
+    selectedProvider: state.selectedProvider || 'auto',
     projectionAnchors,
   };
   window.__dashboardAuditState = payload;
@@ -155,6 +156,7 @@ export function createDashboardKlineRenderer(options) {
     timeframe: '1D',
     zoomLabel: '116%',
     source: 'unknown',
+    selectedProvider: 'auto',
     signal: null,
     analysis: null,
     indicators: new Set(['VOL']),
@@ -662,6 +664,7 @@ export function createDashboardKlineRenderer(options) {
       state.timeframe = nextState.timeframe || state.timeframe;
       state.zoomLabel = nextState.zoomLabel || state.zoomLabel;
       state.source = nextState.source || 'unknown';
+      state.selectedProvider = nextState.selectedProvider || state.selectedProvider || 'auto';
       state.signal = nextState.signal || null;
       state.analysis = nextState.analysis || null;
       state.selectedScenario = nextState.selectedScenario || null;

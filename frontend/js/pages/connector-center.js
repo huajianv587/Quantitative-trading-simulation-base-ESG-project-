@@ -74,6 +74,10 @@ function c(key) {
   return COPY[lang][key] || COPY.en[key] || key;
 }
 
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
+}
+
 export async function render(container) {
   _container = container;
   renderShell();
@@ -95,6 +99,7 @@ export function unmount() {
 }
 
 function renderShell() {
+  if (!_container) return;
   _container.innerHTML = `
     <div class="workbench-page live-page connector-center-page">
       <section class="run-panel">
@@ -129,9 +134,9 @@ function renderShell() {
         </div>
       </section>
       <section class="grid-2 workbench-main-grid workbench-equal-grid connector-main-grid">
-        <article class="run-panel">
+        <article class="run-panel connector-registry-panel">
           <div class="run-panel__header"><div class="run-panel__title">${c('registry')}</div><div class="run-panel__sub">${c('mode')}</div></div>
-          <div class="run-panel__body" id="connector-registry">${emptyState('Loading registry')}</div>
+          <div class="run-panel__body connector-registry-body" id="connector-registry">${emptyState('Loading registry')}</div>
         </article>
         <article class="run-panel">
           <div class="run-panel__header"><div class="run-panel__title">${c('result')}</div><div class="run-panel__sub">${c('quota')}</div></div>
@@ -143,6 +148,7 @@ function renderShell() {
 }
 
 function wire() {
+  if (!_container) return;
   _container.querySelector('#btn-connector-refresh')?.addEventListener('click', refreshRegistry);
   _container.querySelector('#btn-connector-health')?.addEventListener('click', runHealth);
   _container.querySelector('#btn-connector-test')?.addEventListener('click', runDryTest);
@@ -156,18 +162,22 @@ function wire() {
 }
 
 function symbol() {
+  if (!_container) return 'AAPL';
   return String(_container.querySelector('#connector-symbol')?.value || 'AAPL').trim().toUpperCase();
 }
 
 function providers() {
+  if (!_container) return [];
   return splitTokens(_container.querySelector('#connector-providers')?.value || '', { delimiters: /[,|\s]+/ });
 }
 
 function universe() {
+  if (!_container) return [symbol()];
   return splitTokens(_container.querySelector('#connector-universe')?.value || symbol(), { uppercase: true, delimiters: /[,\s]+/ });
 }
 
 function renderFieldPreviews() {
+  if (!_container) return;
   _container.querySelector('#connector-symbol-preview').innerHTML = renderTokenPreview([symbol()], {
     tone: 'accent',
     maxItems: 1,
@@ -184,12 +194,15 @@ function renderFieldPreviews() {
 }
 
 async function refreshRegistry() {
+  if (!isMounted()) return;
   const target = _container.querySelector('#connector-registry');
   setLoading(target, 'Loading provider registry...');
   try {
     _registry = await api.connectors.registry();
+    if (!isMounted()) return;
     renderRegistry(_registry);
   } catch (err) {
+    if (!isMounted()) return;
     renderError(target, err);
   }
 }
@@ -199,6 +212,7 @@ function shortMode(value) {
 }
 
 function renderRegistry(payload) {
+  if (!_container) return;
   const target = _container.querySelector('#connector-registry');
   const rows = payload.providers || [];
   const configured = rows.filter((row) => row.configured).length;
@@ -221,13 +235,15 @@ function renderRegistry(payload) {
       </div>
     </article>`).join('');
   target.innerHTML = `
-    <div class="workbench-metric-grid">
+    <div class="workbench-metric-grid connector-registry-metrics">
       ${metric('Providers', rows.length, 'positive')}
       ${metric('Configured', configured, configured ? 'positive' : '')}
       ${metric('Mode', shortMode(payload.mode || 'free-tier'))}
       ${metric('Feed', payload.defaults?.alpaca_feed || 'iex')}
     </div>
-    <div class="live-provider-grid workbench-scroll-list connector-provider-scroll">${cards}</div>`;
+    <div class="connector-provider-shell">
+      <div class="live-provider-grid connector-provider-scroll">${cards}</div>
+    </div>`;
 }
 
 function renderInitialResult() {
@@ -278,11 +294,13 @@ function renderInitialResult() {
 }
 
 function renderInitialResultIntoTarget() {
+  if (!_container) return;
   const target = _container.querySelector('#connector-result');
   if (target) target.innerHTML = renderInitialResult();
 }
 
 function renderResult(payload) {
+  if (!_container) return;
   const target = _container.querySelector('#connector-result');
   const rows = payload.results || payload.items || payload.providers || [];
   const summary = payload.summary || {};
@@ -335,41 +353,53 @@ function renderResult(payload) {
 }
 
 async function runHealth() {
+  if (!isMounted()) return;
   const target = _container.querySelector('#connector-result');
   setLoading(target, 'Checking connectors...');
   try {
-    renderResult(await api.connectors.health(providers(), false));
+    const payload = await api.connectors.health(providers(), false);
+    if (!isMounted()) return;
+    renderResult(payload);
   } catch (err) {
+    if (!isMounted()) return;
     renderError(target, err);
   }
 }
 
 async function runDryTest() {
+  if (!isMounted()) return;
   const target = _container.querySelector('#connector-result');
   setLoading(target, 'Running dry connector test...');
   try {
-    renderResult(await api.connectors.test({
+    const payload = await api.connectors.test({
       providers: providers(),
       symbol: symbol(),
       dry_run: true,
-    }));
+    });
+    if (!isMounted()) return;
+    renderResult(payload);
   } catch (err) {
+    if (!isMounted()) return;
     renderError(target, err);
   }
 }
 
 async function runLiveScan() {
+  if (!isMounted()) return;
   const target = _container.querySelector('#connector-result');
   setLoading(target, 'Running free-tier live scan...');
   try {
-    renderResult(await api.connectors.liveScan({
+    const payload = await api.connectors.liveScan({
       universe: universe(),
       providers: providers(),
       quota_guard: true,
       persist: true,
       limit: 6,
-    }));
+    });
+    if (!isMounted()) return;
+    renderResult(payload);
   } catch (err) {
+    if (!isMounted()) return;
     renderError(target, err);
   }
 }

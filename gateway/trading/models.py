@@ -161,7 +161,7 @@ class TradingDecisionBundle(BaseModel):
     sentiment: SentimentSnapshot
     debate: DebateReport
     risk: RiskApproval
-    execution: dict[str, Any] = Field(default_factory=dict)
+    execution: "ExecutionResult | dict[str, Any]" = Field(default_factory=dict)
     alerts: list[PriceAlertRecord] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -176,3 +176,157 @@ class TradingMonitorStatus(BaseModel):
     last_trigger: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
     connection: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyAllocation(BaseModel):
+    allocation_id: str
+    strategy_id: str
+    capital_allocation: float = Field(ge=0.0, le=1.0, default=0.0)
+    max_symbols: int = Field(ge=1, default=10)
+    status: Literal["active", "paused"] = "active"
+    updated_at: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyTemplate(BaseModel):
+    strategy_id: str
+    display_name: str
+    status: Literal["active", "paused", "draft"] = "active"
+    factor_dependencies: list[str] = Field(default_factory=list)
+    risk_profile: Literal["conservative", "balanced", "aggressive"] = "balanced"
+    capital_allocation: float = Field(ge=0.0, le=1.0, default=0.0)
+    allowed_symbols: list[str] = Field(default_factory=list)
+    paper_ready: bool = True
+    requires_debate: bool = True
+    requires_risk_approval: bool = True
+    description: str = ""
+    lineage: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    updated_at: str
+
+
+class AutopilotPolicy(BaseModel):
+    policy_id: str
+    generated_at: str
+    execution_mode: Literal["paper", "live"] = "paper"
+    execution_permission: Literal["research", "auto_submit", "manual_review", "paper_auto_submit"] = "auto_submit"
+    auto_submit_enabled: bool = False
+    paper_auto_submit_enabled: bool = False
+    armed: bool = False
+    daily_budget_cap: float = Field(ge=0.0, default=0.0)
+    per_trade_cap: float = Field(ge=0.0, default=0.0)
+    max_open_positions: int = Field(ge=0, default=0)
+    max_symbol_weight: float = Field(ge=0.0, le=1.0, default=0.0)
+    allowed_universe: list[str] = Field(default_factory=list)
+    allowed_strategies: list[str] = Field(default_factory=list)
+    require_human_review_above: float = Field(ge=0.0, default=0.0)
+    drawdown_limit: float = Field(ge=0.0, le=1.0, default=0.0)
+    daily_loss_limit: float = Field(ge=0.0, default=0.0)
+    signal_ttl: int = Field(ge=0, default=0)
+    kill_switch: bool = False
+    protections: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExecutionPathStatus(BaseModel):
+    generated_at: str
+    mode: str = "paper"
+    armed: bool = False
+    daily_budget_cap: float = Field(ge=0.0, default=0.0)
+    budget_remaining: float = Field(ge=0.0, default=0.0)
+    judge_passed: bool = False
+    risk_passed: bool = False
+    kill_switch: bool = False
+    current_stage: str = "idle"
+    stages: list[dict[str, Any]] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ExecutionIntent(BaseModel):
+    intent_id: str
+    created_at: str
+    symbol: str
+    requested_action: TradingAction
+    approved_action: TradingAction | None = None
+    execution_mode: str = "paper"
+    strategy_slots: list[str] = Field(default_factory=list)
+    factor_dependencies: list[str] = Field(default_factory=list)
+    recommended_weight: float = Field(ge=0.0, le=1.0, default=0.0)
+    recommended_notional: float = Field(ge=0.0, default=0.0)
+    signal_ttl_minutes: int = Field(ge=0, default=0)
+    paper_only: bool | None = None
+    guards: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExecutionResult(BaseModel):
+    execution_id: str
+    generated_at: str
+    symbol: str
+    status: Literal["review_only", "blocked", "guarded", "submitted", "submit_failed"] = "review_only"
+    venue: str = "alpaca"
+    execution_mode: str = "paper"
+    submitted: bool = False
+    auto_submit: bool = False
+    requested_action: TradingAction
+    approved_action: TradingAction | None = None
+    verdict: RiskVerdict = "halt"
+    order_payload: dict[str, Any] = Field(default_factory=dict)
+    receipt: dict[str, Any] | None = None
+    warnings: list[str] = Field(default_factory=list)
+    policy_gate_warnings: list[str] = Field(default_factory=list)
+    next_action: str = ""
+    trigger_event: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class FactorPipelineStage(BaseModel):
+    stage: str
+    status: Literal["ready", "pending", "review", "guarded"] = "pending"
+    detail: str
+    factors: list[str] = Field(default_factory=list)
+
+
+class FactorPipelineManifest(BaseModel):
+    manifest_id: str
+    generated_at: str
+    symbol: str | None = None
+    strategy_slots: list[str] = Field(default_factory=list)
+    factor_dependencies: list[str] = Field(default_factory=list)
+    stages: list[FactorPipelineStage] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    next_action: str = ""
+    lineage: list[str] = Field(default_factory=list)
+
+
+class OrderApprovalLedger(BaseModel):
+    ledger_id: str
+    generated_at: str
+    symbol: str
+    execution_intent: ExecutionIntent | dict[str, Any] = Field(default_factory=dict)
+    execution_result: ExecutionResult | dict[str, Any] | None = None
+    debate_id: str | None = None
+    approval_id: str | None = None
+    verdict: Literal["armed", "submitted", "blocked", "review_only", "submit_failed"] = "blocked"
+    submitted: bool = False
+    receipt: dict[str, Any] | None = None
+    warnings: list[str] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class FusionReferenceItem(BaseModel):
+    source_project: str
+    capability: str
+    target_surface: str
+    status: Literal["implemented", "staged", "planned"] = "planned"
+    notes: str = ""
+
+
+class FusionReferenceManifest(BaseModel):
+    manifest_id: str
+    generated_at: str
+    items: list[FusionReferenceItem] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)

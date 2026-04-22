@@ -84,7 +84,43 @@ async function assertNoWhiteInputsInDarkMode(page, enabled) {
   expect(whiteInputs).toEqual([]);
 }
 
-async function mockTradingRoutes(page) {
+async function readButtonVisual(page, selector) {
+  return page.locator(selector).evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    return {
+      className: element.className,
+      backgroundImage: style.backgroundImage,
+      borderColor: style.borderColor,
+      color: style.color,
+      boxShadow: style.boxShadow,
+    };
+  });
+}
+
+function parseCssColor(value) {
+  const numbers = String(value || '').match(/[\d.]+/g)?.map(Number) || [];
+  if (numbers.length === 3) numbers.push(1);
+  return numbers;
+}
+
+function expectColorsClose(actual, expected, rgbTolerance = 16, alphaTolerance = 0.18) {
+  const actualColor = parseCssColor(actual);
+  const expectedColor = parseCssColor(expected);
+  expect(actualColor).toHaveLength(4);
+  expect(expectedColor).toHaveLength(4);
+  for (let index = 0; index < 3; index += 1) {
+    expect(Math.abs(actualColor[index] - expectedColor[index])).toBeLessThanOrEqual(rgbTolerance);
+  }
+  expect(Math.abs(actualColor[3] - expectedColor[3])).toBeLessThanOrEqual(alphaTolerance);
+}
+
+async function mockTradingRoutes(page, options = {}) {
+  const snapshotDelayMs = Number(options.snapshotDelayMs || 0);
+  const maybeDelay = async () => {
+    if (snapshotDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, snapshotDelayMs));
+    }
+  };
   const state = {
     monitor: { running: false, mode: 'paper', stream_mode: 'idle', trigger_count: 1, last_event_at: '2026-04-20T14:35:00Z' },
     watchlist: [
@@ -150,6 +186,77 @@ async function mockTradingRoutes(page) {
       },
     ],
   };
+  const policyState = {
+    execution_mode: 'live',
+    execution_permission: 'auto_submit',
+    auto_submit_enabled: true,
+    paper_auto_submit_enabled: true,
+    armed: false,
+    kill_switch: false,
+    daily_budget_cap: 10000,
+    per_trade_cap: 2500,
+    max_open_positions: 5,
+    max_symbol_weight: 0.25,
+    allowed_universe: ['AAPL', 'NVDA', 'TSLA', 'SPY'],
+    allowed_strategies: ['premarket_agent', 'event_driven_overlay'],
+    require_human_review_above: 5000,
+    drawdown_limit: 0.08,
+    daily_loss_limit: 1500,
+    signal_ttl: 180,
+    protections: ['kelly_cap', 'budget_gate', 'judge_gate', 'risk_gate'],
+    warnings: [],
+  };
+  const executionPath = {
+    current_stage: 'monitor',
+    mode: 'live',
+    judge_passed: true,
+    lineage: ['scan', 'factors', 'debate', 'judge', 'risk', 'submit', 'monitor', 'review'],
+    stages: [
+      { stage: 'scan', status: 'configured' },
+      { stage: 'factors', status: 'configured' },
+      { stage: 'debate', status: 'approve' },
+      { stage: 'judge', status: 'approve' },
+      { stage: 'risk', status: 'approve' },
+      { stage: 'submit', status: 'approve' },
+      { stage: 'monitor', status: 'configured' },
+      { stage: 'review', status: 'review' },
+    ],
+    warnings: [],
+  };
+  const factorPipeline = {
+    stages: [
+      { stage: 'raw_ingestion', status: 'ready' },
+      { stage: 'data_cleaning', status: 'ready' },
+      { stage: 'esg_enrichment', status: 'ready' },
+      { stage: 'feature_store', status: 'ready' },
+    ],
+    factor_dependencies: ['local_esg', 'marketaux', 'twelvedata'],
+    strategy_slots: ['premarket_agent', 'event_driven_overlay'],
+    warnings: [],
+    next_action: 'Keep Alpaca routing warm and verify guardrails before the next submit window.',
+  };
+  const fusionManifest = {
+    items: [
+      { source: 'Lean', status: 'implemented', notes: 'Order lifecycle feeds ExecutionIntent and ExecutionResult.' },
+      { source: 'Qlib', status: 'implemented', notes: 'Factor pipeline manifest mirrors dependency lineage.' },
+      { source: 'freqtrade', status: 'staged', notes: 'Protections and notifier stay visible in runtime controls.' },
+    ],
+    execution_intent_contract: {
+      intent_id: 'intent-aapl-live',
+      requested_action: 'long',
+      signal_ttl_minutes: 180,
+    },
+    execution_result_contract: {
+      status: 'submitted',
+    },
+  };
+  const strategiesPayload = {
+    strategies: [
+      { strategy_id: 'premarket_agent', title: 'Premarket Agent', status: 'active', allocation: 0.5, risk_profile: 'balanced', requires_risk_approval: true },
+      { strategy_id: 'event_driven_overlay', title: 'Event Overlay', status: 'active', allocation: 0.3, risk_profile: 'tactical', requires_risk_approval: true },
+      { strategy_id: 'sentiment_overlay', title: 'Sentiment Overlay', status: 'standby', allocation: 0.2, risk_profile: 'adaptive', requires_risk_approval: false },
+    ],
+  };
 
   await page.route('**/api/v1/trading/debate/runs**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ generated_at: '2026-04-20T14:40:00Z', count: state.debates.length, debates: state.debates }) });
@@ -206,6 +313,7 @@ async function mockTradingRoutes(page) {
   });
 
   await page.route('**/api/v1/trading/ops/snapshot', async (route) => {
+    await maybeDelay();
     const payload = {
       generated_at: '2026-04-20T14:40:00Z',
       schedule: {
@@ -223,8 +331,40 @@ async function mockTradingRoutes(page) {
       debates: { count: state.debates.length, debates: state.debates.slice(0, 5) },
       risk: { approvals: state.approvals, latest_approval: state.approvals[0] || null },
       notifier: { telegram_configured: false, mode: 'paper_shadow_notify' },
+      autopilot_policy: policyState,
+      execution_path: executionPath,
+      factor_pipeline: factorPipeline,
+      fusion_manifest: fusionManifest,
+      strategies: strategiesPayload,
     };
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) });
+  });
+
+  await page.route('**/api/v1/trading/autopilot/policy', async (route) => {
+    if (route.request().method() === 'POST') {
+      Object.assign(policyState, route.request().postDataJSON() || {});
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(policyState) });
+  });
+
+  await page.route('**/api/v1/trading/autopilot/arm', async (route) => {
+    const payload = route.request().postDataJSON() || {};
+    policyState.armed = payload.armed !== false;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(policyState) });
+  });
+
+  await page.route('**/api/v1/trading/autopilot/disarm', async (route) => {
+    const payload = route.request().postDataJSON() || {};
+    policyState.armed = payload.armed === true ? true : false;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(policyState) });
+  });
+
+  await page.route('**/api/v1/trading/strategies', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(strategiesPayload) });
+  });
+
+  await page.route('**/api/v1/trading/execution-path/status', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(executionPath) });
   });
 
   await page.route('**/api/v1/trading/watchlist/add', async (route) => {
@@ -327,12 +467,113 @@ for (const viewport of VIEWPORTS) {
       await page.locator('#btn-trading-cycle').click();
       await expect(page.locator('#ops-alerts')).toContainText(/MSFT|volume_spike|Debate/);
       await expect(page.locator('#ops-review')).toContainText(/Paper cycle|Premarket|review/);
+      await page.mouse.move(8, 8);
+      const tradingOpsPrimaryVisual = await readButtonVisual(page, '#btn-trading-ops-refresh');
+      const tradingOpsSecondaryVisual = await readButtonVisual(page, '#btn-autopilot-toggle');
+      expect(tradingOpsPrimaryVisual.className).toContain('workbench-action-btn--primary');
+      expect(tradingOpsSecondaryVisual.className).toContain('workbench-action-btn--secondary');
       await assertNoWhiteInputsInDarkMode(page, mode.theme === 'dark');
       await assertNoHorizontalOverflow(page, ['.workbench-item', '.workbench-action-btn', '.workbench-metric-card', '.workbench-kv-row']);
       await page.screenshot({ path: screenshotPath('trading-ops', viewport.name, mode.lang, mode.theme, 'after-actions'), fullPage: true });
+
+      await page.goto('/app/#/autopilot-policy', { waitUntil: 'domcontentloaded' });
+      await expect(page.locator('#btn-autopilot-save')).toBeVisible();
+      await page.locator('#btn-autopilot-refresh').click();
+      await page.locator('#btn-autopilot-arm').click();
+      await expect(page.locator('#autopilot-protections')).toContainText(/Execution Mode|执行模式|Auto Submit|自动提交/);
+      await page.mouse.move(8, 8);
+      const autopilotPrimaryVisual = await readButtonVisual(page, '#btn-autopilot-save');
+      const autopilotSecondaryVisual = await readButtonVisual(page, '#btn-autopilot-refresh');
+      expect(autopilotPrimaryVisual.className).toContain('workbench-action-btn--primary');
+      expect(autopilotSecondaryVisual.className).toContain('workbench-action-btn--secondary');
+      expect(autopilotPrimaryVisual.backgroundImage).toBe(tradingOpsPrimaryVisual.backgroundImage);
+      expect(autopilotPrimaryVisual.borderColor).toBe(tradingOpsPrimaryVisual.borderColor);
+      expect(autopilotPrimaryVisual.color).toBe(tradingOpsPrimaryVisual.color);
+      expect(autopilotSecondaryVisual.backgroundImage).toBe(tradingOpsSecondaryVisual.backgroundImage);
+      expectColorsClose(autopilotSecondaryVisual.color, tradingOpsSecondaryVisual.color);
+      expect(autopilotSecondaryVisual.borderColor).toContain('64, 255, 176');
+      expect(tradingOpsSecondaryVisual.borderColor).toContain('64, 255, 176');
+      await assertNoWhiteInputsInDarkMode(page, mode.theme === 'dark');
+      await assertNoHorizontalOverflow(page, ['.workbench-item', '.workbench-action-btn', '.workbench-metric-card', '.workbench-kv-row']);
+      await page.screenshot({ path: screenshotPath('autopilot-policy', viewport.name, mode.lang, mode.theme, 'after-actions'), fullPage: true });
 
       expect(guards.consoleErrors).toEqual([]);
       expect(guards.failedRequests).toEqual([]);
     });
   }
 }
+
+test('trading ops keeps cached snapshot visible while a slow refresh completes', async ({ page, baseURL }) => {
+  test.setTimeout(180000);
+  const guards = await attachGuards(page);
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await configure(page, baseURL, 'zh', 'dark');
+  await page.addInitScript(() => {
+    localStorage.setItem('qt.trading.ops.snapshot.v1', JSON.stringify({
+      saved_at: Date.now(),
+      payload: {
+        generated_at: '2026-04-20T14:39:00Z',
+        schedule: {
+          jobs: [{ job_name: 'premarket_agent', next_run: '2026-04-21T08:30:00-04:00', schedule: 'mon-fri 08:30' }],
+          recent_runs: [],
+        },
+        monitor: { running: false, mode: 'live', stream_mode: 'idle', trigger_count: 1, last_event_at: '2026-04-20T14:35:00Z' },
+        watchlist: { watchlist: [{ watchlist_id: 'watch-aapl', symbol: 'AAPL', enabled: true, esg_score: 74.2, last_sentiment: 0.18, added_date: '2026-04-20T08:30:00Z', note: 'default_watchlist_seed' }], count: 1 },
+        today_alerts: { alerts: [], alert_count: 0 },
+        latest_review: { review: { review_id: 'review-cache', pnl: 0, trades_count: 0, approved_decisions: 0, blocked_decisions: 0, report_text: 'Using cached ops snapshot while a fresh refresh is running.', next_day_risk_flags: [] } },
+        debates: { count: 0, debates: [] },
+        risk: { approvals: [], latest_approval: null },
+        notifier: { telegram_configured: false, mode: 'shadow_notify' },
+        autopilot_policy: {
+          execution_mode: 'live',
+          execution_permission: 'auto_submit',
+          auto_submit_enabled: true,
+          paper_auto_submit_enabled: true,
+          armed: false,
+          kill_switch: false,
+          daily_budget_cap: 10000,
+          protections: ['judge_gate', 'risk_gate'],
+          warnings: [],
+        },
+        execution_path: {
+          current_stage: 'monitor',
+          mode: 'live',
+          judge_passed: true,
+          lineage: ['scan', 'factors', 'debate', 'judge', 'risk', 'submit', 'monitor', 'review'],
+          stages: [{ stage: 'monitor', status: 'configured' }],
+          warnings: [],
+        },
+        factor_pipeline: {
+          stages: [{ stage: 'raw_ingestion', status: 'ready' }],
+          factor_dependencies: ['local_esg'],
+          strategy_slots: ['premarket_agent'],
+          warnings: [],
+          next_action: 'Cached snapshot is visible before live refresh returns.',
+        },
+        fusion_manifest: {
+          items: [{ source: 'Lean', status: 'implemented', notes: 'Cached snapshot contract.' }],
+          execution_intent_contract: { intent_id: 'cached-intent', requested_action: 'long', signal_ttl_minutes: 180 },
+          execution_result_contract: { status: 'pending' },
+        },
+        strategies: {
+          strategies: [{ strategy_id: 'premarket_agent', title: 'Premarket Agent', status: 'active', allocation: 1, risk_profile: 'balanced', requires_risk_approval: true }],
+        },
+      },
+    }));
+  });
+  await mockTradingRoutes(page, { snapshotDelayMs: 1500 });
+
+  await page.goto('/app/#/trading-ops', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#btn-trading-ops-refresh')).toBeVisible();
+  await expect(page.locator('#ops-schedule')).toContainText(/premarket_agent|Execution Path|执行链路/);
+  await expect(page.locator('#ops-review')).toContainText(/cached ops snapshot|缓存/);
+  await page.waitForTimeout(250);
+  await expect(page.locator('#ops-kpi')).not.toContainText(/正在加载交易运维|Loading trading ops/);
+  await expect(page.locator('#ops-watchlist')).toContainText('AAPL');
+  await page.waitForTimeout(1700);
+  await expect(page.locator('#ops-schedule')).toContainText(/Execution Path|执行链路/);
+  await page.screenshot({ path: screenshotPath('trading-ops', 'desktop-1440x1100', 'zh', 'dark', 'stale-refresh'), fullPage: true });
+
+  expect(guards.consoleErrors).toEqual([]);
+  expect(guards.failedRequests).toEqual([]);
+});

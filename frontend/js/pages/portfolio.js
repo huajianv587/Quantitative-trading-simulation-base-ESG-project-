@@ -35,6 +35,10 @@ let _selection = {
   minEsgScore: 60,
 };
 
+function isActiveContainer(container) {
+  return Boolean(container && container === _currentContainer && container.isConnected);
+}
+
 export function render(container) {
   _currentContainer = container;
   container.innerHTML = buildShell();
@@ -123,6 +127,7 @@ function buildShell() {
    STEP ROUTING
 ══════════════════════════════════════════════ */
 function goStep(container, n) {
+  if (!isActiveContainer(container)) return;
   _step = n;
   for (let i = 1; i <= 5; i++) {
     const item = container.querySelector(`#wizard-step-${i}`);
@@ -285,10 +290,14 @@ function bindStep2(container) {
     const uEl = container.querySelector('#po-universe');
     if (uEl) uEl.value = container._prefillUniverse;
   }
-  setTimeout(() => drawAllocPie(container), 100);
+  setTimeout(() => {
+    if (!isActiveContainer(container)) return;
+    drawAllocPie(container);
+  }, 100);
 }
 
 function drawAllocPie(container) {
+  if (!isActiveContainer(container)) return;
   const canvas = container.querySelector('#alloc-pie');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -430,11 +439,15 @@ function buildStep4() {
 function bindStep4(container) {
   container.querySelector('#s4-back')?.addEventListener('click', () => goStep(container, 3));
   container.querySelector('#s4-next')?.addEventListener('click', () => goStep(container, 5));
-  setTimeout(() => initFrontierCanvas(container), 50);
+  setTimeout(() => {
+    if (!isActiveContainer(container)) return;
+    initFrontierCanvas(container);
+  }, 50);
   container.querySelector('#btn-optimize')?.addEventListener('click', () => runOptimize(container));
 }
 
 function initFrontierCanvas(container) {
+  if (!isActiveContainer(container)) return;
   const canvas = container.querySelector('#frontier-canvas');
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
@@ -503,6 +516,7 @@ function drawFrontier(canvas, selected, dpr) {
 }
 
 async function runOptimize(container) {
+  if (!isActiveContainer(container)) return;
   const btn = container.querySelector('#btn-optimize');
   if (!btn) return;
   btn.disabled = true; btn.textContent = translateLoose('Optimizing…');
@@ -534,6 +548,7 @@ async function runOptimize(container) {
     _result = { holdings:[{symbol:'AAPL',weight:0.18,sector:'Technology',esg_score:78},{symbol:'MSFT',weight:0.15,sector:'Technology',esg_score:82},{symbol:'NEE',weight:0.14,sector:'Utilities',esg_score:91},{symbol:'NVDA',weight:0.12,sector:'Technology',esg_score:71},{symbol:'TSLA',weight:0.10,sector:'Consumer Disc',esg_score:68}], expected_return:0.226, expected_volatility:0.123, sharpe_estimate:1.84 };
     _build = { expectedReturn:0.226, vol:0.123, sharpe:1.84, holdings:_result.holdings };
   } finally {
+    if (!isActiveContainer(container)) return;
     btn.disabled = false; btn.textContent = translateLoose('⚡ Optimize Now');
     updateSummary(container);
     showSuggestions(container);
@@ -551,6 +566,7 @@ async function runOptimize(container) {
 }
 
 function showSuggestions(container) {
+  if (!isActiveContainer(container)) return;
   const el = container.querySelector('#port-suggestions');
   if (!el) return;
   if (!_build.holdings?.length) {
@@ -600,6 +616,7 @@ function showSuggestions(container) {
 }
 
 function updateSummary(container) {
+  if (!isActiveContainer(container)) return;
   const b = _build;
   const el = id => container.querySelector(id);
   if (el('#ps-ret'))    el('#ps-ret').textContent    = (b.expectedReturn*100).toFixed(1) + '%';

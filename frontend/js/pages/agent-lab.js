@@ -69,6 +69,10 @@ function c(key) {
   return COPY[lang][key] || COPY.en[key] || key;
 }
 
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
+}
+
 function t(en, zh) {
   return getLang() === 'zh' ? zh : en;
 }
@@ -266,6 +270,7 @@ function timeline(rows) {
 }
 
 async function runWorkflow() {
+  if (!isMounted()) return;
   const rows = [];
   const report = _container.querySelector('#agent-report');
   setLoading(report, t('Running agentic shadow loop...', '正在运行智能体影子闭环...'));
@@ -279,6 +284,7 @@ async function runWorkflow() {
       persist: true,
       limit: 8,
     });
+    if (!isMounted()) return;
 
     rows[0] = {
       step: t('Live scan', '实时扫描'),
@@ -300,6 +306,7 @@ async function runWorkflow() {
       mode: 'mixed',
       providers: providers(),
     });
+    if (!isMounted()) return;
 
     rows[2] = {
       step: t('Factor discovery', '因子发现'),
@@ -316,6 +323,7 @@ async function runWorkflow() {
       mode: 'mixed',
       providers: providers(),
     });
+    if (!isMounted()) return;
 
     rows[3] = {
       step: t('Decision explain', '决策解释'),
@@ -332,6 +340,7 @@ async function runWorkflow() {
       paths: 128,
       seed: 42,
     });
+    if (!isMounted()) return;
 
     rows[4] = {
       step: t('Simulation', '情景模拟'),
@@ -342,6 +351,7 @@ async function runWorkflow() {
     rows.push({ step: t('Outcome shadow log', '结果影子日志'), status: 'running', detail: t('Read current calibration summary', '读取当前校准摘要') });
     timeline(rows);
     const outcomes = await api.outcomes.evaluate({ symbol: symbol(), decision_id: decision.decision_id });
+    if (!isMounted()) return;
 
     rows[5] = {
       step: t('Outcome shadow log', '结果影子日志'),
@@ -397,6 +407,7 @@ async function runWorkflow() {
         </article>
       </div>`;
   } catch (err) {
+    if (!isMounted()) return;
     rows.push({ step: t('Workflow failed', '工作流失败'), status: 'rejected', detail: err.message || String(err) });
     timeline(rows);
     renderError(report, err);

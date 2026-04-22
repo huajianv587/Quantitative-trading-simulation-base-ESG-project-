@@ -11,6 +11,9 @@ const ZOOM_STEP = 20;
 const DEFAULT_INDICATORS = ['VOL'];
 const HEATMAP_TFS = ['1D', '1W', '1M'];
 const CHART_CACHE_TTL_MS = 45_000;
+const DASHBOARD_PROVIDER_STORAGE_KEY = 'qt.dashboard.provider.v1';
+const DASHBOARD_STATE_STORAGE_KEY = 'qt.dashboard.state.v1';
+const DASHBOARD_CHART_STORAGE_PREFIX = 'qt.dashboard.chart.v1';
 
 const TEXT = {
   en: {
@@ -76,6 +79,33 @@ const TEXT = {
     chartLoadingText: 'Fetching live candles and model coverage for the current symbol.',
     chartUnavailableText: 'Chart data is temporarily unavailable for the current symbol.',
     noAccountData: 'Awaiting live account snapshot',
+    degradedTitle: 'Degraded dashboard preview',
+    fallbackSymbol: 'Current Symbol',
+    providerChain: 'Provider Chain',
+    lastSnapshot: 'Last Snapshot',
+    degradedReason: 'Degraded Reason',
+    nextStep: 'Next Step',
+    sourceUnknownWhy: 'Source remains unknown because no live provider has returned a valid candle payload yet.',
+    providerStatus: 'Provider Status',
+    degradedFrom: 'Degraded From',
+    providerConnectedNoPayload: 'The provider is connected, but the current symbol or timeframe has not returned a usable candle payload yet.',
+    providerNotConfigured: 'Live broker or market-data credentials are not configured for this route yet.',
+    providerQuotaBlocked: 'The upstream provider rejected the request or quota is exhausted, so the dashboard is falling back.',
+    cacheFallbackOnly: 'Only cache or synthetic fallback is available right now while live data recovers.',
+    noSnapshot: 'No recent snapshot',
+    noReason: 'No explicit degradation reason returned',
+    sourceMode: 'Data Source',
+    providerAuto: 'auto (alpaca-first)',
+    providerAlpaca: 'alpaca',
+    providerTwelveData: 'twelvedata',
+    providerYfinance: 'yfinance',
+    providerCache: 'cache',
+    providerSynthetic: 'synthetic',
+    refreshDashboard: 'Refresh dashboard state',
+    switchSymbol: 'Switch symbol',
+    openMarketRadar: 'Open Market Radar',
+    openBacktest: 'Open Backtest',
+    readyBanner: 'Chart ready',
   },
   zh: {
     title: '平台控制台',
@@ -140,6 +170,33 @@ const TEXT = {
     chartLoadingText: '正在拉取当前标的的实时 K 线与模型覆盖。',
     chartUnavailableText: '当前标的暂无可用图表数据。',
     noAccountData: '等待实时账户快照',
+    degradedTitle: '降级预览',
+    fallbackSymbol: '当前标的',
+    providerChain: '数据源链',
+    lastSnapshot: '最近快照',
+    degradedReason: '降级原因',
+    nextStep: '下一步动作',
+    sourceUnknownWhy: '当前 source 仍为 unknown，是因为还没有任何实时数据源返回可用 K 线载荷。',
+    providerStatus: '连接状态',
+    degradedFrom: '回落来源',
+    providerConnectedNoPayload: '连接存在，但当前标的或周期暂时没有返回可用的 K 线载荷。',
+    providerNotConfigured: '当前路由还没有可用的实时券商或行情凭证。',
+    providerQuotaBlocked: '上游数据源拒绝了请求或额度耗尽，Dashboard 已进入回落链路。',
+    cacheFallbackOnly: '当前只拿到了缓存或 synthetic fallback，正在等待实时行情恢复。',
+    noSnapshot: '暂无最近快照',
+    noReason: '后端没有返回明确的降级原因',
+    sourceMode: '数据源',
+    providerAuto: '自动（Alpaca 优先）',
+    providerAlpaca: 'Alpaca',
+    providerTwelveData: 'TwelveData',
+    providerYfinance: 'yfinance',
+    providerCache: '缓存',
+    providerSynthetic: 'Synthetic',
+    refreshDashboard: '刷新 Dashboard 状态',
+    switchSymbol: '切换标的',
+    openMarketRadar: '打开市场雷达',
+    openBacktest: '打开回测',
+    readyBanner: '图表已就绪',
   },
 };
 let _container = null;
@@ -149,6 +206,7 @@ let _renderer = null;
 let _overview = null;
 let _overviewError = null;
 let _chartLoading = false;
+let _dashboardState = null;
 let _watchlist = [];
 let _activeSymbol = '';
 let _activeTF = '1D';
@@ -174,10 +232,92 @@ let _boundResizeHandler = null;
 let _zoomHoldTimer = null;
 let _zoomHoldInterval = null;
 let _chartRequestSeq = 0;
+let _selectedProvider = 'auto';
 const _chartCache = new Map();
+const _chartInflight = new Map();
 
 function copy(key) {
   return TEXT[getLang()]?.[key] ?? TEXT.en[key] ?? key;
+}
+
+function dashboardProviderOptions() {
+  return [
+    { value: 'auto', label: copy('providerAuto') },
+    { value: 'alpaca', label: copy('providerAlpaca') },
+    { value: 'twelvedata', label: copy('providerTwelveData') },
+    { value: 'yfinance', label: copy('providerYfinance') },
+    { value: 'cache', label: copy('providerCache') },
+    { value: 'synthetic', label: copy('providerSynthetic') },
+  ];
+}
+
+function loadStoredProvider() {
+  try {
+    const stored = localStorage.getItem(DASHBOARD_PROVIDER_STORAGE_KEY);
+    return dashboardProviderOptions().some((item) => item.value === stored) ? stored : 'auto';
+  } catch {
+    return 'auto';
+  }
+}
+
+function persistSelectedProvider() {
+  try {
+    localStorage.setItem(DASHBOARD_PROVIDER_STORAGE_KEY, _selectedProvider);
+  } catch {
+    // Ignore storage failures in restricted browser contexts.
+  }
+}
+
+function sourceChainDefault() {
+  return ['alpaca', 'twelvedata', 'yfinance', 'cache', 'synthetic'];
+}
+
+function chartStorageKey(symbol, timeframe, provider = _selectedProvider) {
+  return `${DASHBOARD_CHART_STORAGE_PREFIX}:${String(symbol || '').toUpperCase()}:${String(timeframe || '1D').toUpperCase()}:${provider}`;
+}
+
+function persistDashboardState(state) {
+  try {
+    localStorage.setItem(DASHBOARD_STATE_STORAGE_KEY, JSON.stringify({
+      saved_at: Date.now(),
+      payload: state,
+    }));
+  } catch {
+    // Ignore storage failures in restricted browser contexts.
+  }
+}
+
+function loadPersistedDashboardState() {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_STATE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.payload || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistChartSnapshot(symbol, timeframe, provider, payload) {
+  try {
+    localStorage.setItem(chartStorageKey(symbol, timeframe, provider), JSON.stringify({
+      saved_at: Date.now(),
+      payload,
+    }));
+  } catch {
+    // Ignore storage failures in restricted browser contexts.
+  }
+}
+
+function loadPersistedChartSnapshot(symbol, timeframe, provider = _selectedProvider) {
+  try {
+    const raw = localStorage.getItem(chartStorageKey(symbol, timeframe, provider));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.payload || null;
+  } catch {
+    return null;
+  }
 }
 
 function formatPct(value) {
@@ -193,6 +333,127 @@ function formatMaybePct(value) {
 function formatNum(value, digits = 2) {
   if (value == null || Number.isNaN(Number(value))) return '--';
   return Number(value).toFixed(digits);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
+}
+
+function defaultDashboardState(overrides = {}) {
+  const symbol = overrides.symbol ?? _activeSymbol ?? '';
+  const sourceChain = Array.isArray(overrides.source_chain) && overrides.source_chain.length
+    ? overrides.source_chain
+    : sourceChainDefault();
+  const phase = overrides.phase || 'loading';
+  return {
+    generated_at: overrides.generated_at || null,
+    phase,
+    ready: phase === 'ready',
+    symbol,
+    source: overrides.source || 'unknown',
+    selected_provider: overrides.selected_provider || _selectedProvider,
+    source_chain: sourceChain,
+    provider_status: overrides.provider_status || {},
+    degraded_from: overrides.degraded_from || null,
+    fallback_preview: {
+      symbol,
+      source: overrides.source || 'unknown',
+      source_chain: sourceChain,
+      last_snapshot: overrides.fallback_preview?.last_snapshot || null,
+      reason: overrides.fallback_preview?.reason || (phase === 'loading' ? ['chart_loading'] : ['chart_data_unavailable']),
+      next_actions: overrides.fallback_preview?.next_actions || ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
+    },
+  };
+}
+
+function chartReady() {
+  return Boolean(
+    _activeSymbol
+    && _lastCandleResponse.candles?.length
+    && _lastCandleResponse.source
+    && !['unknown', 'loading', 'unavailable', ''].includes(_lastCandleResponse.source),
+  );
+}
+
+function reasonLabel(reason) {
+  const normalized = String(reason || '').trim();
+  if (!normalized) return copy('noReason');
+  if (normalized.startsWith('provider_degraded_from_')) {
+    return `${copy('degradedFrom')}: ${normalized.replace('provider_degraded_from_', '').toUpperCase()}`;
+  }
+  const map = {
+    backend_unavailable: copy('backendUnavailableText'),
+    chart_loading: copy('chartLoadingText'),
+    chart_data_unavailable: copy('chartUnavailableText'),
+    market_data_unavailable: copy('chartUnavailableText'),
+    no_watchlist_signal: copy('noSignalsText'),
+    source_unknown: copy('sourceUnknownWhy'),
+    provider_connected_but_no_payload: copy('providerConnectedNoPayload'),
+    provider_not_configured: copy('providerNotConfigured'),
+    provider_quota_exceeded: copy('providerQuotaBlocked'),
+    cache_or_synthetic_fallback: copy('cacheFallbackOnly'),
+  };
+  return map[normalized] || normalized;
+}
+
+function nextActionLabel(action) {
+  const map = {
+    refresh_dashboard: copy('refreshDashboard'),
+    switch_symbol: copy('switchSymbol'),
+    open_market_radar: copy('openMarketRadar'),
+    open_backtest: copy('openBacktest'),
+  };
+  return map[String(action || '').trim()] || String(action || '-');
+}
+
+function snapshotLabel(snapshot) {
+  if (!snapshot) return copy('noSnapshot');
+  const close = snapshot.close ?? snapshot.c ?? snapshot.price;
+  const date = snapshot.date ?? snapshot.t ?? snapshot.timestamp;
+  if (close == null && !date) return copy('noSnapshot');
+  return `${close != null ? `$${Number(close).toFixed(2)}` : '--'} · ${date ? String(date).slice(0, 16) : '--'}`;
+}
+
+function syncDashboardStateFromChart(response, symbol) {
+  const source = response?.source || 'unknown';
+  const sourceChain = response?.source_chain || response?.data_source_chain || _dashboardState?.source_chain || sourceChainDefault();
+  const providerStatus = response?.provider_status || _dashboardState?.provider_status || {};
+  const degradedFrom = response?.degraded_from || _dashboardState?.degraded_from || null;
+  const ready = Boolean(symbol && response?.candles?.length && source && !['unknown', 'loading', 'unavailable', ''].includes(source));
+  const reason = Array.isArray(response?.fallback_preview?.reason) ? [...response.fallback_preview.reason] : [];
+  if (response?.warning) reason.push(response.warning);
+  if (response?.detail) reason.push(response.detail);
+  if (Array.isArray(response?.market_data_warnings)) reason.push(...response.market_data_warnings);
+  if (!ready && providerStatus?.available && !response?.candles?.length) reason.push('provider_connected_but_no_payload');
+  if (!ready && degradedFrom) reason.push(`provider_degraded_from_${degradedFrom}`);
+  if (!ready && providerStatus?.provider === 'unavailable') reason.push('provider_not_configured');
+  if (!ready && ['cache', 'synthetic'].includes(source)) reason.push('cache_or_synthetic_fallback');
+  if (!ready && source === 'unknown') reason.push('source_unknown');
+  if (!ready && !reason.length) reason.push(response?.prediction_disabled_reason || 'chart_data_unavailable');
+  _dashboardState = defaultDashboardState({
+    phase: ready ? 'ready' : (_chartLoading ? 'loading' : 'degraded'),
+    symbol,
+    source,
+    selected_provider: response?.selected_provider || _selectedProvider,
+    source_chain: sourceChain,
+    provider_status: providerStatus,
+    degraded_from: degradedFrom,
+    fallback_preview: {
+      symbol,
+      source,
+      source_chain: sourceChain,
+      last_snapshot: response?.candles?.length ? response.candles[response.candles.length - 1] : (_dashboardState?.fallback_preview?.last_snapshot || null),
+      reason,
+      next_actions: ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
+    },
+  });
+  persistDashboardState(_dashboardState);
 }
 
 function pctCls(value) {
@@ -267,6 +528,14 @@ function buildShell() {
           <div class="tf-tabs" id="tf-tabs">${['1D', '1W', '1M', '3M', '1Y'].map((tf) => `
             <button type="button" class="tf-tab${tf === _activeTF ? ' active' : ''}" data-tf="${tf}">${tf}</button>
           `).join('')}</div>
+          <label class="dashboard-provider-switch">
+            <span class="dashboard-provider-switch__label">${copy('sourceMode')}</span>
+            <select id="dashboard-provider-select" class="dashboard-provider-switch__select">
+              ${dashboardProviderOptions().map((option) => `
+                <option value="${option.value}" ${option.value === _selectedProvider ? 'selected' : ''}>${option.label}</option>
+              `).join('')}
+            </select>
+          </label>
           <div style="display:flex;gap:4px" id="ind-btns">${['MA20', 'MA60', 'BOLL', 'VOL'].map((ind) => `
             <button type="button" class="ind-btn${_activeIndicators.has(ind) ? ' active' : ''}" data-ind="${ind}">${ind}</button>
           `).join('')}</div>
@@ -691,36 +960,81 @@ function formatCurrencyValue(value) {
 function renderHealthBanner() {
   const banner = _container.querySelector('#dashboard-health-banner');
   if (!banner) return;
+  const state = _dashboardState || defaultDashboardState({ phase: _chartLoading ? 'loading' : 'degraded' });
+  const fallback = state.fallback_preview || {};
+  const providerStatus = state.provider_status || {};
+  const reasonText = (fallback.reason || []).map(reasonLabel).join(' | ') || copy('noReason');
+  const nextSteps = (fallback.next_actions || []).map(nextActionLabel).join(' · ') || copy('refreshDashboard');
   if (_overviewError) {
     banner.hidden = false;
     banner.classList.add('is-error');
     banner.innerHTML = `
       <strong>${copy('backendUnavailableTitle')}</strong>
       <span>${copy('backendUnavailableText')}</span>
+      <span>${copy('nextStep')}: ${escapeHtml(nextSteps)}</span>
     `;
     return;
   }
-  if (_chartLoading) {
+  if (_chartLoading && chartReady()) {
+    banner.hidden = true;
+    banner.classList.remove('is-error');
+    banner.innerHTML = '';
+    return;
+  }
+  if (_chartLoading || state.phase === 'loading') {
     banner.hidden = false;
     banner.classList.remove('is-error');
     banner.innerHTML = `
       <strong>${copy('chartLoadingTitle')}</strong>
       <span>${copy('chartLoadingText')}</span>
+      <span>${copy('providerChain')}: ${escapeHtml((state.source_chain || []).join(' -> ') || '-')}</span>
     `;
     return;
   }
-  if (_activeSymbol && !_lastCandleResponse.candles?.length) {
+  if (!chartReady()) {
     banner.hidden = false;
     banner.classList.remove('is-error');
     banner.innerHTML = `
-      <strong>${copy('chartUnavailableText')}</strong>
-      <span>${copy('source')}: ${_lastCandleResponse.source || copy('unavailable')}</span>
+      <strong>${copy('degradedTitle')}</strong>
+      <span>${copy('source')}: ${escapeHtml(state.source || copy('unavailable'))}</span>
+      <span>${copy('providerStatus')}: ${escapeHtml(providerStatus.provider || copy('unavailable'))}</span>
+      <span>${copy('degradedReason')}: ${escapeHtml(reasonText)}</span>
+      <span>${copy('nextStep')}: ${escapeHtml(nextSteps)}</span>
     `;
     return;
   }
   banner.hidden = true;
   banner.classList.remove('is-error');
   banner.innerHTML = '';
+}
+
+function renderChartFallbackCard() {
+  const state = _dashboardState || defaultDashboardState({ phase: _chartLoading ? 'loading' : 'degraded' });
+  const fallback = state.fallback_preview || {};
+  const providerStatus = state.provider_status || {};
+  const reasonText = (fallback.reason || []).map(reasonLabel).join(' | ') || copy('noReason');
+  const nextSteps = (fallback.next_actions || []).map(nextActionLabel);
+  return `
+    <div class="functional-empty compact-functional-empty">
+      <div>
+        <div class="functional-empty__eyebrow">${copy(state.phase === 'loading' ? 'chartLoadingTitle' : 'degradedTitle')}</div>
+        <h3>${copy(state.phase === 'loading' ? 'chartLoadingTitle' : 'chartUnavailableText')}</h3>
+        <p>${escapeHtml(state.phase === 'loading' ? copy('chartLoadingText') : reasonText)}</p>
+      </div>
+      <div class="workbench-kv-list compact-kv-list">
+        <div class="workbench-kv-row"><span>${copy('source')}</span><strong>${escapeHtml(state.source || copy('unavailable'))}</strong></div>
+        <div class="workbench-kv-row"><span>${copy('providerStatus')}</span><strong>${escapeHtml(providerStatus.provider || copy('unavailable'))}</strong></div>
+        <div class="workbench-kv-row"><span>${copy('degradedFrom')}</span><strong>${escapeHtml(state.degraded_from || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>${copy('fallbackSymbol')}</span><strong>${escapeHtml(fallback.symbol || _activeSymbol || '--')}</strong></div>
+        <div class="workbench-kv-row"><span>${copy('providerChain')}</span><strong>${escapeHtml((fallback.source_chain || state.source_chain || []).join(' -> ') || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>${copy('lastSnapshot')}</span><strong>${escapeHtml(snapshotLabel(fallback.last_snapshot))}</strong></div>
+        <div class="workbench-kv-row"><span>${copy('degradedReason')}</span><strong>${escapeHtml(reasonText)}</strong></div>
+      </div>
+      <div class="preview-step-grid">
+        ${nextSteps.map((step) => `<div class="preview-step"><span>${copy('nextStep')}</span><strong>${escapeHtml(step)}</strong></div>`).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function populateKPIs() {
@@ -1419,54 +1733,111 @@ function candleFallback(symbol, limit = 140) {
 }
 
 async function fetchCandles(symbol, timeframe) {
-  const cacheKey = `${String(symbol || '').toUpperCase()}::${String(timeframe || '1D').toUpperCase()}`;
+  const cacheKey = `${String(symbol || '').toUpperCase()}::${String(timeframe || '1D').toUpperCase()}::${_selectedProvider}`;
   const cached = _chartCache.get(cacheKey);
   if (cached && (Date.now() - cached.at) < CHART_CACHE_TTL_MS) {
     return cached.payload;
   }
-  try {
-    const response = await api.platform.dashboardChart(symbol, timeframe);
-    const payload = {
-      source: response.source || 'unknown',
-      indicators: response.indicators || {},
-      projection_scenarios: response.projection_scenarios || {},
-      projection_explanations: response.projection_explanations || {},
-      projected_volume: response.projected_volume || [],
-      viewport_defaults: response.viewport_defaults || {},
-      click_targets: response.click_targets || [],
-      prediction_disabled_reason: response.prediction_disabled_reason || null,
-      signal: response.signal || null,
-      candles: (response.candles || []).map((candle) => ({
-        open: candle.open ?? candle.o,
-        high: candle.high ?? candle.h,
-        low: candle.low ?? candle.l,
-        close: candle.close ?? candle.c,
-        volume: candle.volume ?? candle.v,
-        date: candle.date ?? candle.t,
-      })),
-    };
-    _chartCache.set(cacheKey, { at: Date.now(), payload });
-    return payload;
-  } catch {
-    const payload = {
-      source: 'unavailable',
-      indicators: {},
-      projection_scenarios: {},
-      projection_explanations: {},
-      projected_volume: [],
-      viewport_defaults: {},
-      click_targets: [],
-      prediction_disabled_reason: 'market_data_unavailable',
-      signal: null,
-      candles: [],
-    };
-    _chartCache.set(cacheKey, { at: Date.now(), payload });
-    return payload;
+  if (_chartInflight.has(cacheKey)) {
+    return _chartInflight.get(cacheKey);
   }
+  const request = (async () => {
+    try {
+      const response = await api.platform.dashboardChart(symbol, timeframe, _selectedProvider);
+      const payload = {
+        source: response.source || 'unknown',
+        selected_provider: response.selected_provider || _selectedProvider,
+        source_chain: response.data_source_chain || response.provider_chain || [],
+        provider_status: response.provider_status || {},
+        degraded_from: response.degraded_from || null,
+        fallback_preview: response.fallback_preview || null,
+        indicators: response.indicators || {},
+        projection_scenarios: response.projection_scenarios || {},
+        projection_explanations: response.projection_explanations || {},
+        projected_volume: response.projected_volume || [],
+        viewport_defaults: response.viewport_defaults || {},
+        click_targets: response.click_targets || [],
+        prediction_disabled_reason: response.prediction_disabled_reason || null,
+        market_data_warnings: response.market_data_warnings || [],
+        warning: response.warning || null,
+        detail: response.detail || null,
+        signal: response.signal || null,
+        candles: (response.candles || []).map((candle) => ({
+          open: candle.open ?? candle.o,
+          high: candle.high ?? candle.h,
+          low: candle.low ?? candle.l,
+          close: candle.close ?? candle.c,
+          volume: candle.volume ?? candle.v,
+          date: candle.date ?? candle.t,
+        })),
+      };
+      _chartCache.set(cacheKey, { at: Date.now(), payload });
+      if (payload.candles?.length) {
+        persistChartSnapshot(symbol, timeframe, _selectedProvider, payload);
+      }
+      return payload;
+    } catch {
+      const payload = {
+        source: 'unavailable',
+        selected_provider: _selectedProvider,
+        source_chain: _dashboardState?.source_chain || sourceChainDefault(),
+        provider_status: _dashboardState?.provider_status || { available: false, provider: 'unavailable' },
+        degraded_from: _dashboardState?.degraded_from || null,
+        fallback_preview: _dashboardState?.fallback_preview || null,
+        indicators: {},
+        projection_scenarios: {},
+        projection_explanations: {},
+        projected_volume: [],
+        viewport_defaults: {},
+        click_targets: [],
+        prediction_disabled_reason: 'market_data_unavailable',
+        market_data_warnings: ['market_data_unavailable'],
+        warning: 'market_data_unavailable',
+        detail: null,
+        signal: null,
+        candles: [],
+      };
+      _chartCache.set(cacheKey, { at: Date.now(), payload });
+      return payload;
+    } finally {
+      _chartInflight.delete(cacheKey);
+    }
+  })();
+  _chartInflight.set(cacheKey, request);
+  return request;
+}
+
+function renderChartStage() {
+  const canvas = _container?.querySelector('#kline-canvas');
+  const statusEl = _container?.querySelector('#kline-status-note');
+  const legendEl = _container?.querySelector('#kline-legend');
+  const overlayEl = _container?.querySelector('#kline-projection-float');
+  if (!canvas || !statusEl) return false;
+
+  if (!chartReady()) {
+    canvas.style.display = 'none';
+    legendEl.innerHTML = '';
+    if (overlayEl) {
+      overlayEl.style.display = 'none';
+      overlayEl.innerHTML = '';
+    }
+    if (_renderer) {
+      _renderer.destroy();
+      _renderer = null;
+    }
+    statusEl.classList.add('dashboard-status-note--card');
+    statusEl.innerHTML = renderChartFallbackCard();
+    return false;
+  }
+
+  statusEl.classList.remove('dashboard-status-note--card');
+  canvas.style.display = 'block';
+  ensureRenderer();
+  return true;
 }
 
 function updateRenderer() {
-  if (!_renderer) return;
+  if (!renderChartStage()) return;
   const signal = activeSignal();
   const analysis = _selectedProjection ? buildAnalysisModel(signal, _selectedProjection, _lastCandleResponse.source) : null;
   _renderer.update({
@@ -1474,6 +1845,7 @@ function updateRenderer() {
     timeframe: _activeTF,
     zoomLabel: _activeZoom,
     source: _lastCandleResponse.source,
+    selectedProvider: _selectedProvider,
     candles: _lastCandleResponse.candles,
     signal,
     selectedScenario: _selectedProjection,
@@ -1489,6 +1861,8 @@ async function loadActiveKline() {
     _chartLoading = false;
     _lastCandleResponse = {
       source: _overviewError ? 'unavailable' : 'unknown',
+      selected_provider: _selectedProvider,
+      source_chain: _dashboardState?.source_chain || sourceChainDefault(),
       indicators: {},
       projection_scenarios: {},
       projection_explanations: {},
@@ -1496,34 +1870,58 @@ async function loadActiveKline() {
       viewport_defaults: {},
       click_targets: [],
       prediction_disabled_reason: _overviewError ? 'backend_unavailable' : 'no_watchlist_signal',
+      market_data_warnings: [],
+      warning: null,
+      detail: null,
       signal: null,
       candles: [],
     };
+    syncDashboardStateFromChart(_lastCandleResponse, _activeSymbol);
     updateIndicators([]);
     renderAiPanel(null);
     updateRenderer();
     renderHealthBanner();
     return;
   }
+  const hadRenderableChart = chartReady();
   _chartLoading = true;
-  _lastCandleResponse = {
-    source: 'loading',
-    indicators: {},
-    projection_scenarios: {},
-    projection_explanations: {},
-    projected_volume: [],
-    viewport_defaults: {},
-    click_targets: [],
-    prediction_disabled_reason: 'loading',
-    signal,
-    candles: [],
-  };
+  _dashboardState = defaultDashboardState({
+    ..._dashboardState,
+    phase: 'loading',
+    symbol: signal.symbol,
+    fallback_preview: {
+      ...(_dashboardState?.fallback_preview || {}),
+      symbol: signal.symbol,
+      reason: ['chart_loading'],
+      next_actions: ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
+    },
+  });
   renderHealthBanner();
-  updateRenderer();
+  if (!hadRenderableChart) {
+    _lastCandleResponse = {
+      source: 'loading',
+        selected_provider: _selectedProvider,
+        source_chain: _dashboardState?.source_chain || sourceChainDefault(),
+      indicators: {},
+      projection_scenarios: {},
+      projection_explanations: {},
+      projected_volume: [],
+      viewport_defaults: {},
+      click_targets: [],
+      prediction_disabled_reason: 'loading',
+      market_data_warnings: [],
+      warning: null,
+      detail: null,
+      signal,
+      candles: [],
+    };
+    updateRenderer();
+  }
   const response = await fetchCandles(signal.symbol, _activeTF);
   if (requestId !== _chartRequestSeq) return;
   _lastCandleResponse = response;
   _chartLoading = false;
+  syncDashboardStateFromChart(_lastCandleResponse, signal.symbol);
   if (_lastCandleResponse.signal) {
     mergeActiveSignal(_lastCandleResponse.signal);
     populateSignalTable();
@@ -1595,12 +1993,56 @@ function startZoomHold(direction) {
 }
 
 async function loadOverview() {
-  try {
-    _overview = await api.platform.overview();
+  const persistedState = loadPersistedDashboardState();
+  if (persistedState) {
+    _dashboardState = defaultDashboardState({
+      ...persistedState,
+      selected_provider: _selectedProvider,
+    });
+    if (!_activeSymbol && persistedState.symbol) {
+      _activeSymbol = persistedState.symbol;
+    }
+  }
+  const persistedChart = loadPersistedChartSnapshot(_activeSymbol || _dashboardState?.symbol, _activeTF, _selectedProvider);
+  if (persistedChart?.candles?.length) {
+    _lastCandleResponse = {
+      ..._lastCandleResponse,
+      ...persistedChart,
+    };
+    syncDashboardStateFromChart(_lastCandleResponse, persistedChart.symbol || _dashboardState?.symbol || _activeSymbol);
+    updateIndicators(_lastCandleResponse.candles);
+    updateRenderer();
+  }
+  renderHealthBanner();
+
+  const overviewPromise = api.platform.overview();
+  const dashboardStateResult = await Promise.allSettled([api.trading.dashboardState(_selectedProvider)]).then((results) => results[0]);
+
+  if (dashboardStateResult.status === 'fulfilled') {
+    _dashboardState = defaultDashboardState(dashboardStateResult.value || {});
+    persistDashboardState(_dashboardState);
+  } else {
+    _dashboardState = defaultDashboardState({
+      phase: 'loading',
+      symbol: _activeSymbol,
+      source: 'unknown',
+      selected_provider: _selectedProvider,
+      fallback_preview: {
+        reason: ['chart_loading'],
+        next_actions: ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
+      },
+    });
+  }
+  const prefetchSymbol = _dashboardState?.symbol || _activeSymbol || '';
+  const chartPrefetch = prefetchSymbol ? fetchCandles(prefetchSymbol, _activeTF).catch(() => null) : Promise.resolve(null);
+
+  const overviewResult = await Promise.allSettled([overviewPromise]).then((results) => results[0]);
+  if (overviewResult.status === 'fulfilled') {
+    _overview = overviewResult.value;
     _overviewError = null;
-  } catch (error) {
-    console.warn('Dashboard overview unavailable', error);
-    _overviewError = error;
+  } else {
+    console.warn('Dashboard overview unavailable', overviewResult.reason);
+    _overviewError = overviewResult.reason;
     _overview = {
       watchlist_signals: [],
       top_signals: [],
@@ -1613,19 +2055,39 @@ async function loadOverview() {
       live_account_snapshot: null,
       position_symbols: [],
     };
+    if (!(_dashboardState?.fallback_preview?.reason || []).length) {
+      _dashboardState = defaultDashboardState({
+        ..._dashboardState,
+        phase: 'degraded',
+        fallback_preview: {
+          ...(_dashboardState?.fallback_preview || {}),
+          reason: ['backend_unavailable'],
+          next_actions: ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
+        },
+      });
+    }
   }
   _watchlist = unifiedWatchlist(_overview);
   _selectedHeatmapNode = null;
   if (!_watchlist.find((signal) => signal.symbol === _activeSymbol)) {
     _activeSymbol = _watchlist[0]?.symbol || '';
   }
+  _dashboardState = defaultDashboardState({
+    ..._dashboardState,
+    symbol: _dashboardState?.symbol || _activeSymbol,
+    fallback_preview: {
+      ...(_dashboardState?.fallback_preview || {}),
+      symbol: (_dashboardState?.fallback_preview?.symbol || _activeSymbol),
+    },
+  });
   populateKPIs();
   populateSignalTable();
   renderChips();
   drawHeatmap();
   syncPageState();
-  ensureRenderer();
+  renderHealthBanner();
   await Promise.allSettled([
+    chartPrefetch,
     loadActiveKline(),
     loadPositions(),
   ]);
@@ -1647,6 +2109,38 @@ function bindEvents() {
   };
   tick();
   _clockTimer = setInterval(tick, 1000);
+
+  _container.querySelector('#dashboard-provider-select')?.addEventListener('change', async (event) => {
+    const nextProvider = String(event.target.value || 'auto');
+    if (nextProvider === _selectedProvider) return;
+    const before = { provider: _selectedProvider };
+    _selectedProvider = nextProvider;
+    persistSelectedProvider();
+    _selectedProjection = null;
+    const cachedChart = loadPersistedChartSnapshot(_activeSymbol || _dashboardState?.symbol, _activeTF, _selectedProvider);
+    if (cachedChart?.candles?.length) {
+      _lastCandleResponse = {
+        ..._lastCandleResponse,
+        ...cachedChart,
+      };
+      syncDashboardStateFromChart(_lastCandleResponse, _activeSymbol || _dashboardState?.symbol || '');
+      updateIndicators(_lastCandleResponse.candles);
+      updateRenderer();
+      renderHealthBanner();
+    }
+    recordUiAuditEvent('provider_change', 'dashboard_source', before, { provider: _selectedProvider });
+    try {
+      const nextState = await api.trading.dashboardState(_selectedProvider);
+      _dashboardState = defaultDashboardState(nextState || {});
+      persistDashboardState(_dashboardState);
+    } catch {
+      _dashboardState = defaultDashboardState({
+        ..._dashboardState,
+        selected_provider: _selectedProvider,
+      });
+    }
+    await loadActiveKline();
+  });
 
   if (_boundClickHandler) {
     _container.removeEventListener('click', _boundClickHandler);
@@ -1788,6 +2282,8 @@ export async function render(container) {
   _overview = null;
   _overviewError = null;
   _chartLoading = false;
+  _selectedProvider = loadStoredProvider();
+  _dashboardState = defaultDashboardState({ phase: 'loading', selected_provider: _selectedProvider });
   _watchlist = [];
   _activeIndicators = new Set(DEFAULT_INDICATORS);
   _activeZoom = '116%';
@@ -1797,11 +2293,16 @@ export async function render(container) {
   _selectedHeatmapNode = null;
   _lastCandleResponse = {
     source: 'unknown',
+    selected_provider: _selectedProvider,
+    source_chain: sourceChainDefault(),
     candles: [],
     indicators: {},
     projection_scenarios: {},
     projection_explanations: {},
     projected_volume: [],
+    market_data_warnings: [],
+    warning: null,
+    detail: null,
     signal: null,
     prediction_disabled_reason: null,
   };
@@ -1839,16 +2340,22 @@ export function destroy() {
   _overview = null;
   _overviewError = null;
   _chartLoading = false;
+  _dashboardState = null;
   _watchlist = [];
   _selectedProjection = null;
   _selectedHeatmapNode = null;
   _lastCandleResponse = {
     source: 'unknown',
+    selected_provider: _selectedProvider,
+    source_chain: sourceChainDefault(),
     candles: [],
     indicators: {},
     projection_scenarios: {},
     projection_explanations: {},
     projected_volume: [],
+    market_data_warnings: [],
+    warning: null,
+    detail: null,
     signal: null,
     prediction_disabled_reason: null,
   };

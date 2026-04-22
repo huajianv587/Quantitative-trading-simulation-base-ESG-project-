@@ -129,6 +129,70 @@ async function assertBottomAligned(page, leftSelector, rightSelector, tolerance 
   expect(diff).toBeLessThanOrEqual(tolerance);
 }
 
+async function assertConnectorRegistryUsesPanel(page) {
+  const metrics = await page.evaluate(() => {
+    const body = document.querySelector('.connector-registry-body');
+    const shell = document.querySelector('.connector-provider-shell');
+    const scroll = document.querySelector('.connector-provider-scroll');
+    if (!body || !shell || !scroll) return null;
+    const bodyRect = body.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    const scrollRect = scroll.getBoundingClientRect();
+    return {
+      bodyHeight: bodyRect.height,
+      shellHeight: shellRect.height,
+      shellBottomGap: Math.abs(bodyRect.bottom - shellRect.bottom),
+      scrollHeight: scrollRect.height,
+      scrollClientHeight: scroll.clientHeight,
+      scrollContentHeight: scroll.scrollHeight,
+    };
+  });
+  expect(metrics).not.toBeNull();
+  expect(metrics.shellHeight).toBeGreaterThan(metrics.bodyHeight * 0.42);
+  expect(metrics.shellBottomGap).toBeLessThanOrEqual(40);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.bodyHeight * 0.38);
+  expect(metrics.scrollContentHeight).toBeGreaterThanOrEqual(metrics.scrollClientHeight);
+}
+
+async function assertDecisionEvidenceAdaptive(page, expectedCount) {
+  const readMetrics = () => page.evaluate(() => {
+    const card = document.querySelector('.decision-evidence-card');
+    const panel = document.querySelector('.decision-evidence-panel');
+    const list = document.querySelector('.decision-evidence-list');
+    const right = document.querySelector('.decision-stack--right');
+    if (!card || !panel || !list || !right) return null;
+    const cardRect = card.getBoundingClientRect();
+    const rightRect = right.getBoundingClientRect();
+    const viewportBottom = window.innerHeight - 24;
+    const targetBottom = Math.max(cardRect.top + 320, Math.min(rightRect.bottom, viewportBottom));
+    const style = window.getComputedStyle(list);
+    return {
+      itemCount: list.children.length,
+      bottomDiff: Math.abs(cardRect.bottom - targetBottom),
+      overflowY: style.overflowY,
+      scrollHeight: list.scrollHeight,
+      clientHeight: list.clientHeight,
+      maxHeight: style.maxHeight,
+    };
+  });
+  await expect.poll(async () => {
+    const metrics = await readMetrics();
+    return metrics?.itemCount ?? 0;
+  }, { timeout: 5000 }).toBe(expectedCount);
+  await expect.poll(async () => {
+    const metrics = await readMetrics();
+    return metrics?.bottomDiff ?? Number.MAX_SAFE_INTEGER;
+  }, { timeout: 5000 }).toBeLessThanOrEqual(48);
+  const metrics = await readMetrics();
+  expect(metrics).not.toBeNull();
+  expect(metrics.itemCount).toBe(expectedCount);
+  expect(metrics.bottomDiff).toBeLessThanOrEqual(48);
+  if (metrics.scrollHeight > metrics.clientHeight + 4) {
+    expect(metrics.overflowY).toBe('auto');
+    expect(metrics.maxHeight).not.toBe('none');
+  }
+}
+
 function providers() {
   return [
     { provider_id: 'local_esg', display_name: 'Local ESG Corpus', configured: true, capabilities: ['esg_reports', 'local_evidence'], daily_limit: 1000000, scan_budget: 1000000, manual_reserve: 0, priority: 10, free_tier_note: 'Local paper-grade ESG corpus and embeddings; no external request.', quota: { used_today: 28, remaining_estimate: 999972 } },
@@ -329,6 +393,7 @@ for (const viewport of VIEWPORTS) {
       await page.locator('#btn-connector-test').click();
       await page.locator('#btn-connector-live-scan').click();
       await expect(page.locator('#connector-result')).toContainText(/evidence-layout-001|dry-test-layout-001|health-layout-001/);
+      if (isDesktop) await assertConnectorRegistryUsesPanel(page);
       await assertNoHorizontalOverflow(page, overflowSelectors);
       await page.screenshot({ path: screenshotPath('connector-center', viewport.name, mode.lang, mode.theme, 'after-actions'), fullPage: true });
 
@@ -362,6 +427,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator('#decision-summary')).toContainText(/Verifier|Risk|Decision|决策|风险|验证/);
       await expect(page.locator('.decision-stack--right > .card')).toHaveCount(6);
       if (isDesktop) await assertCardStackTight(page, '.decision-stack--right', 28);
+      if (isDesktop) await assertDecisionEvidenceAdaptive(page, 12);
       await assertNoHorizontalOverflow(page, overflowSelectors);
       await page.screenshot({ path: screenshotPath('intelligence', viewport.name, mode.lang, mode.theme, 'after-actions'), fullPage: true });
 

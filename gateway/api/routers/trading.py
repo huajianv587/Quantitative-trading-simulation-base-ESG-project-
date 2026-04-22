@@ -5,6 +5,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from gateway.api.trading_schemas import (
+    AutopilotArmRequest,
+    AutopilotDisarmRequest,
+    AutopilotPolicyUpdateRequest,
+    StrategyAllocationRequest,
+    StrategyToggleRequest,
     TradingCycleRunRequest,
     TradingDebateRunRequest,
     TradingJobRunRequest,
@@ -149,3 +154,58 @@ async def trading_job_run(job_name: str, req: TradingJobRunRequest | None = None
 @router.get("/api/v1/trading/ops/snapshot")
 def trading_ops_snapshot() -> dict[str, Any]:
     return _trading_service().trading_ops_snapshot()
+
+
+@router.get("/api/v1/trading/autopilot/policy")
+def trading_autopilot_policy() -> dict[str, Any]:
+    return _trading_service().get_autopilot_policy()
+
+
+@router.post("/api/v1/trading/autopilot/policy")
+def trading_autopilot_policy_save(req: AutopilotPolicyUpdateRequest) -> dict[str, Any]:
+    return _trading_service().save_autopilot_policy(req.model_dump())
+
+
+@router.post("/api/v1/trading/autopilot/arm")
+def trading_autopilot_arm(req: AutopilotArmRequest | None = None) -> dict[str, Any]:
+    return _trading_service().arm_autopilot(armed=True if req is None else req.armed)
+
+
+@router.post("/api/v1/trading/autopilot/disarm")
+def trading_autopilot_disarm(req: AutopilotDisarmRequest | None = None) -> dict[str, Any]:
+    return _trading_service().arm_autopilot(armed=False if req is None else req.armed)
+
+
+@router.get("/api/v1/trading/strategies")
+def trading_strategies() -> dict[str, Any]:
+    return _trading_service().list_strategies()
+
+
+@router.post("/api/v1/trading/strategies/{strategy_id}/toggle")
+def trading_strategy_toggle(strategy_id: str, req: StrategyToggleRequest) -> dict[str, Any]:
+    return _trading_service().toggle_strategy(strategy_id=strategy_id, status=req.status)
+
+
+@router.post("/api/v1/trading/strategies/{strategy_id}/allocation")
+def trading_strategy_allocate(strategy_id: str, req: StrategyAllocationRequest) -> dict[str, Any]:
+    return _trading_service().allocate_strategy(
+        strategy_id=strategy_id,
+        capital_allocation=req.capital_allocation,
+        max_symbols=req.max_symbols,
+        status=req.status,
+    )
+
+
+@router.get("/api/v1/trading/execution-path/status")
+def trading_execution_path_status() -> dict[str, Any]:
+    return _trading_service().execution_path_status()
+
+
+@router.get("/api/v1/trading/dashboard/state")
+def trading_dashboard_state(provider: str = "auto") -> dict[str, Any]:
+    return _trading_service().dashboard_state(provider=provider)
+
+
+@router.get("/api/v1/trading/fusion/status")
+def trading_fusion_status() -> dict[str, Any]:
+    return _trading_service().fusion_reference_manifest()

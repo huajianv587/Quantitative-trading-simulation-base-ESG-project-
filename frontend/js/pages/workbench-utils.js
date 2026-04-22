@@ -34,14 +34,14 @@ const COPY = {
     quality: '质量',
     safe: '时点安全',
     noEvidence: '暂无证据',
-    noFactorCards: '暂无因子卡',
+    noFactorCards: '暂无因子卡片',
     noSimulation: '暂无模拟结果',
     noSimulationHint: '请选择场景后再运行 Monte Carlo。',
     notSet: '未设置',
-    evidenceHint: '点击扫描证据即可加载带来源链路的条目。',
+    evidenceHint: '扫描证据后会加载带来源链路的条目。',
     factorHint: '运行因子发现后会生成 IC、RankIC 和门禁结果。',
     factorReviewHint: '门禁通过或待复核',
-    pathSummary: '路径分布',
+    pathSummary: '路径摘要',
     factorAttribution: '因子归因',
     historicalAnalogs: '历史相似事件',
     expected: '预期收益',
@@ -51,111 +51,115 @@ const COPY = {
   },
 };
 
-const STATUS_COPY = {
-  zh: {
-    promoted: '已晋升',
-    configured: '已配置',
-    pass: '通过',
-    safe: '安全',
-    ready: '就绪',
-    filled: '已填充',
-    shadow: '影子',
-    queued: '排队中',
-    running: '运行中',
-    on: '开启',
-    armed: '已启用',
-    protected: '已保护',
-    untouched: '未触碰',
-    rejected: '已拒绝',
-    failed: '失败',
-    missing_key: '缺少密钥',
-    error: '错误',
-    risk: '风险',
-    blocked: '已阻止',
-    research_only: '仅研究',
-    watch: '观察',
-    review: '复核',
-    pending: '待处理',
-    logged: '已记录',
-    linked: '已关联',
-    active: '活跃',
-    forming: '形成中',
-    waiting: '等待中',
-    clean: '清晰',
-    flagged: '已标记',
-    stored: '已存储',
-    guarded: '已防护',
-    ui_only: '仅界面',
-    neutral: '中性',
-    approve: '批准',
-    reduce: '缩减',
-    reject: '拒绝',
-    halt: '暂停',
-    tagged: '已标注',
-    tracked: '已追踪',
-    derived: '自动推导',
-    masked: '已脱敏',
-    off: '关闭',
-    yes: '是',
-    no: '否',
-    buy: '买入',
-    sell: '卖出',
-    hold: '持有',
-    long: '看多',
-    short: '看空',
-    clear: '清晰',
-    paper: '纸面',
-    enabled: '已启用',
-    disabled: '已停用',
-    review_only: '仅复核',
-    idle: '空闲',
-    submitted: '已提交',
-  },
+const STATUS_COPY_ZH = {
+  active: '活跃',
+  approve: '批准',
+  approved: '已批准',
+  armed: '已武装',
+  blocked: '已阻断',
+  buy: '买入',
+  clean: '正常',
+  clear: '清晰',
+  configured: '已配置',
+  derived: '自动推导',
+  disabled: '已停用',
+  enabled: '已启用',
+  error: '错误',
+  failed: '失败',
+  filled: '已填充',
+  flagged: '已标记',
+  forming: '形成中',
+  guarded: '受保护',
+  halt: '暂停',
+  hold: '持有',
+  idle: '空闲',
+  linked: '已关联',
+  logged: '已记录',
+  long: '看多',
+  missing_key: '缺少密钥',
+  neutral: '中性',
+  no: '否',
+  off: '关闭',
+  on: '开启',
+  paper: '模拟',
+  pass: '通过',
+  paused: '已暂停',
+  pending: '待处理',
+  promoted: '已晋升',
+  protected: '已保护',
+  queued: '排队中',
+  ready: '就绪',
+  reduce: '缩减',
+  reject: '拒绝',
+  rejected: '已拒绝',
+  research_only: '仅研究',
+  review: '待复核',
+  review_only: '仅复核',
+  risk: '风险',
+  running: '运行中',
+  safe: '安全',
+  sell: '卖出',
+  shadow: '影子',
+  short: '看空',
+  stored: '已存储',
+  submitted: '已提交',
+  tagged: '已标注',
+  tracked: '已追踪',
+  untouched: '未触达',
+  ui_only: '仅界面',
+  waiting: '等待中',
+  watch: '观察',
+  yes: '是',
 };
 
 const POSITIVE_STATUSES = new Set([
-  'promoted',
-  'configured',
-  'pass',
-  'safe',
-  'ready',
-  'filled',
-  'shadow',
-  'queued',
-  'running',
-  'on',
-  'armed',
-  'protected',
-  'untouched',
-  'approve',
   'active',
+  'approve',
+  'approved',
+  'armed',
+  'buy',
+  'clean',
+  'clear',
+  'configured',
+  'derived',
+  'enabled',
+  'filled',
+  'guarded',
   'linked',
   'logged',
-  'stored',
-  'clear',
-  'tracked',
-  'derived',
-  'guarded',
-  'yes',
-  'buy',
   'long',
-  'enabled',
+  'on',
+  'paper',
+  'pass',
+  'promoted',
+  'protected',
+  'queued',
+  'ready',
+  'running',
+  'safe',
+  'shadow',
+  'stored',
   'submitted',
+  'tagged',
+  'tracked',
+  'untouched',
+  'yes',
 ]);
 
 const NEGATIVE_STATUSES = new Set([
-  'rejected',
-  'failed',
-  'missing_key',
-  'error',
-  'risk',
   'blocked',
-  'reject',
+  'disabled',
+  'error',
+  'failed',
   'halt',
+  'missing_key',
+  'off',
+  'reduce',
+  'reject',
+  'rejected',
+  'risk',
   'sell',
   'short',
-  'off',
-  'disabled',
 ]);
 
 export function lang() {
@@ -172,20 +176,20 @@ export function esc(value) {
     '<': '&lt;',
     '>': '&gt;',
     '"': '&quot;',
-    "'": '&#39;',
+    '\'': '&#39;',
   }[ch]));
 }
 
 export function num(value, digits = 3) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return '-';
-  return n.toFixed(digits);
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '-';
+  return parsed.toFixed(digits);
 }
 
 export function pct(value, digits = 2) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return '-';
-  return `${(n * 100).toFixed(digits)}%`;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '-';
+  return `${(parsed * 100).toFixed(digits)}%`;
 }
 
 export function readSymbol(container, selector, fallback = 'AAPL') {
@@ -194,7 +198,7 @@ export function readSymbol(container, selector, fallback = 'AAPL') {
 
 export function splitTokens(raw, options = {}) {
   const delimiters = options.delimiters || /[,\s]+/;
-  const uppercase = !!options.uppercase;
+  const uppercase = Boolean(options.uppercase);
   return String(raw || '')
     .split(delimiters)
     .map((item) => item.trim())
@@ -247,7 +251,7 @@ export function badge(label, status = 'neutral') {
 
 function humanizeStatus(status) {
   const normalized = String(status || 'neutral').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (lang() === 'zh' && STATUS_COPY.zh[normalized]) return STATUS_COPY.zh[normalized];
+  if (lang() === 'zh' && STATUS_COPY_ZH[normalized]) return STATUS_COPY_ZH[normalized];
   return normalized.replace(/_/g, ' ').trim();
 }
 
@@ -283,11 +287,22 @@ export function renderTokenPreview(raw, options = {}) {
 }
 
 export function renderEvidenceItems(items, options = {}) {
-  const maxItems = options.maxItems || 8;
   if (!items?.length) return emptyState(text('noEvidence'), text('evidenceHint'));
-  return `<div class="workbench-list ${options.scroll ? 'workbench-scroll-list' : ''}">
-    ${items.slice(0, maxItems).map((item) => `
-      <article class="workbench-item">
+  const resolvedLimit = options.limit === null
+    ? null
+    : Number.isFinite(Number(options.limit ?? options.maxItems))
+      ? Number(options.limit ?? options.maxItems)
+      : 8;
+  const visibleItems = resolvedLimit == null ? items : items.slice(0, resolvedLimit);
+  const listClass = [
+    'workbench-list',
+    options.scroll ? 'workbench-scroll-list' : '',
+    options.listClass || '',
+  ].filter(Boolean).join(' ');
+  const itemClass = options.itemClass ? ` ${options.itemClass}` : '';
+  return `<div class="${listClass}">
+    ${visibleItems.map((item) => `
+      <article class="workbench-item${itemClass}">
         <div class="workbench-item__head">
           <strong>${esc(item.title || item.item_id || '')}</strong>
           ${badge(item.item_type || 'evidence', 'neutral')}
@@ -297,7 +312,6 @@ export function renderEvidenceItems(items, options = {}) {
           <span>${esc(item.symbol || '')}</span>
           <span>${esc(item.provider || '')}</span>
           <span>q=${num(item.quality_score ?? item.confidence)}</span>
-          <span>${esc(item.leakage_guard || text('safe'))}</span>
         </div>
       </article>
     `).join('')}
@@ -305,74 +319,51 @@ export function renderEvidenceItems(items, options = {}) {
 }
 
 export function renderFactorCards(cards, options = {}) {
-  const maxItems = options.maxItems || 12;
+  const maxItems = options.maxItems || 6;
   if (!cards?.length) return emptyState(text('noFactorCards'), text('factorHint'));
-  return `<div class="factor-card-grid ${options.compact ? 'factor-card-grid--compact' : ''}">
+  return `<div class="factor-card-grid">
     ${cards.slice(0, maxItems).map((card) => `
       <article class="factor-card">
         <div class="factor-card__head">
           <div>
-            <strong>${esc(card.name || '')}</strong>
-            <span>${esc(card.family || '')}</span>
+            <strong>${esc(card.factor_name || card.name || '')}</strong>
+            <span>${esc(card.family || card.category || '')}</span>
           </div>
-          ${statusBadge(card.status)}
+          ${statusBadge(card.gate_status || card.status || 'review')}
         </div>
-        <p>${esc(card.definition || card.description || '')}</p>
         <div class="workbench-mini-grid">
-          ${miniMetric('IC', num(card.ic))}
-          ${miniMetric('RankIC', num(card.rank_ic))}
-          ${miniMetric(text('stability'), num(card.stability_score))}
-          ${miniMetric(text('samples'), card.sample_count ?? '-')}
+          ${miniMetric(text('quality'), num(card.quality_score ?? card.information_coefficient ?? card.ic))}
+          ${miniMetric(text('expected'), pct(card.expected_return ?? card.expected_alpha ?? 0))}
+          ${miniMetric(text('stability'), num(card.stability_score ?? card.rank_ic ?? 0))}
+          ${miniMetric(text('samples'), card.sample_count ?? card.observation_count ?? '-')}
         </div>
-        <div class="factor-card__meta">${esc(card.gate_summary || text('factorReviewHint'))}</div>
+        <div class="factor-check-row">
+          <span>${text('factorReviewHint')}</span>
+          <strong class="${String(card.gate_status || '').toLowerCase() === 'pass' ? 'is-pass' : 'is-watch'}">${esc(humanizeStatus(card.gate_status || card.status || 'review'))}</strong>
+        </div>
       </article>
     `).join('')}
   </div>`;
 }
 
-export function renderSimulationResult(result) {
-  if (!result) return emptyState(text('noSimulation'), text('noSimulationHint'));
+export function renderSimulationSummary(payload) {
+  if (!payload) return emptyState(text('noSimulation'), text('noSimulationHint'));
+  const regime = payload.market_regime || payload.regime || '-';
   return `
-    <div class="simulation-kpi-grid">
-      ${metric(text('expected'), pct(result.expected_return || 0), 'positive')}
-      ${metric(text('lossProb'), pct(result.loss_probability || 0), result.loss_probability > 0.4 ? 'risk' : '')}
-      ${metric(text('stability'), num(result.stability_score || 0))}
-      ${metric(text('samples'), result.path_count || 0)}
+    <div class="workbench-metric-grid functional-empty__metrics">
+      ${metric(text('expected'), pct(payload.expected_return ?? payload.mean_return ?? 0))}
+      ${metric(text('lossProb'), pct(payload.loss_probability ?? payload.tail_loss_probability ?? 0))}
+      ${metric(text('stability'), num(payload.stability_score ?? payload.sharpe_like ?? 0))}
+      ${metric(text('samples'), payload.sample_count ?? payload.paths ?? '-')}
     </div>
-    <div class="simulation-grid">
-      <article class="card">
-        <div class="card-header"><span class="card-title">${text('pathSummary')}</span></div>
-        <div class="card-body">
-          ${(result.path_summary || []).map((row) => `
-            <div class="factor-check-row">
-              <span>${esc(row.label)}</span>
-              <strong>${esc(row.value)}</strong>
-            </div>
-          `).join('') || emptyState(text('pathSummary'))}
-        </div>
-      </article>
-      <article class="card">
-        <div class="card-header"><span class="card-title">${text('factorAttribution')}</span></div>
-        <div class="card-body">
-          ${(result.factor_attribution || []).map((row) => `
-            <div class="factor-check-row">
-              <span>${esc(row.factor)}</span>
-              <strong>${esc(row.contribution)}</strong>
-            </div>
-          `).join('') || emptyState(text('factorAttribution'))}
-        </div>
-      </article>
-      <article class="card">
-        <div class="card-header"><span class="card-title">${text('historicalAnalogs')}</span></div>
-        <div class="card-body">
-          ${(result.historical_analogs || []).map((row) => `
-            <div class="factor-check-row">
-              <span>${esc(row.label)}</span>
-              <strong>${esc(row.score)}</strong>
-            </div>
-          `).join('') || emptyState(text('historicalAnalogs'))}
-        </div>
-      </article>
+    <div class="workbench-kv-list compact-kv-list">
+      <div class="workbench-kv-row"><span>${text('pathSummary')}</span><strong>${esc(regime)}</strong></div>
+      <div class="workbench-kv-row"><span>${text('factorAttribution')}</span><strong>${esc(payload.factor_summary || payload.driver_summary || text('notSet'))}</strong></div>
+      <div class="workbench-kv-row"><span>${text('historicalAnalogs')}</span><strong>${esc(payload.analog_count ?? payload.closest_analogs ?? '-')}</strong></div>
     </div>
   `;
+}
+
+export function renderSimulationResult(payload) {
+  return renderSimulationSummary(payload);
 }

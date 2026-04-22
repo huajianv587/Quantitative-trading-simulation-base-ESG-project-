@@ -69,9 +69,10 @@ export var api = {
 
   platform: {
     overview: function() { return _get(Q + '/platform/overview'); },
-    dashboardChart: function(symbol, timeframe) {
+    dashboardChart: function(symbol, timeframe, provider) {
       var query = '?timeframe=' + encodeURIComponent(timeframe || '1D');
       if (symbol) query += '&symbol=' + encodeURIComponent(symbol);
+      if (provider) query += '&provider=' + encodeURIComponent(provider);
       return _get(Q + '/dashboard/chart' + query);
     },
     universe: function() { return _get(Q + '/universe/default'); },
@@ -258,6 +259,23 @@ export var api = {
       return _post('/api/v1/trading/jobs/run/' + encodeURIComponent(jobName), payload || {}, { scope: 'execution' });
     },
     opsSnapshot: function() { return _get('/api/v1/trading/ops/snapshot'); },
+    autopilotPolicy: function() { return _get('/api/v1/trading/autopilot/policy'); },
+    saveAutopilotPolicy: function(payload) { return _post('/api/v1/trading/autopilot/policy', payload || {}, { scope: 'execution' }); },
+    autopilotArm: function(payload) { return _post('/api/v1/trading/autopilot/arm', payload || { armed: true }, { scope: 'execution' }); },
+    autopilotDisarm: function(payload) { return _post('/api/v1/trading/autopilot/disarm', payload || { armed: false }, { scope: 'execution' }); },
+    strategies: function() { return _get('/api/v1/trading/strategies'); },
+    toggleStrategy: function(strategyId, payload) {
+      return _post('/api/v1/trading/strategies/' + encodeURIComponent(strategyId) + '/toggle', payload || {}, { scope: 'execution' });
+    },
+    allocateStrategy: function(strategyId, payload) {
+      return _post('/api/v1/trading/strategies/' + encodeURIComponent(strategyId) + '/allocation', payload || {}, { scope: 'execution' });
+    },
+    executionPathStatus: function() { return _get('/api/v1/trading/execution-path/status'); },
+    dashboardState: function(provider) {
+      var query = provider ? ('?provider=' + encodeURIComponent(provider)) : '';
+      return _get('/api/v1/trading/dashboard/state' + query);
+    },
+    fusionStatus: function() { return _get('/api/v1/trading/fusion/status'); },
   },
 
   reports: {

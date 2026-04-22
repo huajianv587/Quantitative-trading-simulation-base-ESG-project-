@@ -45,17 +45,19 @@ def test_quant_platform_overview_is_available():
 def test_quant_dashboard_chart_contract_is_available():
     client = TestClient(main_module.app)
 
-    response = client.get("/api/v1/quant/dashboard/chart?symbol=NVDA&timeframe=1D")
+    response = client.get("/api/v1/quant/dashboard/chart?symbol=NVDA&timeframe=1D&provider=alpaca")
 
     assert response.status_code == 200
     data = response.json()
     assert data["symbol"] == "NVDA"
     assert data["timeframe"] == "1D"
+    assert data["selected_provider"] == "alpaca"
     assert "candles" in data
     assert "indicators" in data
     assert "viewport_defaults" in data
     assert "click_targets" in data
     assert "signal" in data
+    assert "data_source_chain" in data
     if data["source"] == "synthetic" or data["signal"].get("prediction_mode") != "model":
         assert data["projection_scenarios"] == {}
         assert data["prediction_disabled_reason"] in {"synthetic_market_data", "prediction_mode_unavailable"}

@@ -2,6 +2,9 @@ import { t, onLangChange } from '../i18n.js?v=8';
 import { ROUTES } from '../router.js?v=8';
 
 const NAV_STORAGE_KEY = 'qt-nav-open-groups';
+const NAV_MOBILE_BREAKPOINT = 900;
+let _runtimeGroupState = {};
+let _lastRenderedPath = null;
 
 const ICONS = {
   grid: '<path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/>',
@@ -36,7 +39,7 @@ const NAV_GROUPS = [
     id: 'trading_exec',
     labelKey: 'nav.trading_exec',
     statusKey: 'trading',
-    paths: ['/trading-ops', '/portfolio', '/backtest', '/execution'],
+    paths: ['/trading-ops', '/autopilot-policy', '/strategy-registry', '/portfolio', '/backtest', '/execution'],
   },
   {
     id: 'governance',
@@ -72,11 +75,23 @@ function getStoredGroups() {
 }
 
 function setStoredGroups(value) {
+  if (!isDesktopNavViewport()) {
+    _runtimeGroupState = { ...value };
+    return;
+  }
   try {
     localStorage.setItem(NAV_STORAGE_KEY, JSON.stringify(value));
   } catch {
     // ignore storage failures
   }
+}
+
+function isDesktopNavViewport() {
+  return window.innerWidth > NAV_MOBILE_BREAKPOINT;
+}
+
+function currentGroupState() {
+  return isDesktopNavViewport() ? getStoredGroups() : _runtimeGroupState;
 }
 
 function routeMeta(path) {
@@ -102,12 +117,18 @@ function groupChildCount(group) {
   }).length;
 }
 
-function normalizeGroupState(currentPath) {
-  const stored = getStoredGroups();
+function normalizeGroupState(currentPath, routeChanged = false) {
+  const stored = currentGroupState();
   const state = {};
   NAV_GROUPS.forEach((group) => {
     const hasActive = group.paths.includes(currentPath);
-    state[group.id] = hasActive || Boolean(stored[group.id]);
+    const hasStoredPreference = Object.prototype.hasOwnProperty.call(stored, group.id);
+    state[group.id] = hasStoredPreference
+      ? Boolean(stored[group.id])
+      : false;
+    if (isDesktopNavViewport() && hasActive && (routeChanged || !hasStoredPreference)) {
+      state[group.id] = true;
+    }
   });
   return state;
 }
@@ -125,7 +146,7 @@ function renderGroup(group, currentPath, openState) {
       <button class="nav-group__trigger" type="button" data-group-trigger="${group.id}" aria-expanded="${isOpen ? 'true' : 'false'}" aria-controls="${bodyId}">
         <span class="nav-group__copy">
           <span class="nav-group__label">${t(group.labelKey)}</span>
-          <span class="nav-group__summary">${t(`${group.labelKey}_summary`)}</span>
+          <span class="nav-group__summary">${t(`${group.labelKey}_hint`)}</span>
         </span>
         <span class="nav-group__meta">
           <span class="nav-group__status">${groupStatus(group)}</span>
@@ -150,7 +171,14 @@ export function renderNav() {
   if (!container) return;
 
   const current = window.location.hash.slice(1) || '/dashboard';
-  const openState = normalizeGroupState(current);
+  const routeChanged = current !== _lastRenderedPath;
+  const openState = normalizeGroupState(current, routeChanged);
+  if (routeChanged) {
+    _lastRenderedPath = current;
+    if (isDesktopNavViewport()) {
+      setStoredGroups(openState);
+    }
+  }
 
   const dashboardMeta = ROUTES['/dashboard'];
   let html = `
@@ -165,9 +193,16 @@ export function renderNav() {
   container.innerHTML = html;
 
   container.querySelectorAll('[data-group-trigger]').forEach((button) => {
+    button.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        button.click();
+      }
+    });
     button.addEventListener('click', () => {
       const groupId = button.getAttribute('data-group-trigger');
-      const next = { ...getStoredGroups(), [groupId]: !normalizeGroupState(current)[groupId] };
+      const currentState = normalizeGroupState(current, false);
+      const next = { ...currentGroupState(), [groupId]: !currentState[groupId] };
       setStoredGroups(next);
       renderNav();
     });

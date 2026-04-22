@@ -70,8 +70,8 @@ def get_platform_overview():
 
 
 @router.get("/dashboard/chart")
-def get_dashboard_chart(symbol: str | None = None, timeframe: str = "1D"):
-    return _quant_service().build_dashboard_chart(symbol=symbol, timeframe=timeframe)
+def get_dashboard_chart(symbol: str | None = None, timeframe: str = "1D", provider: str = "auto"):
+    return _quant_service().build_dashboard_chart(symbol=symbol, timeframe=timeframe, provider=provider)
 
 
 @router.get("/universe/default")

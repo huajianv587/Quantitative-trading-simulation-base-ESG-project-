@@ -165,24 +165,64 @@ function generateCandles(symbol, timeframe) {
   return candles;
 }
 
-async function stubDashboard(page, requests) {
-  const overview = buildOverview();
-  await page.route('**/api/v1/quant/platform/overview', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(overview) });
-  });
-  await page.route('**/api/v1/quant/execution/positions**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ positions: [] }) });
-  });
-  await page.route('**/api/v1/quant/dashboard/chart?*', async (route) => {
-    const url = new URL(route.request().url());
-    const symbol = url.searchParams.get('symbol') || 'NVDA';
-    const timeframe = url.searchParams.get('timeframe') || '1D';
-    requests.push({ symbol, timeframe });
-    const source = symbol === 'MSFT' ? 'synthetic' : 'yfinance';
-    const signal = (overview.watchlist_signals || []).find((item) => item.symbol === symbol) || overview.watchlist_signals[0];
-    const projectionExplanations = source === 'synthetic' || signal.prediction_mode !== 'model'
-      ? {}
-      : Object.fromEntries(Object.entries(signal.projection_scenarios || {}).map(([key, scenario]) => [key, {
+function providerChainFor(provider) {
+  const chainMap = {
+    auto: ['alpaca', 'twelvedata', 'yfinance', 'cache', 'synthetic'],
+    alpaca: ['alpaca', 'twelvedata', 'yfinance', 'cache', 'synthetic'],
+    twelvedata: ['twelvedata', 'alpaca', 'yfinance', 'cache', 'synthetic'],
+    yfinance: ['yfinance', 'alpaca', 'twelvedata', 'cache', 'synthetic'],
+    cache: ['cache', 'synthetic'],
+    synthetic: ['synthetic'],
+  };
+  return chainMap[provider] || chainMap.auto;
+}
+
+function buildDashboardChartResponse(overview, symbol, timeframe, provider = 'auto') {
+  const selectedProvider = provider || 'auto';
+  const signal = (overview.watchlist_signals || []).find((item) => item.symbol === symbol) || overview.watchlist_signals[0];
+  const sourceChain = providerChainFor(selectedProvider);
+  let source = selectedProvider === 'auto' ? 'alpaca' : selectedProvider;
+  let degradedFrom = null;
+  let providerStatus = {
+    available: selectedProvider !== 'synthetic',
+    provider: selectedProvider === 'auto' ? 'alpaca' : selectedProvider,
+    selected_provider: selectedProvider,
+  };
+
+  if (selectedProvider === 'auto' && symbol === 'NEE') {
+    source = 'twelvedata';
+    degradedFrom = 'alpaca';
+  } else if ((selectedProvider === 'auto' || selectedProvider === 'alpaca') && symbol === 'MSFT') {
+    source = 'synthetic';
+    degradedFrom = 'alpaca';
+    providerStatus = {
+      available: true,
+      provider: 'alpaca',
+      selected_provider: selectedProvider,
+    };
+  }
+
+  if (selectedProvider === 'cache') {
+    source = 'cache';
+    providerStatus = {
+      available: true,
+      provider: 'cache',
+      selected_provider: selectedProvider,
+    };
+  }
+
+  if (selectedProvider === 'synthetic') {
+    source = 'synthetic';
+    providerStatus = {
+      available: false,
+      provider: 'synthetic',
+      selected_provider: selectedProvider,
+    };
+  }
+
+  const projectionEnabled = source !== 'synthetic' && signal.prediction_mode === 'model';
+  const projectionExplanations = projectionEnabled
+    ? Object.fromEntries(Object.entries(signal.projection_scenarios || {}).map(([key, scenario]) => [key, {
         title: scenario.label,
         direction: Number(scenario.expected_return || 0) >= 0 ? 'upside' : 'downside',
         expected_return: scenario.expected_return,
@@ -192,45 +232,120 @@ async function stubDashboard(page, requests) {
         source,
         data_lineage: signal.data_lineage || [],
         house_explanation: `House score proxy for ${symbol} stays constructive.`,
-      }]));
+      }]))
+    : {};
+
+  return {
+    symbol,
+    timeframe,
+    source,
+    selected_provider: selectedProvider,
+    data_source_chain: sourceChain,
+    provider_status: providerStatus,
+    degraded_from: degradedFrom,
+    fallback_preview: {
+      symbol,
+      source,
+      source_chain: sourceChain,
+      last_snapshot: null,
+      reason: degradedFrom ? [`provider_degraded_from_${degradedFrom}`] : (source === 'synthetic' ? ['cache_or_synthetic_fallback'] : []),
+      next_actions: ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
+    },
+    candles: generateCandles(symbol, timeframe).map((candle) => ({
+      date: candle.t,
+      open: candle.o,
+      high: candle.h,
+      low: candle.l,
+      close: candle.c,
+      volume: candle.v,
+    })),
+    indicators: {},
+    projection_scenarios: projectionEnabled ? (signal.projection_scenarios || {}) : {},
+    projection_explanations: projectionExplanations,
+    projected_volume: [],
+    viewport_defaults: {
+      '116%': { visibleCount: 64, projectionWidthRatio: 0.22, pricePaddingRatio: 0.06 },
+      '352%': { visibleCount: 32, projectionWidthRatio: 0.28, pricePaddingRatio: 0.08 },
+      '600%': { visibleCount: 20, projectionWidthRatio: 0.34, pricePaddingRatio: 0.11 },
+    },
+    click_targets: ['symbol_chip', 'timeframe_tab', 'zoom_control', 'projection_line', 'heatmap_tile'],
+    prediction_disabled_reason: projectionEnabled ? null : 'synthetic_market_data',
+    signal,
+  };
+}
+
+async function stubDashboard(page, requests, options = {}) {
+  const overview = buildOverview();
+  const delayMs = Number(options.delayMs || 0);
+  const maybeDelay = async () => {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  };
+  await page.route('**/api/v1/quant/platform/overview', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(overview) });
+  });
+  await page.route('**/api/v1/quant/execution/positions**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ positions: [] }) });
+  });
+  await page.route('**/api/v1/trading/dashboard/state**', async (route) => {
+    const url = new URL(route.request().url());
+    const provider = url.searchParams.get('provider') || 'auto';
+    const chart = buildDashboardChartResponse(overview, 'NVDA', '1D', provider);
+    await maybeDelay();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        symbol,
-        timeframe,
-        source,
-        candles: generateCandles(symbol, timeframe).map((candle) => ({
-          date: candle.t,
-          open: candle.o,
-          high: candle.h,
-          low: candle.l,
-          close: candle.c,
-          volume: candle.v,
-        })),
-        indicators: {},
-        projection_scenarios: source === 'synthetic' ? {} : (signal.projection_scenarios || {}),
-        projection_explanations: projectionExplanations,
-        projected_volume: [],
-        viewport_defaults: {
-          '116%': { visibleCount: 64, projectionWidthRatio: 0.22, pricePaddingRatio: 0.06 },
-          '352%': { visibleCount: 32, projectionWidthRatio: 0.28, pricePaddingRatio: 0.08 },
-          '600%': { visibleCount: 20, projectionWidthRatio: 0.34, pricePaddingRatio: 0.11 },
-        },
-        click_targets: ['symbol_chip', 'timeframe_tab', 'zoom_control', 'projection_line', 'heatmap_tile'],
-        prediction_disabled_reason: source === 'synthetic' ? 'synthetic_market_data' : null,
-        signal,
+        generated_at: '2026-04-21T12:00:00Z',
+        phase: chart.source === 'unknown' ? 'degraded' : 'ready',
+        ready: chart.source !== 'unknown',
+        symbol: chart.symbol,
+        source: chart.source,
+        selected_provider: provider,
+        source_chain: chart.data_source_chain,
+        provider_status: chart.provider_status,
+        degraded_from: chart.degraded_from,
+        fallback_preview: chart.fallback_preview,
       }),
+    });
+  });
+  await page.route('**/api/v1/quant/dashboard/chart?*', async (route) => {
+    const url = new URL(route.request().url());
+    const symbol = url.searchParams.get('symbol') || 'NVDA';
+    const timeframe = url.searchParams.get('timeframe') || '1D';
+    const provider = url.searchParams.get('provider') || 'auto';
+    requests.push({ symbol, timeframe, provider });
+    const payload = buildDashboardChartResponse(overview, symbol, timeframe, provider);
+    await maybeDelay();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(payload),
     });
   });
 }
 
-async function openDashboard(page) {
-  await page.addInitScript(() => {
-    localStorage.setItem('qt-lang', 'en');
-    document.documentElement.setAttribute('lang', 'en');
-  });
-  await page.goto('/app#/dashboard', { waitUntil: 'domcontentloaded' });
+async function openDashboard(page, options = {}) {
+  const storage = options.storage || {};
+  const lang = options.lang || 'en';
+  await page.addInitScript(({ initialLang, initialStorage }) => {
+    localStorage.setItem('qt-lang', initialLang);
+    document.documentElement.setAttribute('lang', initialLang);
+    Object.entries(initialStorage).forEach(([key, value]) => {
+      localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+    });
+  }, { initialLang: lang, initialStorage: storage });
+  await page.goto('/app/#/dashboard', { waitUntil: 'domcontentloaded' });
+  if (Object.keys(storage).length) {
+    await page.evaluate(({ initialLang, initialStorage }) => {
+      localStorage.setItem('qt-lang', initialLang);
+      Object.entries(initialStorage).forEach(([key, value]) => {
+        localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+      });
+    }, { initialLang: lang, initialStorage: storage });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+  }
   await expect(page.locator('.page-header__title')).toBeVisible();
   await page.waitForFunction(() => Boolean(window.__dashboardAuditState?.visibleCount));
 }
@@ -427,7 +542,7 @@ test('dashboard kline audit covers defensive and unavailable states without reop
   const msftState = await getDashboardState(page);
   expect(msftState.audit.predictionEnabled).toBeFalsy();
   expect(msftState.legendText.trim()).toBe('');
-  expect(msftState.aiText).toContain('Synthetic market feed disables projection');
+  expect(msftState.aiText).toMatch(/disables projection|已禁用预测/);
   const unavailableShot = path.join(OUTPUT_DIR, 'dashboard-unavailable.png');
   await page.screenshot({ path: unavailableShot, fullPage: true });
 
@@ -447,4 +562,68 @@ test('dashboard kline audit covers defensive and unavailable states without reop
     };
   });
   expect(fs.existsSync(path.join(OUTPUT_DIR, 'report.json'))).toBeTruthy();
+});
+
+test('dashboard provider selector keeps chart visible while refreshing and records provider-aware requests', async ({ page }) => {
+  test.setTimeout(10 * 60 * 1000);
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+
+  const overview = buildOverview();
+  const cachedPayload = buildDashboardChartResponse(overview, 'NVDA', '1D', 'alpaca');
+  const requests = [];
+  await stubDashboard(page, requests, { delayMs: 1200 });
+  await openDashboard(page, {
+    lang: 'zh',
+    storage: {
+      'qt.dashboard.provider.v1': 'alpaca',
+      'qt.dashboard.state.v1': {
+        saved_at: Date.now(),
+        payload: {
+          generated_at: '2026-04-21T11:59:00Z',
+          phase: 'ready',
+          ready: true,
+          symbol: 'NVDA',
+          source: 'alpaca',
+          selected_provider: 'alpaca',
+          source_chain: ['alpaca', 'twelvedata', 'yfinance', 'cache', 'synthetic'],
+          provider_status: { available: true, provider: 'alpaca', selected_provider: 'alpaca' },
+          degraded_from: null,
+          fallback_preview: cachedPayload.fallback_preview,
+        },
+      },
+      'qt.dashboard.chart.v1:NVDA:1D:alpaca': {
+        saved_at: Date.now(),
+        payload: cachedPayload,
+      },
+    },
+  });
+
+  await expect(page.locator('#dashboard-provider-select')).toHaveValue('alpaca');
+  await expect(page.locator('#kline-canvas')).toBeVisible();
+  await expect.poll(() => requests.some((item) => item.provider === 'alpaca')).toBeTruthy();
+
+  await page.locator('#dashboard-provider-select').selectOption('twelvedata');
+  await expect(page.locator('#kline-canvas')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__dashboardAuditState?.selectedProvider)).toBe('twelvedata');
+  await expect.poll(() => requests.some((item) => item.provider === 'twelvedata')).toBeTruthy();
+
+  await page.locator('#dashboard-provider-select').selectOption('synthetic');
+  await expect(page.locator('#kline-canvas')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__dashboardAuditState?.selectedProvider)).toBe('synthetic');
+  await expect.poll(() => requests.some((item) => item.provider === 'synthetic')).toBeTruthy();
+  await expect.poll(() => page.evaluate(() => window.__dashboardAuditState?.marketSource)).toBe('synthetic');
+  const syntheticState = await getDashboardState(page);
+  expect(syntheticState.aiText).toMatch(/disables projection|已禁用预测/);
+
+  const providerShot = path.join(OUTPUT_DIR, 'dashboard-provider-selector.png');
+  await page.screenshot({ path: providerShot, fullPage: true });
+  writeReport((report) => {
+    report.generatedAt = new Date().toISOString();
+    report.screenshots = mergeScreenshotPaths(report.screenshots, [providerShot]);
+    report.scenarios.providerSelector = {
+      requests,
+      finalSource: syntheticState.audit.source,
+      selectedProvider: syntheticState.audit.selectedProvider,
+    };
+  });
 });

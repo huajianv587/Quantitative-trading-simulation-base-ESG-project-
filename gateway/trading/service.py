@@ -12,12 +12,22 @@ from gateway.quant.intelligence import QuantIntelligenceService
 from gateway.quant.intelligence_models import FactorCard, InformationItem
 from gateway.quant.service import QuantSystemService
 from gateway.trading.models import (
+    AutopilotPolicy,
     DailyReviewReport,
     DebateReport,
     DebateTurn,
+    ExecutionIntent,
+    ExecutionPathStatus,
+    ExecutionResult,
+    FactorPipelineManifest,
+    FactorPipelineStage,
+    FusionReferenceManifest,
+    OrderApprovalLedger,
     PriceAlertRecord,
     RiskApproval,
     SentimentSnapshot,
+    StrategyAllocation,
+    StrategyTemplate,
     TradingAction,
     TradingDecisionBundle,
     TradingJobRun,
@@ -37,6 +47,20 @@ def utc_now() -> str:
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
+
+
+def _normalize_execution_mode(value: Any) -> str:
+    normalized = str(value or "paper").strip().lower()
+    return "live" if normalized == "live" else "paper"
+
+
+def _normalize_execution_permission(value: Any) -> str:
+    normalized = str(value or "auto_submit").strip().lower()
+    if normalized == "paper_auto_submit":
+        return "auto_submit"
+    if normalized in {"research", "manual_review", "auto_submit"}:
+        return normalized
+    return "manual_review"
 
 
 class TradingAgentService:
@@ -74,6 +98,28 @@ class TradingAgentService:
     def monitor_status(self) -> dict[str, Any]:
         return self.monitor.status().model_dump(mode="json")
 
+    @staticmethod
+    def _policy_auto_submit_enabled(policy: dict[str, Any]) -> bool:
+        return bool(policy.get("auto_submit_enabled") or policy.get("paper_auto_submit_enabled"))
+
+    def _normalize_autopilot_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(payload or {})
+        execution_mode = _normalize_execution_mode(normalized.get("execution_mode") or normalized.get("mode"))
+        execution_permission = _normalize_execution_permission(normalized.get("execution_permission"))
+        auto_submit_enabled = bool(
+            normalized.get("auto_submit_enabled")
+            if "auto_submit_enabled" in normalized
+            else normalized.get("paper_auto_submit_enabled")
+        )
+        normalized["execution_mode"] = execution_mode
+        normalized["execution_permission"] = execution_permission
+        normalized["auto_submit_enabled"] = auto_submit_enabled
+        normalized["paper_auto_submit_enabled"] = auto_submit_enabled
+        metadata = dict(normalized.get("metadata") or {})
+        metadata.setdefault("mode", execution_mode)
+        normalized["metadata"] = metadata
+        return normalized
+
     def debate_runs(self, *, symbol: str | None = None, limit: int = 20) -> dict[str, Any]:
         rows = self.store.list_debate_runs(limit=limit, symbol=symbol)
         return {
@@ -98,7 +144,7 @@ class TradingAgentService:
                 "judge_agent",
                 "risk_manager_agent",
                 "broker account and position checks",
-                "paper auto-submit gate",
+                "execution auto-submit gate",
             ],
         }
 
@@ -112,13 +158,228 @@ class TradingAgentService:
             "latest_review": self.latest_review(),
             "debates": self.debate_runs(limit=10),
             "risk": self.risk_board(limit=10),
+            "autopilot_policy": self.get_autopilot_policy(),
+            "strategies": self.list_strategies(),
+            "execution_path": self.execution_path_status(),
+            "factor_pipeline": self.factor_pipeline_manifest(),
+            "fusion_manifest": self.fusion_reference_manifest(),
             "notifier": {
                 "telegram_configured": bool(
                     getattr(settings, "TELEGRAM_BOT_TOKEN", "") and getattr(settings, "TELEGRAM_CHAT_ID", "")
                 ),
-                "mode": "paper_shadow_notify",
+                "mode": "shadow_notify",
             },
         }
+
+    def get_autopilot_policy(self) -> dict[str, Any]:
+        return self._normalize_autopilot_payload(self.store.get_autopilot_policy())
+
+    def save_autopilot_policy(self, payload: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_autopilot_policy()
+        merged = self._normalize_autopilot_payload({**current, **payload})
+        policy = AutopilotPolicy.model_validate(
+            {
+                **merged,
+                "policy_id": current.get("policy_id") or "autopilot-default",
+                "generated_at": utc_now(),
+                "warnings": self._autopilot_warnings(merged),
+                "metadata": {
+                    **dict(current.get("metadata") or {}),
+                    "mode": merged.get("execution_mode", "paper"),
+                    "saved_via": "api",
+                },
+            }
+        )
+        return self.store.save_autopilot_policy(policy)
+
+    def arm_autopilot(self, *, armed: bool) -> dict[str, Any]:
+        current = self.get_autopilot_policy()
+        current["armed"] = bool(armed)
+        current["generated_at"] = utc_now()
+        current["warnings"] = self._autopilot_warnings(current)
+        saved = self.store.save_autopilot_policy(AutopilotPolicy.model_validate(self._normalize_autopilot_payload(current)))
+        path = self._build_execution_path_status(
+            policy=saved,
+            current_stage="armed" if armed else "disarmed",
+            judge_passed=False,
+            risk_passed=False,
+        )
+        self.store.save_execution_path_status(path)
+        return saved
+
+    def list_strategies(self) -> dict[str, Any]:
+        rows = self.store.list_strategies()
+        allocations = {row["strategy_id"]: row for row in self.store.list_strategy_allocations()}
+        enriched = []
+        for row in rows:
+            item = dict(row)
+            allocation = allocations.get(item["strategy_id"])
+            item["allocation"] = allocation
+            enriched.append(item)
+        return {
+            "generated_at": utc_now(),
+            "count": len(enriched),
+            "strategies": enriched,
+        }
+
+    def toggle_strategy(self, *, strategy_id: str, status: str) -> dict[str, Any]:
+        rows = self.store.list_strategies()
+        current = next((row for row in rows if row.get("strategy_id") == strategy_id), None)
+        if not current:
+            raise ValueError(f"Unknown strategy: {strategy_id}")
+        updated = StrategyTemplate.model_validate(
+            {
+                **current,
+                "status": status,
+                "updated_at": utc_now(),
+            }
+        )
+        saved = self.store.save_strategy(updated)
+        return {"generated_at": utc_now(), "strategy": saved}
+
+    def allocate_strategy(self, *, strategy_id: str, capital_allocation: float, max_symbols: int, status: str) -> dict[str, Any]:
+        allocation = StrategyAllocation(
+            allocation_id=f"alloc-{strategy_id}",
+            strategy_id=strategy_id,
+            capital_allocation=capital_allocation,
+            max_symbols=max_symbols,
+            status=status if status in {"active", "paused"} else "active",
+            updated_at=utc_now(),
+            metadata={"source": "api"},
+        )
+        saved = self.store.save_strategy_allocation(allocation)
+        return {"generated_at": utc_now(), "allocation": saved}
+
+    def execution_path_status(self) -> dict[str, Any]:
+        latest = self.store.latest_execution_path_status()
+        if latest:
+            return latest
+        seeded = self._build_execution_path_status(
+            policy=self.store.get_autopilot_policy(),
+            current_stage="idle",
+            judge_passed=False,
+            risk_passed=False,
+        )
+        return self.store.save_execution_path_status(seeded)
+
+    def dashboard_state(self, *, provider: str = "auto") -> dict[str, Any]:
+        signal = None
+        try:
+            signal = self.quant_system.build_dashboard_chart(provider=provider)
+        except Exception:
+            signal = {}
+        chart = signal if isinstance(signal, dict) else {}
+        source = chart.get("source")
+        provider_status = chart.get("provider_status") or {}
+        degraded_from = chart.get("degraded_from")
+        provider_chain = chart.get("data_source_chain") or chart.get("provider_chain") or []
+        candles = chart.get("candles") or []
+        symbol = chart.get("symbol") or (self._active_watchlist_symbols()[0] if self._active_watchlist_symbols() else None)
+        phase = "ready" if candles and source not in {"unknown", "loading", None, ""} else "degraded"
+        reason = chart.get("warning") or chart.get("detail") or chart.get("market_data_warnings") or []
+        if isinstance(reason, str):
+            reason = [reason]
+        if not reason:
+            if provider_status.get("available") and not candles:
+                reason = ["provider_connected_but_no_payload"]
+            elif degraded_from:
+                reason = [f"provider_degraded_from_{degraded_from}"]
+            else:
+                reason = ["chart_data_unavailable"]
+        fallback_preview = {
+            "symbol": symbol,
+            "source": source or "unknown",
+            "source_chain": provider_chain or ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
+            "last_snapshot": candles[-1] if candles else None,
+            "reason": reason or ["chart_data_unavailable"],
+            "next_actions": ["refresh_dashboard", "switch_symbol", "open_market_radar", "open_backtest"],
+        }
+        return {
+            "generated_at": utc_now(),
+            "phase": phase,
+            "ready": phase == "ready",
+            "symbol": symbol,
+            "source": source or "unknown",
+            "selected_provider": provider,
+            "source_chain": provider_chain or ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
+            "provider_status": provider_status,
+            "degraded_from": degraded_from,
+            "fallback_preview": fallback_preview,
+        }
+
+    def fusion_reference_manifest(self) -> dict[str, Any]:
+        manifest = dict(self.store.get_fusion_manifest())
+        manifest["execution_intent_contract"] = self._sample_execution_intent().model_dump(mode="json")
+        manifest["execution_result_contract"] = self._sample_execution_result().model_dump(mode="json")
+        manifest["factor_pipeline_manifest"] = self.factor_pipeline_manifest()
+        return manifest
+
+    def factor_pipeline_manifest(
+        self,
+        *,
+        symbol: str | None = None,
+        strategy_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        strategy_snapshot = self.list_strategies()
+        strategy_rows = strategy_snapshot.get("strategies", [])
+        strategy_lookup = {row.get("strategy_id"): row for row in strategy_rows}
+        selected_rows = []
+        if strategy_ids:
+            selected_rows = [strategy_lookup[strategy_id] for strategy_id in strategy_ids if strategy_id in strategy_lookup]
+        if not selected_rows:
+            selected_rows = [
+                row for row in strategy_rows
+                if str(row.get("status") or "").lower() == "active"
+                and (not row.get("allocation") or str((row.get("allocation") or {}).get("status") or "active").lower() == "active")
+            ]
+        factor_dependencies = list(dict.fromkeys(
+            dependency
+            for row in selected_rows
+            for dependency in row.get("factor_dependencies") or []
+            if str(dependency or "").strip()
+        ))
+        warnings: list[str] = []
+        if not selected_rows:
+            warnings.append("no_strategy_slot")
+        if not factor_dependencies:
+            warnings.append("no_factor_dependencies")
+        stages = [
+            FactorPipelineStage(
+                stage="feature_build",
+                status="ready",
+                detail="Build as-of-safe feature inputs from free-tier evidence and market data connectors.",
+                factors=factor_dependencies[:6],
+            ),
+            FactorPipelineStage(
+                stage="factor_gate",
+                status="ready" if factor_dependencies else "pending",
+                detail="Promote only gated factors with clear lineage, IC evidence, and leakage checks.",
+                factors=factor_dependencies[:6],
+            ),
+            FactorPipelineStage(
+                stage="strategy_slot",
+                status="ready" if selected_rows else "guarded",
+                detail="Route promoted factors into active strategy slots before execution.",
+                factors=[row.get("strategy_id") for row in selected_rows if row.get("strategy_id")],
+            ),
+        ]
+        next_action = (
+            "Choose an active strategy slot or expand the factor allowlist before execution."
+            if warnings
+            else "Compare factor-gate output with strategy allocations, then move to Debate and Risk."
+        )
+        manifest = FactorPipelineManifest(
+            manifest_id="factor-pipeline-current",
+            generated_at=utc_now(),
+            symbol=(symbol or (self._active_watchlist_symbols()[0] if self._active_watchlist_symbols() else None)),
+            strategy_slots=[row.get("strategy_id") for row in selected_rows if row.get("strategy_id")],
+            factor_dependencies=factor_dependencies,
+            stages=stages,
+            warnings=warnings,
+            next_action=next_action,
+            lineage=["qlib_factor_pipeline", "factor_gate", "strategy_slot", "execution_control_plane"],
+        )
+        return manifest.model_dump(mode="json")
 
     def list_watchlist(self) -> dict[str, Any]:
         rows = self.store.list_watchlist(enabled_only=True)
@@ -126,7 +387,7 @@ class TradingAgentService:
             "generated_at": utc_now(),
             "watchlist": rows,
             "count": len(rows),
-            "mode": "paper_auto_submit",
+            "mode": "auto_submit",
         }
 
     def add_watchlist_symbol(
@@ -330,8 +591,9 @@ class TradingAgentService:
         return briefing
 
     def run_midday_summary_agent(self) -> dict[str, Any]:
-        account_payload = self.quant_system.get_execution_account(broker="alpaca", mode="paper")
-        positions_payload = self.quant_system.list_execution_positions(broker="alpaca", mode="paper")
+        execution_mode = _normalize_execution_mode(self.get_autopilot_policy().get("execution_mode"))
+        account_payload = self.quant_system.get_execution_account(broker="alpaca", mode=execution_mode)
+        positions_payload = self.quant_system.list_execution_positions(broker="alpaca", mode=execution_mode)
         positions = positions_payload.get("positions", [])
         account = account_payload.get("account", {})
         equity = float(account.get("equity") or 0.0)
@@ -348,7 +610,7 @@ class TradingAgentService:
             "pnl": round(pnl, 2),
             "drawdown": round(drawdown, 6),
             "lineage": [
-                "alpaca paper account",
+                f"alpaca {execution_mode} account",
                 "position pnl and drawdown rollup",
                 "midday risk checkpoint",
             ],
@@ -357,8 +619,9 @@ class TradingAgentService:
         return summary
 
     def run_review_agent(self) -> dict[str, Any]:
-        account_payload = self.quant_system.get_execution_account(broker="alpaca", mode="paper")
-        orders_payload = self.quant_system.list_execution_orders(broker="alpaca", status="all", limit=50, mode="paper")
+        execution_mode = _normalize_execution_mode(self.get_autopilot_policy().get("execution_mode"))
+        account_payload = self.quant_system.get_execution_account(broker="alpaca", mode=execution_mode)
+        orders_payload = self.quant_system.list_execution_orders(broker="alpaca", status="all", limit=50, mode=execution_mode)
         alerts = self.store.alerts_today(limit=100)
         debates = self.store.list_debate_runs(limit=100)
         risk_rows = self.store.list_risk_approvals(limit=100)
@@ -389,7 +652,7 @@ class TradingAgentService:
             next_day_risk_flags=self._next_day_risk_flags(account_payload, risk_rows),
             metadata={"account": account, "orders": trades[:10]},
             lineage=[
-                "alpaca paper fills and positions",
+                f"alpaca {execution_mode} fills and positions",
                 "debate + risk approval ledgers",
                 "esg signal hit notes",
             ],
@@ -437,6 +700,31 @@ class TradingAgentService:
         auto_submit: bool = True,
         trigger_event: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        policy = self.get_autopilot_policy()
+        strategy_snapshot = self.list_strategies()
+        strategy_rows = strategy_snapshot.get("strategies", [])
+        enabled_strategies = [
+            row["strategy_id"]
+            for row in strategy_rows
+            if str(row.get("status") or "").lower() == "active"
+            and (not row.get("allocation") or str((row.get("allocation") or {}).get("status") or "active").lower() == "active")
+        ]
+        policy_gate_warnings: list[str] = []
+        if policy.get("allowed_universe") and str(symbol or "").upper() not in {
+            str(item or "").upper() for item in policy.get("allowed_universe") or []
+        }:
+            policy_gate_warnings.append("symbol_outside_allowed_universe")
+        if policy.get("allowed_strategies"):
+            allowed = {
+                str(item or "").strip()
+                for item in policy.get("allowed_strategies") or []
+                if str(item or "").strip()
+            }
+            enabled_strategies = [strategy_id for strategy_id in enabled_strategies if strategy_id in allowed]
+        if not enabled_strategies:
+            policy_gate_warnings.append("no_active_strategy_slot")
+        auto_submit_allowed = bool(auto_submit) and self._autopilot_ready(policy) and not policy_gate_warnings
+        factor_pipeline = self.factor_pipeline_manifest(symbol=symbol, strategy_ids=enabled_strategies)
         prepared = self._prepare_inputs(
             symbol=symbol,
             universe=universe,
@@ -459,13 +747,49 @@ class TradingAgentService:
         debate_payload = self.store.save_debate_run(debate)
         risk = self._build_risk_approval(symbol=symbol, debate=debate, signal_ttl_minutes=180)
         risk_payload = self.store.save_risk_approval(risk)
-        execution = self._execute_approved_trade(
+        execution_intent = self._build_execution_intent(
             symbol=symbol,
             debate=debate,
             approval=risk,
-            auto_submit=auto_submit,
+            policy=policy,
+            strategy_slots=enabled_strategies,
+            factor_pipeline=factor_pipeline,
+            policy_warnings=policy_gate_warnings,
+        )
+        execution_result = self._execute_approved_trade(
+            symbol=symbol,
+            debate=debate,
+            approval=risk,
+            policy=policy,
+            execution_intent=execution_intent,
+            auto_submit=auto_submit_allowed,
             trigger_event=trigger_event,
         )
+        if policy_gate_warnings:
+            execution_result.warnings.extend(policy_gate_warnings)
+            execution_result.policy_gate_warnings = list(dict.fromkeys([
+                *execution_result.policy_gate_warnings,
+                *policy_gate_warnings,
+            ]))
+            if execution_result.status == "review_only":
+                execution_result.status = "guarded"
+            execution_result.next_action = "clear_policy_warnings_before_submit"
+        execution = execution_result.model_dump(mode="json")
+        ledger = self._build_order_approval_ledger(
+            symbol=symbol,
+            debate=debate,
+            approval=risk,
+            execution_intent=execution_intent,
+            execution_result=execution_result,
+        )
+        ledger_payload = self.store.save_order_approval_ledger(ledger)
+        execution_path = self._build_execution_path_status(
+            policy=self.store.get_autopilot_policy(),
+            current_stage=execution.get("status", "blocked"),
+            judge_passed=debate.judge_verdict in {"long", "short"},
+            risk_passed=risk.verdict in {"approve", "reduce"},
+        )
+        execution_path_payload = self.store.save_execution_path_status(execution_path)
         bundle = TradingDecisionBundle(
             bundle_id=f"bundle-{uuid.uuid4().hex[:12]}",
             symbol=symbol,
@@ -481,8 +805,16 @@ class TradingAgentService:
         payload = bundle.model_dump(mode="json")
         payload["evidence"] = prepared["evidence"]
         payload["factor_run"] = prepared["factors"]
+        payload["factor_pipeline_manifest"] = factor_pipeline
         payload["debate"] = debate_payload
         payload["risk"] = risk_payload
+        payload["execution_intent"] = execution_intent.model_dump(mode="json")
+        payload["execution_result"] = execution
+        payload["ledger"] = ledger_payload
+        payload["execution_path"] = execution_path_payload
+        payload["autopilot_policy"] = policy
+        payload["strategy_slots"] = enabled_strategies
+        payload["policy_gate_warnings"] = policy_gate_warnings
         payload["storage"] = self.store.storage.persist_record("trading_bundles", bundle.bundle_id, payload)
         return payload
 
@@ -651,9 +983,10 @@ class TradingAgentService:
         )
 
     def _build_risk_approval(self, *, symbol: str, debate: DebateReport, signal_ttl_minutes: int) -> RiskApproval:
-        account_payload = self.quant_system.get_execution_account(broker="alpaca", mode="paper")
-        positions_payload = self.quant_system.list_execution_positions(broker="alpaca", mode="paper")
-        orders_payload = self.quant_system.list_execution_orders(broker="alpaca", status="open", limit=50, mode="paper")
+        execution_mode = _normalize_execution_mode(self.get_autopilot_policy().get("execution_mode"))
+        account_payload = self.quant_system.get_execution_account(broker="alpaca", mode=execution_mode)
+        positions_payload = self.quant_system.list_execution_positions(broker="alpaca", mode=execution_mode)
+        orders_payload = self.quant_system.list_execution_orders(broker="alpaca", status="open", limit=50, mode=execution_mode)
         account = account_payload.get("account", {})
         positions = positions_payload.get("positions", [])
         open_orders = orders_payload.get("orders", [])
@@ -750,7 +1083,7 @@ class TradingAgentService:
                 "judge_agent",
                 "risk_manager_agent",
                 "broker account and position checks",
-                "paper auto-submit gate",
+                "execution auto-submit gate",
             ],
         )
 
@@ -760,26 +1093,38 @@ class TradingAgentService:
         symbol: str,
         debate: DebateReport,
         approval: RiskApproval,
+        policy: dict[str, Any],
+        execution_intent: ExecutionIntent,
         auto_submit: bool,
         trigger_event: dict[str, Any] | None,
-    ) -> dict[str, Any]:
+    ) -> ExecutionResult:
         execution_id = f"trade-{symbol.upper()}-{uuid.uuid4().hex[:10]}"
-        payload = {
-            "execution_id": execution_id,
-            "symbol": symbol.upper(),
-            "requested_action": debate.recommended_action,
-            "approved_action": approval.approved_action,
-            "verdict": approval.verdict,
-            "auto_submit": bool(auto_submit),
-            "submitted": False,
-            "warnings": list(approval.risk_flags),
-            "trigger_event": trigger_event or {},
-        }
+        execution_mode = _normalize_execution_mode(policy.get("execution_mode"))
+        payload = ExecutionResult(
+            execution_id=execution_id,
+            generated_at=utc_now(),
+            symbol=symbol.upper(),
+            status="review_only",
+            venue=f"alpaca_{execution_mode}",
+            execution_mode=execution_mode,
+            submitted=False,
+            auto_submit=bool(auto_submit),
+            requested_action=debate.recommended_action,
+            approved_action=approval.approved_action,
+            verdict=approval.verdict,
+            order_payload={},
+            receipt=None,
+            warnings=list(approval.risk_flags),
+            policy_gate_warnings=[],
+            next_action="manual_review_only",
+            trigger_event=trigger_event or {},
+            metadata={"intent_id": execution_intent.intent_id},
+        )
         if not auto_submit:
-            payload["status"] = "review_only"
             return payload
         if approval.verdict not in {"approve", "reduce"} or approval.approved_action not in {"long", "short"}:
-            payload["status"] = "blocked"
+            payload.status = "blocked"
+            payload.next_action = "risk_gate_blocked_submit"
             return payload
         side = "buy" if approval.approved_action == "long" else "sell"
         order_payload = {
@@ -790,14 +1135,19 @@ class TradingAgentService:
             "notional": max(25.0, round(float(approval.recommended_notional), 2)),
             "client_order_id": f"{execution_id}-{side}",
         }
+        payload.order_payload = order_payload
         try:
+            if hasattr(self.quant_system.alpaca, "set_runtime_mode"):
+                self.quant_system.alpaca.set_runtime_mode(execution_mode)
             receipt = self.quant_system.alpaca.submit_order(order_payload)
-            payload["submitted"] = True
-            payload["status"] = "submitted"
-            payload["receipt"] = receipt
+            payload.submitted = True
+            payload.status = "submitted"
+            payload.receipt = receipt
+            payload.next_action = "monitor_fill_and_review"
         except Exception as exc:
-            payload["status"] = "submit_failed"
-            payload["warnings"].append(str(exc))
+            payload.status = "submit_failed"
+            payload.warnings.append(str(exc))
+            payload.next_action = "inspect_broker_receipt_and_retry_review_only"
         return payload
 
     def _active_watchlist_symbols(self) -> list[str]:
@@ -889,7 +1239,7 @@ class TradingAgentService:
     ) -> str:
         return (
             f"Daily review: pnl={pnl:.2f}, trades={len(trades)}, approvals={approved}, blocked={blocked}, "
-            f"alerts={len(alerts)}. ESG-linked and debate-driven decisions remain paper-only."
+            f"alerts={len(alerts)}. ESG-linked and debate-driven decisions remain guardrailed by judge and risk."
         )
 
     @staticmethod
@@ -899,10 +1249,171 @@ class TradingAgentService:
         equity = float(account.get("equity") or 0.0)
         last_equity = float(account.get("last_equity") or 0.0)
         if last_equity and equity < last_equity * 0.97:
-            flags.append("Paper equity is down more than 3% day-over-day.")
+            flags.append("Execution equity is down more than 3% day-over-day.")
         if any(str(row.get("verdict", "")).lower() == "halt" for row in risk_rows):
             flags.append("A halt verdict was issued during the session.")
         return flags or ["No additional next-day risk flags."]
+
+    def _autopilot_warnings(self, payload: dict[str, Any]) -> list[str]:
+        warnings: list[str] = []
+        if not self._policy_auto_submit_enabled(payload):
+            warnings.append("auto_submit_disabled")
+        if not payload.get("armed"):
+            warnings.append("autopilot_disarmed")
+        if payload.get("kill_switch"):
+            warnings.append("kill_switch_enabled")
+        if float(payload.get("daily_budget_cap") or 0.0) <= 0:
+            warnings.append("daily_budget_not_set")
+        if not payload.get("allowed_strategies"):
+            warnings.append("no_strategy_allowlist")
+        return warnings
+
+    def _autopilot_ready(self, policy: dict[str, Any]) -> bool:
+        return (
+            _normalize_execution_permission(policy.get("execution_permission")) == "auto_submit"
+            and self._policy_auto_submit_enabled(policy)
+            and bool(policy.get("armed"))
+            and not bool(policy.get("kill_switch"))
+        )
+
+    def _build_execution_path_status(
+        self,
+        *,
+        policy: dict[str, Any],
+        current_stage: str,
+        judge_passed: bool,
+        risk_passed: bool,
+    ) -> ExecutionPathStatus:
+        stages = [
+            {"stage": "scan", "status": "ready"},
+            {"stage": "factors", "status": "ready"},
+            {"stage": "debate", "status": "ready"},
+            {"stage": "judge", "status": "passed" if judge_passed else "pending"},
+            {"stage": "risk", "status": "passed" if risk_passed else "pending"},
+            {"stage": "submit", "status": "ready" if risk_passed and self._autopilot_ready(policy) else "blocked"},
+            {"stage": "monitor", "status": "ready" if self._autopilot_ready(policy) else "standby"},
+            {"stage": "review", "status": "ready"},
+        ]
+        budget = float(policy.get("daily_budget_cap") or 0.0)
+        return ExecutionPathStatus(
+            generated_at=utc_now(),
+            mode=_normalize_execution_mode(policy.get("execution_mode")),
+            armed=bool(policy.get("armed")),
+            daily_budget_cap=budget,
+            budget_remaining=budget,
+            judge_passed=judge_passed,
+            risk_passed=risk_passed,
+            kill_switch=bool(policy.get("kill_switch")),
+            current_stage=current_stage,
+            stages=stages,
+            lineage=["scan", "factors", "debate", "judge", "risk", "submit", "monitor", "review"],
+            warnings=self._autopilot_warnings(policy),
+        )
+
+    def _build_execution_intent(
+        self,
+        *,
+        symbol: str,
+        debate: DebateReport,
+        approval: RiskApproval,
+        policy: dict[str, Any],
+        strategy_slots: list[str],
+        factor_pipeline: dict[str, Any],
+        policy_warnings: list[str],
+    ) -> ExecutionIntent:
+        return ExecutionIntent(
+            intent_id=f"intent-{symbol.upper()}-{uuid.uuid4().hex[:10]}",
+            created_at=utc_now(),
+            symbol=symbol.upper(),
+            requested_action=debate.recommended_action,
+            approved_action=approval.approved_action,
+            execution_mode=_normalize_execution_mode(policy.get("execution_mode")),
+            strategy_slots=list(strategy_slots),
+            factor_dependencies=list(factor_pipeline.get("factor_dependencies") or []),
+            recommended_weight=float(approval.recommended_weight or 0.0),
+            recommended_notional=float(approval.recommended_notional or 0.0),
+            signal_ttl_minutes=int(approval.signal_ttl_minutes or 0),
+            guards=[
+                "judge_gate",
+                "risk_gate",
+                *list(policy_warnings or []),
+            ],
+            metadata={
+                "debate_id": debate.debate_id,
+                "approval_id": approval.approval_id,
+                "factor_pipeline_manifest": factor_pipeline.get("manifest_id"),
+            },
+        )
+
+    def _sample_execution_intent(self) -> ExecutionIntent:
+        factor_pipeline = self.factor_pipeline_manifest()
+        strategy_slots = list(factor_pipeline.get("strategy_slots") or [])
+        return ExecutionIntent(
+            intent_id="intent-execution-sample",
+            created_at=utc_now(),
+            symbol=(self._active_watchlist_symbols()[0] if self._active_watchlist_symbols() else "AAPL"),
+            requested_action="long",
+            approved_action="long",
+            execution_mode=_normalize_execution_mode(self.get_autopilot_policy().get("execution_mode")),
+            strategy_slots=strategy_slots,
+            factor_dependencies=list(factor_pipeline.get("factor_dependencies") or []),
+            recommended_weight=0.05,
+            recommended_notional=5000.0,
+            signal_ttl_minutes=180,
+            guards=["judge_gate", "risk_gate", "auto_submit"],
+            metadata={"sample": True},
+        )
+
+    def _sample_execution_result(self) -> ExecutionResult:
+        return ExecutionResult(
+            execution_id="execution-runtime-sample",
+            generated_at=utc_now(),
+            symbol=(self._active_watchlist_symbols()[0] if self._active_watchlist_symbols() else "AAPL"),
+            status="review_only",
+            venue="alpaca",
+            execution_mode=_normalize_execution_mode(self.get_autopilot_policy().get("execution_mode")),
+            submitted=False,
+            auto_submit=False,
+            requested_action="long",
+            approved_action="long",
+            verdict="approve",
+            order_payload={},
+            receipt=None,
+            warnings=[],
+            policy_gate_warnings=[],
+            next_action="arm_autopilot_or_run_manual_review",
+            trigger_event={},
+            metadata={"sample": True},
+        )
+
+    def _build_order_approval_ledger(
+        self,
+        *,
+        symbol: str,
+        debate: DebateReport,
+        approval: RiskApproval,
+        execution_intent: ExecutionIntent,
+        execution_result: ExecutionResult,
+    ) -> OrderApprovalLedger:
+        status = str(execution_result.status or "blocked")
+        verdict = "submitted" if execution_result.submitted else (
+            "review_only" if status in {"review_only", "guarded"} else "submit_failed" if status == "submit_failed" else "blocked"
+        )
+        return OrderApprovalLedger(
+            ledger_id=f"ledger-{symbol.upper()}-{uuid.uuid4().hex[:10]}",
+            generated_at=utc_now(),
+            symbol=symbol.upper(),
+            execution_intent=execution_intent,
+            execution_result=execution_result,
+            debate_id=debate.debate_id,
+            approval_id=approval.approval_id,
+            verdict=verdict,
+            submitted=bool(execution_result.submitted),
+            receipt=execution_result.receipt,
+            warnings=list(execution_result.warnings or []),
+            lineage=["lean_order_lifecycle", "judge", "risk_manager", "submit"],
+            metadata={"execution_status": status},
+        )
 
     @staticmethod
     def _is_market_day() -> bool:

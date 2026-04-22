@@ -22,6 +22,7 @@ let _lastLineage = [];
 let _selectedItemId = null;
 let _lastSentiment = null;
 let _lastAlerts = [];
+let _overlayState = { phase: 'loading', warnings: [], fallback: '', nextActions: [] };
 
 const COPY = {
   en: {
@@ -44,6 +45,39 @@ const COPY = {
     filters: 'Active Filters',
     sentiment: 'Sentiment Lane',
     alerts: 'Alert Jump',
+    loadingEvidence: 'Loading evidence lake...',
+    loadingScan: 'Scanning free-tier providers...',
+    whyEmpty: 'Why Empty',
+    fallback: 'Fallback',
+    nextAction: 'Next Action',
+    noEvidenceTitle: 'No evidence loaded yet',
+    noEvidenceDetail: 'Refresh evidence or run a radar scan to seed the decision-ready feed.',
+    noFilteredTitle: 'No evidence matched the current filters',
+    noFilteredDetail: 'Clear the provider or symbol filters, then refresh evidence to restore the feed.',
+    feedFallback: 'Feed is waiting on the evidence API, but the page stays interactive.',
+    feedNextAction: 'Use Refresh Evidence, widen the filters, or jump to Connector Center to inspect providers.',
+    overlay: 'Overlay Status',
+    overlayLoading: 'overlay loading',
+    overlayReady: 'ready',
+    overlayDegraded: 'degraded',
+    overlayHealthy: 'Sentiment and alert overlays are synced with the evidence feed.',
+    overlayMissingSentiment: 'Sentiment overlay is unavailable right now.',
+    overlayMissingAlerts: 'Today alert bridge is unavailable right now.',
+    overlayFallback: 'The evidence feed still renders from the evidence lake while the right-side overlay degrades.',
+    overlayNextAction: 'Refresh the page, inspect Risk Board, or open Trading Ops before trusting the paper path.',
+    latestItem: 'Latest Item',
+    pageProviders: 'Page Providers',
+    decisionLane: 'Decision Lane',
+    selectedEvidence: 'Selected Evidence',
+    confidence: 'Confidence',
+    qualityScore: 'Quality',
+    linkage: 'Linkage',
+    pageLabel: 'Page',
+    visible: 'Visible',
+    topQuality: 'Top q',
+    leadSymbol: 'Lead',
+    allProviders: 'All providers',
+    allSymbols: 'All symbols',
   },
   zh: {
     title: '市场雷达',
@@ -63,8 +97,41 @@ const COPY = {
     freshness: '新鲜度',
     ready: '决策就绪',
     filters: '当前过滤',
-    sentiment: '情绪通道',
+    sentiment: '情绪叠层',
     alerts: '告警跳转',
+    loadingEvidence: '正在加载证据湖...',
+    loadingScan: '正在扫描免费数据源...',
+    whyEmpty: '为空原因',
+    fallback: '回落说明',
+    nextAction: '下一步动作',
+    noEvidenceTitle: '证据流尚未加载',
+    noEvidenceDetail: '点击刷新证据或运行一次雷达扫描，先把可进入决策链的证据流落下来。',
+    noFilteredTitle: '当前过滤条件下没有匹配证据',
+    noFilteredDetail: '清空来源或股票过滤条件后重新刷新，就能恢复首屏证据流。',
+    feedFallback: '证据流正在等待证据接口返回，但页面不会因为叠层失败而卡死。',
+    feedNextAction: '可以先刷新证据、放宽过滤条件，或跳到连接器中心检查数据源。',
+    overlay: '叠层状态',
+    overlayLoading: '叠层加载中',
+    overlayReady: '已就绪',
+    overlayDegraded: '已降级',
+    overlayHealthy: '情绪与告警叠层已和证据流同步。',
+    overlayMissingSentiment: '当前无法取得情绪叠层。',
+    overlayMissingAlerts: '当前无法取得今日告警桥接。',
+    overlayFallback: '左侧证据流继续来自证据湖，右侧摘要会明确显示叠层降级。',
+    overlayNextAction: '先刷新页面、查看风控板，或进入交易运维，再决定是否推进 Paper 路径。',
+    latestItem: '最新条目',
+    pageProviders: '当前页来源',
+    decisionLane: '决策通道',
+    selectedEvidence: '当前选中证据',
+    confidence: '置信度',
+    qualityScore: '质量',
+    linkage: '链路',
+    pageLabel: '页码',
+    visible: '当前显示',
+    topQuality: '最高质量',
+    leadSymbol: '首条股票',
+    allProviders: '全部来源',
+    allSymbols: '全部股票',
   },
 };
 
@@ -75,6 +142,22 @@ function c(key) {
 
 function t(en, zh) {
   return getLang() === 'zh' ? zh : en;
+}
+
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
+}
+
+function buildOverlayState(phase, warnings = []) {
+  const nextActions = phase === 'ready'
+    ? [t('Open Debate Desk', '打开辩论台'), t('Open Risk Board', '打开风控板'), t('Open Trading Ops', '打开交易运维')]
+    : [t('Refresh Evidence', '刷新证据'), t('Inspect Risk Board', '查看风控板'), t('Open Trading Ops', '打开交易运维')];
+  return {
+    phase,
+    warnings,
+    fallback: phase === 'ready' ? c('overlayHealthy') : c('overlayFallback'),
+    nextActions,
+  };
 }
 
 function riskDecisionLabel(value) {
@@ -95,28 +178,70 @@ function defaultLineage() {
     : ['Free-tier scan', 'Evidence normalization', 'As-of guard', 'Decision-ready feed'];
 }
 
+function overlayPhaseLabel(phase) {
+  const map = {
+    loading: c('overlayLoading'),
+    ready: c('overlayReady'),
+    degraded: c('overlayDegraded'),
+  };
+  return map[String(phase || '').toLowerCase()] || String(phase || '-');
+}
+
+function normalizeEvidenceItem(item, index) {
+  const raw = item || {};
+  const itemId = raw.item_id || raw.id || `evidence-${index + 1}`;
+  const symbol = String(raw.symbol || raw.ticker || raw.asset || raw.metadata?.symbol || '').trim().toUpperCase() || '-';
+  const provider = String(raw.provider || raw.source || raw.provider_id || raw.metadata?.provider || 'unknown').trim() || 'unknown';
+  const title = raw.title || raw.headline || raw.name || `${symbol} evidence`;
+  const summary = raw.summary || raw.abstract || raw.snippet || raw.description || raw.body || '';
+  const qualityScore = Number(raw.quality_score ?? raw.confidence ?? raw.score ?? 0);
+  const confidence = Number(raw.confidence ?? raw.quality_score ?? raw.score ?? 0);
+  return {
+    item_id: String(itemId),
+    item_type: raw.item_type || raw.type || 'evidence',
+    provider,
+    title,
+    summary,
+    symbol,
+    confidence: Number.isFinite(confidence) ? confidence : 0,
+    quality_score: Number.isFinite(qualityScore) ? qualityScore : 0,
+    leakage_guard: raw.leakage_guard || raw.guard || raw.metadata?.guard || 'review',
+    published_at: raw.published_at || raw.timestamp || raw.created_at || '-',
+    observed_at: raw.observed_at || raw.as_of || raw.generated_at || raw.published_at || '-',
+  };
+}
+
+function assignEvidence(payload) {
+  _items = Array.isArray(payload?.items) ? payload.items.map(normalizeEvidenceItem) : [];
+  _lastLineage = payload?.lineage || defaultLineage();
+  _selectedItemId = _items[0]?.item_id || null;
+  _view.page = 1;
+}
+
 export async function render(container) {
   _container = container;
+  _overlayState = buildOverlayState('loading');
   renderShell();
   wire();
   _langCleanup = onLangChange(() => {
-    if (_container) {
-      renderShell();
-      wire();
-      renderItems();
-    }
+    if (!_container?.isConnected) return;
+    renderShell();
+    wire();
+    renderItems({ lineage: _lastLineage });
   });
   await refreshEvidence();
 }
 
 export function destroy() {
   _langCleanup?.();
+  _langCleanup = null;
   _container = null;
 }
 
 function renderShell() {
+  if (!_container) return;
   _container.innerHTML = `
-    <div class="workbench-page live-page market-radar-page">
+    <div class="workbench-page live-page market-radar-page" data-no-autotranslate="true">
       <section class="run-panel">
         <div class="run-panel__header">
           <div class="run-panel__title">${c('title')}</div>
@@ -149,11 +274,11 @@ function renderShell() {
       <section class="grid-2 market-radar-layout workbench-main-grid">
         <article class="card">
           <div class="card-header"><span class="card-title">${c('feed')}</span></div>
-          <div class="card-body" id="market-radar-feed">${emptyState(t('Loading evidence', '正在加载证据'))}</div>
+          <div class="card-body" id="market-radar-feed">${emptyState(c('loadingEvidence'))}</div>
         </article>
         <article class="card">
           <div class="card-header"><span class="card-title">${c('quality')}</span></div>
-          <div class="card-body" id="market-radar-summary">${emptyState(t('No scan yet', '尚未扫描'))}</div>
+          <div class="card-body" id="market-radar-summary">${emptyState(c('loadingEvidence'))}</div>
         </article>
       </section>
     </div>`;
@@ -161,30 +286,31 @@ function renderShell() {
 }
 
 function wire() {
+  if (!_container) return;
   _container.querySelector('#btn-market-radar-scan')?.addEventListener('click', scanRadar);
   _container.querySelector('#btn-market-radar-refresh')?.addEventListener('click', refreshEvidence);
   _container.querySelector('#radar-provider')?.addEventListener('input', () => {
     _view.page = 1;
     renderFieldPreviews();
-    renderItems();
+    renderItems({ lineage: _lastLineage });
   });
   _container.querySelector('#radar-symbol')?.addEventListener('input', () => {
     _view.page = 1;
     renderFieldPreviews();
-    renderItems();
+    renderItems({ lineage: _lastLineage });
   });
   _container.querySelector('#radar-universe')?.addEventListener('input', renderFieldPreviews);
   _container.querySelector('#market-radar-feed')?.addEventListener('click', (event) => {
     const itemButton = event.target.closest('[data-radar-item-id]');
     if (itemButton) {
       _selectedItemId = itemButton.getAttribute('data-radar-item-id');
-      renderItems();
+      renderItems({ lineage: _lastLineage });
       return;
     }
     const button = event.target.closest('[data-radar-page]');
     if (!button || button.disabled) return;
     _view.page = Number(button.getAttribute('data-radar-page')) || 1;
-    renderItems();
+    renderItems({ lineage: _lastLineage });
   });
   _container.querySelector('#market-radar-summary')?.addEventListener('click', (event) => {
     const target = event.target.closest('[data-radar-link]');
@@ -199,18 +325,22 @@ function wire() {
 }
 
 function universe() {
+  if (!_container) return ['AAPL'];
   return splitTokens(_container.querySelector('#radar-universe')?.value || 'AAPL', { uppercase: true, delimiters: /[,\s]+/ });
 }
 
 function providers() {
+  if (!_container) return [];
   return splitTokens(_container.querySelector('#radar-provider')?.value || '', { delimiters: /[,|\s]+/ });
 }
 
 function symbolFilter() {
+  if (!_container) return '';
   return String(_container.querySelector('#radar-symbol')?.value || '').trim().toUpperCase();
 }
 
 function renderFieldPreviews() {
+  if (!_container) return;
   _container.querySelector('#radar-universe-preview').innerHTML = renderTokenPreview(universe(), {
     uppercase: true,
     maxItems: 6,
@@ -219,18 +349,20 @@ function renderFieldPreviews() {
   _container.querySelector('#radar-provider-preview').innerHTML = renderTokenPreview(providers(), {
     maxItems: 6,
     tone: 'neutral',
-    emptyLabel: getLang() === 'zh' ? '全部来源' : 'All providers',
+    emptyLabel: c('allProviders'),
   });
   const symbol = symbolFilter();
   _container.querySelector('#radar-symbol-preview').innerHTML = renderTokenPreview(symbol ? [symbol] : [], {
     tone: 'accent',
-    emptyLabel: getLang() === 'zh' ? '全部股票' : 'All symbols',
+    emptyLabel: c('allSymbols'),
   });
 }
 
 async function scanRadar() {
+  if (!isMounted()) return;
   const feed = _container.querySelector('#market-radar-feed');
-  setLoading(feed, t('Scanning free-tier providers...', '正在扫描免费数据源...'));
+  setLoading(feed, c('loadingScan'));
+  _overlayState = buildOverlayState('loading');
   try {
     const payload = await api.connectors.liveScan({
       universe: universe(),
@@ -239,34 +371,39 @@ async function scanRadar() {
       persist: true,
       limit: 24,
     });
-    _items = payload.items || [];
-    _lastLineage = payload.lineage || defaultLineage();
-    _selectedItemId = _items[0]?.item_id || null;
-    _view.page = 1;
-    await refreshTradingOverlay();
+    if (!isMounted()) return;
+    assignEvidence(payload);
     renderItems(payload);
-  } catch (err) {
-    renderError(feed, err);
+    void refreshTradingOverlay();
+  } catch (error) {
+    if (!isMounted()) return;
+    renderError(feed, error);
+    _overlayState = buildOverlayState('degraded', [error?.message || t('Radar scan failed.', '雷达扫描失败。')]);
+    renderSummary({ lineage: _lastLineage });
   }
 }
 
 async function refreshEvidence() {
+  if (!isMounted()) return;
   const feed = _container.querySelector('#market-radar-feed');
-  setLoading(feed, t('Loading evidence lake...', '正在加载证据湖...'));
+  setLoading(feed, c('loadingEvidence'));
+  _overlayState = buildOverlayState('loading');
   try {
     const payload = await api.intelligence.evidence(null, 40);
-    _items = payload.items || [];
-    _lastLineage = payload.lineage || defaultLineage();
-    _selectedItemId = _items[0]?.item_id || null;
-    _view.page = 1;
-    await refreshTradingOverlay();
+    if (!isMounted()) return;
+    assignEvidence(payload);
     renderItems(payload);
-  } catch (err) {
-    renderError(feed, err);
+    void refreshTradingOverlay();
+  } catch (error) {
+    if (!isMounted()) return;
+    renderError(feed, error);
+    _overlayState = buildOverlayState('degraded', [error?.message || t('Evidence API unavailable.', '证据接口当前不可用。')]);
+    renderSummary({ lineage: _lastLineage });
   }
 }
 
 async function refreshTradingOverlay() {
+  if (!isMounted()) return;
   const tasks = await Promise.allSettled([
     api.trading.sentimentRun({
       universe: universe(),
@@ -275,11 +412,26 @@ async function refreshTradingOverlay() {
     }),
     api.trading.alertsToday(),
   ]);
-  _lastSentiment = tasks[0].status === 'fulfilled' ? tasks[0].value : null;
-  _lastAlerts = tasks[1].status === 'fulfilled' ? tasks[1].value?.alerts || [] : [];
+  if (!isMounted()) return;
+  const warnings = [];
+  if (tasks[0].status === 'fulfilled') {
+    _lastSentiment = tasks[0].value;
+  } else {
+    _lastSentiment = null;
+    warnings.push(c('overlayMissingSentiment'));
+  }
+  if (tasks[1].status === 'fulfilled') {
+    _lastAlerts = tasks[1].value?.alerts || [];
+  } else {
+    _lastAlerts = [];
+    warnings.push(c('overlayMissingAlerts'));
+  }
+  _overlayState = buildOverlayState(warnings.length ? 'degraded' : 'ready', warnings);
+  renderSummary({ lineage: _lastLineage });
 }
 
 function filteredItems() {
+  if (!_container) return _items;
   const provider = String(_container.querySelector('#radar-provider')?.value || '').trim().toLowerCase();
   const symbol = symbolFilter();
   return _items.filter((item) => {
@@ -298,8 +450,29 @@ function providerBreakdown(items) {
   return Array.from(counts.entries()).sort((left, right) => right[1] - left[1]);
 }
 
+function renderFeedEmptyState(filtered) {
+  const hasFilters = Boolean(providers().length || symbolFilter());
+  const title = hasFilters ? c('noFilteredTitle') : c('noEvidenceTitle');
+  const detail = hasFilters ? c('noFilteredDetail') : c('noEvidenceDetail');
+  const whyEmpty = hasFilters
+    ? `${c('provider')}: ${providers().join(', ') || c('allProviders')} · ${c('symbol')}: ${symbolFilter() || c('allSymbols')}`
+    : t('No evidence rows have reached the feed yet.', '当前还没有证据条目进入首屏证据流。');
+  const fallback = filtered.length ? c('overlayFallback') : c('feedFallback');
+  return `
+    <div class="functional-empty compact-functional-empty">
+      <div class="functional-empty__eyebrow">${esc(c('feed'))}</div>
+      <h3>${esc(title)}</h3>
+      <p>${esc(detail)}</p>
+      <div class="workbench-kv-list compact-kv-list">
+        <div class="workbench-kv-row"><span>${c('whyEmpty')}</span><strong>${esc(whyEmpty)}</strong></div>
+        <div class="workbench-kv-row"><span>${c('fallback')}</span><strong>${esc(fallback)}</strong></div>
+        <div class="workbench-kv-row"><span>${c('nextAction')}</span><strong>${esc(c('feedNextAction'))}</strong></div>
+      </div>
+    </div>`;
+}
+
 function renderEvidencePage(items, pageItems, pageCount) {
-  if (!items.length) return emptyState();
+  if (!items.length) return renderFeedEmptyState(items);
   const start = (_view.page - 1) * _view.pageSize + 1;
   const end = Math.min(items.length, _view.page * _view.pageSize);
   const pageProviders = Array.from(new Set(pageItems.map((item) => String(item.provider || '-')))).slice(0, 3);
@@ -342,17 +515,17 @@ function renderEvidencePage(items, pageItems, pageCount) {
     </div>
     <div class="radar-feed-footer">
       <div class="workbench-mini-grid radar-feed-mini-grid">
-        ${miniMetric(t('Page', '页码'), `${_view.page}/${pageCount}`)}
-        ${miniMetric(t('Visible', '当前显示'), `${pageItems.length}`)}
-        ${miniMetric(t('Top q', '最高质量'), num(topQuality))}
-        ${miniMetric(t('Lead', '首条股票'), esc(leadSymbol))}
+        ${miniMetric(c('pageLabel'), `${_view.page}/${pageCount}`)}
+        ${miniMetric(c('visible'), `${pageItems.length}`)}
+        ${miniMetric(c('topQuality'), num(topQuality))}
+        ${miniMetric(c('leadSymbol'), esc(leadSymbol))}
       </div>
       <div class="workbench-kv-list compact-kv-list radar-feed-footer__list">
-        <div class="workbench-kv-row"><span>${t('Page providers', '当前页来源')}</span><strong>${esc(pageProviders.join(', ') || '-')}</strong></div>
-        <div class="workbench-kv-row"><span>${t('Decision lane', '决策通道')}</span><strong>${pageItems.some((item) => String(item.leakage_guard || '').includes('safe')) ? t('as-of safe', '时点安全') : t('review', '复核')}</strong></div>
+        <div class="workbench-kv-row"><span>${c('pageProviders')}</span><strong>${esc(pageProviders.join(', ') || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>${c('decisionLane')}</span><strong>${pageItems.some((item) => String(item.leakage_guard || '').includes('safe')) ? t('as-of safe', '时点安全') : t('review', '复核')}</strong></div>
       </div>
       <section class="radar-selected-evidence">
-        <div class="workbench-section__title">${t('Selected Evidence', '当前选中证据')}</div>
+        <div class="workbench-section__title">${c('selectedEvidence')}</div>
         <div class="radar-selected-evidence__head">
           <div>
             <strong>${esc(selected?.title || '-')}</strong>
@@ -361,10 +534,10 @@ function renderEvidencePage(items, pageItems, pageCount) {
           ${statusBadge(selected?.item_type || 'evidence')}
         </div>
         <div class="workbench-mini-grid radar-feed-mini-grid">
-          ${miniMetric(t('Confidence', '置信度'), num(selected?.confidence || selected?.quality_score || 0))}
-          ${miniMetric(t('Quality', '质量'), num(selected?.quality_score || selected?.confidence || 0))}
-          ${miniMetric(t('Freshness', '新鲜度'), num(selected?.confidence || 0))}
-          ${miniMetric(t('Lineage', '链路'), selected?.provider ? t('linked', '已关联') : t('pending', '待处理'))}
+          ${miniMetric(c('confidence'), num(selected?.confidence || selected?.quality_score || 0))}
+          ${miniMetric(c('qualityScore'), num(selected?.quality_score || selected?.confidence || 0))}
+          ${miniMetric(c('freshness'), num(selected?.confidence || 0))}
+          ${miniMetric(c('linkage'), selected?.provider ? t('linked', '已关联') : t('pending', '待处理'))}
         </div>
         <div class="workbench-kv-list compact-kv-list radar-selected-evidence__meta">
           ${detailMeta.map(([label, value]) => `<div class="workbench-kv-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('')}
@@ -373,17 +546,9 @@ function renderEvidencePage(items, pageItems, pageCount) {
     </div>`;
 }
 
-function renderItems(payload = {}) {
+function renderSummary(payload = {}) {
   if (!_container) return;
   const filtered = filteredItems();
-  const pageCount = Math.max(1, Math.ceil(filtered.length / _view.pageSize));
-  _view.page = Math.min(Math.max(1, _view.page), pageCount);
-  const pageItems = filtered.slice((_view.page - 1) * _view.pageSize, _view.page * _view.pageSize);
-  if (!_selectedItemId || !pageItems.some((item) => String(item.item_id || '') === String(_selectedItemId))) {
-    _selectedItemId = pageItems[0]?.item_id || null;
-  }
-  _container.querySelector('#market-radar-feed').innerHTML = renderEvidencePage(filtered, pageItems, pageCount);
-
   const providersCount = new Set(filtered.map((item) => item.provider)).size;
   const symbolsCount = new Set(filtered.map((item) => item.symbol)).size;
   const avgQuality = filtered.reduce((acc, item) => acc + Number(item.quality_score || item.confidence || 0), 0) / Math.max(filtered.length, 1);
@@ -395,10 +560,11 @@ function renderItems(payload = {}) {
     || (_lastSentiment?.symbol_scores || [])[0]
     || null;
   const latestAlert = _lastAlerts[0] || null;
+  const overlayWarnings = Array.isArray(_overlayState.warnings) ? _overlayState.warnings : [];
   _container.querySelector('#market-radar-summary').innerHTML = `
     <div class="quality-summary-panel">
       <div class="workbench-metric-grid">
-        ${metric(t('Items', '条目数'), filtered.length, 'positive')}
+        ${metric(t('Items', '条目数'), filtered.length, filtered.length ? 'positive' : 'risk')}
         ${metric(t('Providers', '来源数'), providersCount)}
         ${metric(t('Symbols', '股票数'), symbolsCount)}
         ${metric(t('Avg quality', '平均质量'), num(avgQuality))}
@@ -413,30 +579,30 @@ function renderItems(payload = {}) {
         <div class="workbench-section__title">${c('filters')}</div>
         <div class="workbench-kv-list compact-kv-list">
           <div class="workbench-kv-row"><span>${c('universe')}</span><strong>${esc(universe().length)}</strong></div>
-          <div class="workbench-kv-row"><span>${c('provider')}</span><strong>${esc(providers().join(', ') || t('all', '全部'))}</strong></div>
-          <div class="workbench-kv-row"><span>${c('symbol')}</span><strong>${esc(symbolFilter() || t('all', '全部'))}</strong></div>
+          <div class="workbench-kv-row"><span>${c('provider')}</span><strong>${esc(providers().join(', ') || c('allProviders'))}</strong></div>
+          <div class="workbench-kv-row"><span>${c('symbol')}</span><strong>${esc(symbolFilter() || c('allSymbols'))}</strong></div>
           <div class="workbench-kv-row"><span>${c('freshness')}</span><strong>${num(freshnessValue)}</strong></div>
         </div>
       </section>
       <section class="workbench-section">
-        <div class="workbench-section__title">${c('sentiment')}</div>
+        <div class="workbench-section__title">${c('overlay')}</div>
         <div class="workbench-metric-grid">
-          ${metric(t('Polarity', '极性'), num(symbolSentiment?.polarity || _lastSentiment?.overall_polarity || 0), (Number(symbolSentiment?.polarity || _lastSentiment?.overall_polarity || 0) || 0) >= 0 ? 'positive' : 'risk')}
-          ${metric(t('Confidence', '置信度'), num(symbolSentiment?.confidence || _lastSentiment?.confidence || 0))}
-          ${metric(t('Headlines', '标题数'), symbolSentiment?.article_count || _lastSentiment?.headline_count || 0)}
-          ${metric(t('Freshness', '新鲜度'), num(symbolSentiment?.freshness_score || _lastSentiment?.freshness_score || 0))}
+          ${metric(c('overlay'), overlayPhaseLabel(_overlayState.phase), _overlayState.phase === 'ready' ? 'positive' : _overlayState.phase === 'degraded' ? 'risk' : '')}
+          ${metric(c('sentiment'), num(symbolSentiment?.polarity || _lastSentiment?.overall_polarity || 0), (Number(symbolSentiment?.polarity || _lastSentiment?.overall_polarity || 0) || 0) >= 0 ? 'positive' : 'risk')}
+          ${metric(c('alerts'), _lastAlerts.length || 0, _lastAlerts.length ? 'risk' : 'positive')}
+          ${metric(c('nextAction'), (_overlayState.nextActions || [])[0] || '-', _overlayState.phase === 'ready' ? 'positive' : 'risk')}
         </div>
         <div class="workbench-kv-list compact-kv-list">
-          <div class="workbench-kv-row"><span>${t('Feature score', '特征分数')}</span><strong>${num(symbolSentiment?.feature_value || 50)}</strong></div>
-          <div class="workbench-kv-row"><span>${t('Snapshot', '快照')}</span><strong>${esc(_lastSentiment?.snapshot_id || '-')}</strong></div>
-          <div class="workbench-kv-row"><span>${t('Sources', '来源构成')}</span><strong>${esc(Object.entries(symbolSentiment?.source_mix || _lastSentiment?.source_mix || {}).map(([key, value]) => `${key}:${value}`).join(' | ') || '-')}</strong></div>
+          <div class="workbench-kv-row"><span>${c('fallback')}</span><strong>${esc(_overlayState.fallback || c('overlayFallback'))}</strong></div>
+          <div class="workbench-kv-row"><span>${c('whyEmpty')}</span><strong>${esc(overlayWarnings.join(' | ') || c('overlayHealthy'))}</strong></div>
+          <div class="workbench-kv-row"><span>${c('nextAction')}</span><strong>${esc((_overlayState.nextActions || []).join(' · ') || '-')}</strong></div>
         </div>
       </section>
       <section class="workbench-section">
         <div class="workbench-section__title">${c('ready')}</div>
         <div class="preview-step-grid">
           ${lineage.slice(0, 4).map((step) => `<div class="preview-step"><span>${esc(step)}</span><strong>${t('safe', '安全')}</strong></div>`).join('')}
-          <div class="preview-step"><span>${t('Frozen paper inputs', '论文冻结输入')}</span><strong>${t('untouched', '未触碰')}</strong></div>
+          <div class="preview-step"><span>${t('Frozen paper inputs', 'Paper 冻结输入')}</span><strong>${t('untouched', '未触碰')}</strong></div>
         </div>
       </section>
       <section class="workbench-section">
@@ -453,13 +619,26 @@ function renderItems(payload = {}) {
         </div>
       </section>
       <section class="workbench-section">
-        <div class="workbench-section__title">${t('Latest item', '最新条目')}</div>
+        <div class="workbench-section__title">${c('latestItem')}</div>
         <div class="workbench-kv-list compact-kv-list">
           <div class="workbench-kv-row"><span>${t('Symbol', '股票')}</span><strong>${esc(latest?.symbol || '-')}</strong></div>
           <div class="workbench-kv-row"><span>${t('Provider', '来源')}</span><strong>${esc(latest?.provider || '-')}</strong></div>
           <div class="workbench-kv-row"><span>${t('Type', '类型')}</span><strong>${esc(latest?.item_type || '-')}</strong></div>
-          <div class="workbench-kv-row"><span>${t('Confidence', '置信度')}</span><strong>${num(latest?.confidence || latest?.quality_score || 0)}</strong></div>
+          <div class="workbench-kv-row"><span>${c('confidence')}</span><strong>${num(latest?.confidence || latest?.quality_score || 0)}</strong></div>
         </div>
       </section>
     </div>`;
+}
+
+function renderItems(payload = {}) {
+  if (!_container) return;
+  const filtered = filteredItems();
+  const pageCount = Math.max(1, Math.ceil(filtered.length / _view.pageSize));
+  _view.page = Math.min(Math.max(1, _view.page), pageCount);
+  const pageItems = filtered.slice((_view.page - 1) * _view.pageSize, _view.page * _view.pageSize);
+  if (!_selectedItemId || !pageItems.some((item) => String(item.item_id || '') === String(_selectedItemId))) {
+    _selectedItemId = pageItems[0]?.item_id || null;
+  }
+  _container.querySelector('#market-radar-feed').innerHTML = renderEvidencePage(filtered, pageItems, pageCount);
+  renderSummary(payload);
 }

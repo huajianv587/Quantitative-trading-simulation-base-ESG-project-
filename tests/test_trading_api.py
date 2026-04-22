@@ -5,6 +5,99 @@ import gateway.main as main_module
 
 
 class _TradingStub:
+    def __init__(self):
+        self._policy = {
+            "policy_id": "autopilot-default",
+            "generated_at": "2026-04-20T12:00:00Z",
+            "execution_mode": "paper",
+            "execution_permission": "auto_submit",
+            "auto_submit_enabled": False,
+            "paper_auto_submit_enabled": False,
+            "armed": False,
+            "daily_budget_cap": 10000.0,
+            "per_trade_cap": 2500.0,
+            "max_open_positions": 5,
+            "max_symbol_weight": 0.2,
+            "allowed_universe": ["AAPL", "NVDA", "TSLA", "SPY"],
+            "allowed_strategies": ["esg_multifactor_long_only", "regime_rotation"],
+            "require_human_review_above": 7500.0,
+            "drawdown_limit": 0.06,
+            "daily_loss_limit": 1500.0,
+            "signal_ttl": 180,
+            "kill_switch": False,
+            "protections": ["judge_gate", "risk_gate"],
+            "warnings": [],
+        }
+        self._strategies = [
+            {
+                "strategy_id": "esg_multifactor_long_only",
+                "display_name": "ESG Multi-Factor Long Only",
+                "status": "active",
+                "factor_dependencies": ["quality", "value", "momentum", "esg_delta"],
+                "risk_profile": "balanced",
+                "capital_allocation": 0.34,
+                "allowed_symbols": ["AAPL", "MSFT", "NVDA"],
+                "paper_ready": True,
+                "requires_debate": True,
+                "requires_risk_approval": True,
+            }
+        ]
+
+    def execution_intent_contract(self):
+        return {
+            "intent_id": "intent-execution-sample",
+            "created_at": "2026-04-20T12:00:00Z",
+            "symbol": "AAPL",
+            "requested_action": "long",
+            "approved_action": "long",
+            "execution_mode": "paper",
+            "strategy_slots": ["esg_multifactor_long_only"],
+            "factor_dependencies": ["quality", "value", "momentum", "esg_delta"],
+            "recommended_weight": 0.05,
+            "recommended_notional": 5000.0,
+            "signal_ttl_minutes": 180,
+            "guards": ["judge_gate", "risk_gate", "auto_submit"],
+            "metadata": {"sample": True},
+        }
+
+    def execution_result_contract(self):
+        return {
+            "execution_id": "trade-1",
+            "generated_at": "2026-04-20T12:00:00Z",
+            "symbol": "AAPL",
+            "status": "submitted",
+            "venue": "alpaca",
+            "execution_mode": "paper",
+            "submitted": True,
+            "auto_submit": True,
+            "requested_action": "long",
+            "approved_action": "long",
+            "verdict": "approve",
+            "order_payload": {"symbol": "AAPL", "side": "buy", "notional": 5000},
+            "receipt": {"id": "paper-aapl-1"},
+            "warnings": [],
+            "policy_gate_warnings": [],
+            "next_action": "monitor_fill_and_review_outcome",
+            "trigger_event": {},
+            "metadata": {"sample": True},
+        }
+
+    def factor_pipeline_manifest(self):
+        return {
+            "manifest_id": "factor-pipeline-current",
+            "generated_at": "2026-04-20T12:00:00Z",
+            "symbol": "AAPL",
+            "strategy_slots": ["esg_multifactor_long_only"],
+            "factor_dependencies": ["quality", "value", "momentum", "esg_delta"],
+            "stages": [
+                {"stage": "feature_build", "status": "ready"},
+                {"stage": "factor_gate", "status": "ready"},
+                {"stage": "strategy_slot", "status": "ready"},
+            ],
+            "warnings": [],
+            "next_action": "Compare factor gate output with strategy allocation before promotion.",
+        }
+
     def schedule_status(self):
         return {
             "jobs": [
@@ -21,7 +114,7 @@ class _TradingStub:
         return {"watchlist_item": {"symbol": kwargs["symbol"], "enabled": kwargs.get("enabled", True)}, "watchlist": [{"symbol": kwargs["symbol"]}]}
 
     def latest_review(self):
-        return {"review": {"review_id": "review-1", "report_text": "paper-only", "pnl": 12.5}}
+        return {"review": {"review_id": "review-1", "report_text": "guardrailed execution review", "pnl": 12.5}}
 
     def alerts_today(self):
         return {"alerts": [{"alert_id": "alert-1", "symbol": "AAPL", "trigger_type": "price_move"}], "alert_count": 1}
@@ -77,12 +170,16 @@ class _TradingStub:
         }
 
     def run_trading_cycle(self, **kwargs):
+        execution_result = self.execution_result_contract()
         return {
             "bundle_id": "bundle-1",
             "symbol": kwargs["symbol"],
             "debate": self.run_debate(symbol=kwargs["symbol"]),
             "risk": self.evaluate_risk(symbol=kwargs["symbol"]),
-            "execution": {"execution_id": "trade-1", "submitted": True, "status": "submitted"},
+            "execution": execution_result,
+            "execution_intent": self.execution_intent_contract(),
+            "execution_result": execution_result,
+            "factor_pipeline_manifest": self.factor_pipeline_manifest(),
         }
 
     def monitor_status(self):
@@ -106,7 +203,80 @@ class _TradingStub:
             "latest_review": self.latest_review(),
             "debates": self.debate_runs(symbol="AAPL"),
             "risk": self.risk_board(symbol="AAPL"),
-            "notifier": {"telegram_configured": False, "mode": "paper_shadow_notify"},
+            "autopilot_policy": self._policy,
+            "strategies": {"count": len(self._strategies), "strategies": self._strategies},
+            "execution_path": self.execution_path_status(),
+            "factor_pipeline": self.factor_pipeline_manifest(),
+            "fusion_manifest": self.fusion_reference_manifest(),
+            "notifier": {"telegram_configured": False, "mode": "shadow_notify"},
+        }
+
+    def get_autopilot_policy(self):
+        return self._policy
+
+    def save_autopilot_policy(self, payload):
+        self._policy.update(payload)
+        return self._policy
+
+    def arm_autopilot(self, *, armed):
+        self._policy["armed"] = armed
+        return self._policy
+
+    def list_strategies(self):
+        return {"count": len(self._strategies), "strategies": self._strategies}
+
+    def toggle_strategy(self, *, strategy_id, status):
+        self._strategies[0]["status"] = status
+        return {"strategy": self._strategies[0]}
+
+    def allocate_strategy(self, *, strategy_id, capital_allocation, max_symbols, status):
+        self._strategies[0]["capital_allocation"] = capital_allocation
+        return {"allocation": {"strategy_id": strategy_id, "capital_allocation": capital_allocation, "max_symbols": max_symbols, "status": status}}
+
+    def execution_path_status(self):
+        return {
+            "generated_at": "2026-04-20T12:00:00Z",
+            "mode": "paper",
+            "armed": self._policy["armed"],
+            "daily_budget_cap": self._policy["daily_budget_cap"],
+            "budget_remaining": self._policy["daily_budget_cap"],
+            "judge_passed": True,
+            "risk_passed": True,
+            "kill_switch": False,
+            "current_stage": "idle",
+            "stages": [{"stage": "scan", "status": "ready"}, {"stage": "judge", "status": "passed"}, {"stage": "risk", "status": "passed"}, {"stage": "submit", "status": "ready"}],
+            "lineage": ["scan", "factors", "debate", "judge", "risk", "submit", "monitor", "review"],
+            "warnings": [],
+        }
+
+    def dashboard_state(self, provider="auto"):
+        return {
+            "generated_at": "2026-04-20T12:00:00Z",
+            "phase": "degraded",
+            "ready": False,
+            "symbol": "AAPL",
+            "source": "unknown",
+            "selected_provider": provider,
+            "source_chain": ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
+            "provider_status": {"available": True, "provider": "alpaca", "selected_provider": provider},
+            "degraded_from": "alpaca",
+            "fallback_preview": {
+                "symbol": "AAPL",
+                "source": "unknown",
+                "source_chain": ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
+                "reason": ["provider_connected_but_no_payload", "provider_degraded_from_alpaca"],
+                "next_actions": ["refresh_dashboard", "open_market_radar"],
+            },
+        }
+
+    def fusion_reference_manifest(self):
+        return {
+            "manifest_id": "fusion-reference-default",
+            "generated_at": "2026-04-20T12:00:00Z",
+            "items": [{"source_project": "Lean", "capability": "order lifecycle", "target_surface": "Trading Ops", "status": "implemented"}],
+            "execution_intent_contract": self.execution_intent_contract(),
+            "execution_result_contract": self.execution_result_contract(),
+            "factor_pipeline_manifest": self.factor_pipeline_manifest(),
         }
 
 
@@ -151,6 +321,9 @@ def test_trading_endpoints_and_aliases(monkeypatch):
     cycle = client.post("/api/v1/trading/cycle/run", json={"symbol": "AAPL"})
     assert cycle.status_code == 200
     assert cycle.json()["execution"]["submitted"] is True
+    assert cycle.json()["execution_intent"]["intent_id"] == "intent-execution-sample"
+    assert cycle.json()["execution_result"]["status"] == "submitted"
+    assert cycle.json()["factor_pipeline_manifest"]["manifest_id"] == "factor-pipeline-current"
 
 
 def test_trading_monitor_and_ops_snapshot(monkeypatch):
@@ -175,7 +348,62 @@ def test_trading_monitor_and_ops_snapshot(monkeypatch):
     assert "schedule" in payload
     assert "watchlist" in payload
     assert "latest_review" in payload
+    assert payload["factor_pipeline"]["manifest_id"] == "factor-pipeline-current"
 
     job = client.post("/api/v1/trading/jobs/run/premarket_agent", json={})
     assert job.status_code == 200
     assert job.json()["job_name"] == "premarket_agent"
+
+
+def test_autopilot_strategy_and_dashboard_routes(monkeypatch):
+    stub = _TradingStub()
+    monkeypatch.setattr(trading_router, "_trading_service", lambda: stub)
+    client = TestClient(main_module.app)
+
+    policy = client.get("/api/v1/trading/autopilot/policy")
+    assert policy.status_code == 200
+    assert policy.json()["policy_id"] == "autopilot-default"
+
+    saved = client.post("/api/v1/trading/autopilot/policy", json={"daily_budget_cap": 12000, "auto_submit_enabled": True})
+    assert saved.status_code == 200
+    assert saved.json()["daily_budget_cap"] == 12000
+    assert saved.json()["auto_submit_enabled"] is True
+
+    arm = client.post("/api/v1/trading/autopilot/arm", json={"armed": True})
+    assert arm.status_code == 200
+    assert arm.json()["armed"] is True
+    assert arm.json()["auto_submit_enabled"] is True
+
+    disarm = client.post("/api/v1/trading/autopilot/disarm", json={"armed": False})
+    assert disarm.status_code == 200
+    assert disarm.json()["armed"] is False
+    assert disarm.json()["auto_submit_enabled"] is True
+
+    strategies = client.get("/api/v1/trading/strategies")
+    assert strategies.status_code == 200
+    assert strategies.json()["count"] == 1
+
+    toggle = client.post("/api/v1/trading/strategies/esg_multifactor_long_only/toggle", json={"status": "paused"})
+    assert toggle.status_code == 200
+    assert toggle.json()["strategy"]["status"] == "paused"
+
+    allocation = client.post("/api/v1/trading/strategies/esg_multifactor_long_only/allocation", json={"capital_allocation": 0.42, "max_symbols": 8, "status": "active"})
+    assert allocation.status_code == 200
+    assert allocation.json()["allocation"]["capital_allocation"] == 0.42
+
+    execution_path = client.get("/api/v1/trading/execution-path/status")
+    assert execution_path.status_code == 200
+    assert execution_path.json()["mode"] == "paper"
+
+    dashboard_state = client.get("/api/v1/trading/dashboard/state?provider=alpaca")
+    assert dashboard_state.status_code == 200
+    assert dashboard_state.json()["phase"] == "degraded"
+    assert dashboard_state.json()["selected_provider"] == "alpaca"
+    assert dashboard_state.json()["source_chain"][0] == "alpaca"
+
+    fusion = client.get("/api/v1/trading/fusion/status")
+    assert fusion.status_code == 200
+    assert fusion.json()["manifest_id"] == "fusion-reference-default"
+    assert fusion.json()["execution_intent_contract"]["intent_id"] == "intent-execution-sample"
+    assert fusion.json()["execution_result_contract"]["status"] == "submitted"
+    assert fusion.json()["factor_pipeline_manifest"]["manifest_id"] == "factor-pipeline-current"

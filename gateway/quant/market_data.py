@@ -61,13 +61,19 @@ class MarketDataGateway:
         *,
         limit: int = 180,
         force_refresh: bool = False,
+        provider_order_override: list[str] | None = None,
+        cache_only: bool = False,
+        allow_stale_cache: bool = True,
     ) -> MarketBarsResult:
         normalized_symbol = str(symbol or "").upper().strip()
         if not normalized_symbol:
             raise ValueError("Symbol is required for market data lookup")
 
         cached = self._load_cached_bars(normalized_symbol, timeframe="1Day", limit=limit)
-        if not force_refresh and not cached.empty and self._is_cache_fresh(cached) and len(cached) >= limit:
+        cached_provider = str(cached["provider"].iloc[-1]) if not cached.empty else ""
+        if cache_only:
+            if cached.empty:
+                raise RuntimeError(f"No cached market data for {normalized_symbol}")
             return MarketBarsResult(
                 symbol=normalized_symbol,
                 provider=str(cached["provider"].iloc[-1]),
@@ -76,9 +82,26 @@ class MarketDataGateway:
                 bars=self._finalize_bars(cached.tail(limit)),
                 cache_path=str(self.cache_path),
             )
+        preferred_provider = (provider_order_override or [None])[0]
+        if (
+            not force_refresh
+            and not cached.empty
+            and self._is_cache_fresh(cached)
+            and len(cached) >= limit
+            and (not preferred_provider or cached_provider == preferred_provider)
+        ):
+            return MarketBarsResult(
+                symbol=normalized_symbol,
+                provider=cached_provider,
+                timeframe="1Day",
+                cache_hit=True,
+                bars=self._finalize_bars(cached.tail(limit)),
+                cache_path=str(self.cache_path),
+            )
 
         errors: list[str] = []
-        for provider in self.provider_order:
+        provider_order = provider_order_override or self.provider_order
+        for provider in provider_order:
             try:
                 if provider == "twelvedata":
                     bars = self._fetch_twelvedata_daily_bars(normalized_symbol, limit=max(limit, self.history_days))
@@ -107,7 +130,7 @@ class MarketDataGateway:
             except Exception as exc:
                 errors.append(f"{provider}: {exc}")
 
-        if not cached.empty:
+        if allow_stale_cache and not cached.empty:
             logger.warning(f"Using stale cached bars for {normalized_symbol}: {'; '.join(errors)}")
             return MarketBarsResult(
                 symbol=normalized_symbol,

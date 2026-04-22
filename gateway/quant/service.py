@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import random
 import sys
 import statistics
 from datetime import date, datetime, timedelta, timezone
@@ -90,7 +91,7 @@ class QuantSystemService:
         self.default_universe_name = getattr(settings, "QUANT_DEFAULT_UNIVERSE", "ESG_US_LARGE_CAP")
         self.default_broker = getattr(settings, "QUANT_BROKER_DEFAULT", "alpaca")
         self._overview_cache: dict[str, Any] | None = None
-        self._chart_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        self._chart_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._dashboard_cache_ttl_seconds = int(getattr(settings, "QUANT_DASHBOARD_CACHE_TTL_SECONDS", 15) or 15)
 
     @staticmethod
@@ -597,8 +598,9 @@ class QuantSystemService:
             "volume_ma20": [{"date": row["timestamp"], "value": round(float(row["volume_ma20"]), 4)} for _, row in enriched.iterrows()],
         }
 
-    def build_dashboard_chart(self, symbol: str | None = None, timeframe: str = "1D") -> dict[str, Any]:
-        cache_key = (str(symbol or "").upper().strip(), str(timeframe or "1D").upper())
+    def build_dashboard_chart(self, symbol: str | None = None, timeframe: str = "1D", provider: str = "auto") -> dict[str, Any]:
+        provider_preference, provider_chain = self._dashboard_provider_chain(provider)
+        cache_key = (str(symbol or "").upper().strip(), str(timeframe or "1D").upper(), provider_preference)
         cached = self._chart_cache.get(cache_key)
         if self._cache_is_fresh(cached):
             return cached["payload"]
@@ -618,6 +620,8 @@ class QuantSystemService:
                 "timeframe": timeframe,
                 "candles": [],
                 "source": "unavailable",
+                "selected_provider": provider_preference,
+                "data_source_chain": provider_chain,
                 "indicators": {},
                 "projection_scenarios": {},
                 "projection_explanations": {},
@@ -626,7 +630,7 @@ class QuantSystemService:
                 "click_targets": [],
                 "prediction_disabled_reason": "no_watchlist_signals",
                 "is_live_data": False,
-                "provider_status": {"available": False, "provider": "unavailable"},
+                "provider_status": {"available": False, "provider": "unavailable", "selected_provider": provider_preference},
                 "degraded_from": None,
                 "market_session": None,
                 "range_label": timeframe.upper(),
@@ -663,45 +667,40 @@ class QuantSystemService:
 
         source = str(active.get("market_data_source") or self._resolve_market_data_source(signal))
         degraded_from = None
-        provider_status = {"available": False, "provider": source}
+        provider_status = {"available": False, "provider": source, "selected_provider": provider_preference}
         try:
-            bars_result = self.market_data.get_daily_bars(active_symbol, limit=limit)
-            source = bars_result.provider
+            if provider_preference == "synthetic":
+                raise RuntimeError("synthetic_requested")
+            bars_result = self.market_data.get_daily_bars(
+                active_symbol,
+                limit=limit,
+                provider_order_override=[item for item in provider_chain if item not in {"cache", "synthetic"}],
+                cache_only=provider_preference == "cache",
+            )
+            source = "cache" if provider_preference == "cache" else bars_result.provider
             provider_status = {
                 "available": True,
                 "provider": bars_result.provider,
+                "selected_provider": provider_preference,
                 "cache_hit": bool(getattr(bars_result, "cache_hit", False)),
                 "lookback_limit": int(limit),
             }
             frame = bars_result.bars.copy()
-            if str(active.get("market_data_source") or "").lower() == "alpaca" and bars_result.provider != "alpaca":
-                degraded_from = "alpaca"
+            expected_provider = "alpaca" if provider_preference == "auto" else provider_preference
+            if expected_provider not in {"cache", "synthetic"} and bars_result.provider != expected_provider:
+                degraded_from = expected_provider
+            if provider_preference == "cache" and bars_result.provider != "cache":
+                degraded_from = "cache"
         except Exception as exc:
-            return {
-                "symbol": active_symbol,
-                "timeframe": timeframe.upper(),
-                "source": "unavailable",
-                "candles": [],
-                "indicators": {},
-                "projection_scenarios": {},
-                "projection_explanations": {},
-                "projected_volume": [],
-                "viewport_defaults": {
-                    "116%": {"visibleCount": 64, "projectionWidthRatio": 0.22, "pricePaddingRatio": 0.06},
-                    "352%": {"visibleCount": 32, "projectionWidthRatio": 0.28, "pricePaddingRatio": 0.08},
-                    "600%": {"visibleCount": 20, "projectionWidthRatio": 0.34, "pricePaddingRatio": 0.11},
-                },
-                "click_targets": ["symbol_chip", "timeframe_tab", "zoom_control", "projection_line", "heatmap_tile"],
-                "prediction_disabled_reason": "market_data_unavailable",
-                "signal": active,
-                "is_live_data": False,
-                "provider_status": {"available": False, "provider": "unavailable", "error": str(exc)},
-                "degraded_from": None,
-                "market_session": self._safe_get_clock(self._prepare_broker_adapter("alpaca", "paper")[0]),
-                "range_label": timeframe.upper(),
-                "positions_context": {"symbols": snapshot.get("position_symbols", [])},
-                "indicator_panels": [],
+            degraded_from = None if provider_preference == "synthetic" else provider_preference
+            source = "synthetic"
+            provider_status = {
+                "available": False,
+                "provider": "unavailable",
+                "selected_provider": provider_preference,
+                "error": str(exc),
             }
+            frame = self._build_synthetic_dashboard_bars(active_symbol, limit=limit)
 
         frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True).dt.strftime("%Y-%m-%d")
         indicators = self._build_chart_indicators(frame)
@@ -755,10 +754,26 @@ class QuantSystemService:
         elif active.get("prediction_mode") != "model":
             prediction_disabled_reason = "prediction_mode_unavailable"
 
+        market_data_warnings: list[str] = []
+        if degraded_from:
+            market_data_warnings.append(f"provider_degraded_from_{degraded_from}")
+        if source in {"cache", "synthetic"}:
+            market_data_warnings.append("cache_or_synthetic_fallback")
+        fallback_preview = {
+            "symbol": active_symbol,
+            "source": source,
+            "source_chain": provider_chain,
+            "last_snapshot": candles[-1] if candles else None,
+            "reason": market_data_warnings or ([prediction_disabled_reason] if prediction_disabled_reason else []),
+            "next_actions": ["refresh_dashboard", "switch_symbol", "open_market_radar", "open_backtest"],
+        }
+
         payload = {
             "symbol": active_symbol,
             "timeframe": timeframe.upper(),
             "source": source,
+            "selected_provider": provider_preference,
+            "data_source_chain": provider_chain,
             "candles": candles,
             "indicators": indicators,
             "projection_scenarios": projection_scenarios if prediction_disabled_reason is None else {},
@@ -771,6 +786,10 @@ class QuantSystemService:
             },
             "click_targets": ["symbol_chip", "timeframe_tab", "zoom_control", "projection_line", "heatmap_tile"],
             "prediction_disabled_reason": prediction_disabled_reason,
+            "market_data_warnings": market_data_warnings,
+            "warning": market_data_warnings[0] if market_data_warnings else prediction_disabled_reason,
+            "detail": None,
+            "fallback_preview": fallback_preview,
             "signal": active,
             "is_live_data": source == "alpaca",
             "provider_status": provider_status,
@@ -780,8 +799,60 @@ class QuantSystemService:
             "positions_context": {"symbols": snapshot.get("position_symbols", [])},
             "indicator_panels": ["main", "volume"],
         }
-        self._chart_cache[(active_symbol, str(timeframe or "1D").upper())] = self._cache_wrap(payload, ttl_seconds=30)
+        self._chart_cache[cache_key] = self._cache_wrap(payload, ttl_seconds=30)
         return payload
+
+    @staticmethod
+    def _dashboard_provider_chain(provider: str | None) -> tuple[str, list[str]]:
+        preferred = str(provider or "auto").strip().lower() or "auto"
+        if preferred == "alpaca":
+            return preferred, ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"]
+        if preferred == "twelvedata":
+            return preferred, ["twelvedata", "alpaca", "yfinance", "cache", "synthetic"]
+        if preferred == "yfinance":
+            return preferred, ["yfinance", "alpaca", "twelvedata", "cache", "synthetic"]
+        if preferred == "cache":
+            return preferred, ["cache", "synthetic"]
+        if preferred == "synthetic":
+            return preferred, ["synthetic"]
+        return "auto", ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"]
+
+    @staticmethod
+    def _build_synthetic_dashboard_bars(symbol: str, *, limit: int) -> pd.DataFrame:
+        random.seed(hash(symbol) % 10000)
+        base_prices = {
+            "NVDA": 480,
+            "TSLA": 175,
+            "AAPL": 185,
+            "MSFT": 415,
+            "GOOGL": 155,
+            "AMZN": 195,
+            "META": 520,
+            "AMGN": 270,
+            "NEE": 72,
+            "SPY": 510,
+        }
+        price = float(base_prices.get(symbol.upper(), 200))
+        start = date.today() - timedelta(days=max(limit, 60))
+        rows: list[dict[str, Any]] = []
+        for index in range(min(limit, 240)):
+            volatility = 0.012 + random.random() * 0.008
+            open_price = price
+            close_price = price * (1 + (random.random() - 0.48) * volatility * 2)
+            high_price = max(open_price, close_price) * (1 + random.random() * volatility * 0.5)
+            low_price = min(open_price, close_price) * (1 - random.random() * volatility * 0.5)
+            rows.append(
+                {
+                    "timestamp": (start + timedelta(days=index)).strftime("%Y-%m-%d"),
+                    "open": round(open_price, 4),
+                    "high": round(high_price, 4),
+                    "low": round(low_price, 4),
+                    "close": round(close_price, 4),
+                    "volume": int((800 + random.random() * 3000) * 1000),
+                }
+            )
+            price = close_price
+        return pd.DataFrame(rows)
 
     def _should_use_live_market_data(self) -> bool:
         running_pytest = any(name == "pytest" or name.startswith("_pytest") for name in sys.modules)

@@ -19,6 +19,8 @@ import {
 
 let _container = null;
 let _langCleanup = null;
+let _evidenceResizeObserver = null;
+let _evidenceResizeFrame = 0;
 let _latest = {
   evidence: null,
   decision: null,
@@ -261,6 +263,10 @@ function c(key) {
   return COPY[current][key] || COPY.en[key] || key;
 }
 
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
+}
+
 function localizedCount(value) {
   return `${value} ${c('evidenceUnit')}`;
 }
@@ -347,9 +353,9 @@ function buildShell() {
             </div>
           </section>
 
-          <section class="card">
+          <section class="card decision-evidence-card">
             <div class="card-header"><span class="card-title">${c('evidence')}</span></div>
-            <div class="card-body" id="evidence-panel"></div>
+            <div class="card-body decision-evidence-panel" id="evidence-panel"></div>
           </section>
         </div>
 
@@ -396,11 +402,13 @@ function buildShell() {
 export async function render(container) {
   _container = container;
   container.innerHTML = buildShell();
+  installEvidenceAutoLayout();
   bindEvents();
   renderConfigPreview();
   _langCleanup = onLangChange(() => {
     if (!_container?.isConnected) return;
     _container.innerHTML = buildShell();
+    installEvidenceAutoLayout();
     bindEvents();
     renderConfigPreview();
     renderCached();
@@ -409,6 +417,10 @@ export async function render(container) {
 }
 
 export function destroy() {
+  if (_evidenceResizeFrame) cancelAnimationFrame(_evidenceResizeFrame);
+  _evidenceResizeFrame = 0;
+  _evidenceResizeObserver?.disconnect();
+  _evidenceResizeObserver = null;
   _container = null;
   _latest = { evidence: null, decision: null, audit: null, debate: null, risk: null };
   _langCleanup?.();
@@ -436,6 +448,16 @@ function bindEvents() {
 }
 
 function readConfig() {
+  if (!_container) {
+    return {
+      symbol: 'AAPL',
+      universe: ['AAPL'],
+      query: '',
+      horizon_days: 20,
+      mode: 'local',
+      providers: [],
+    };
+  }
   const symbol = readSymbol(_container, '#intel-symbol', 'AAPL');
   const universe = readUniverse(_container.querySelector('#intel-universe')?.value, symbol);
   return {
@@ -470,20 +492,24 @@ function renderConfigPreview() {
 }
 
 async function refreshEvidence(showToast) {
+  if (!isMounted()) return;
   const cfg = readConfig();
-  setLoading(_container.querySelector('#evidence-panel'));
+  setLoading(_container?.querySelector('#evidence-panel'));
   try {
     _latest.evidence = await api.intelligence.evidence(cfg.symbol, 12);
+    if (!isMounted()) return;
     renderEvidence(_latest.evidence?.items || []);
     if (showToast) toast.success(c('refresh'), localizedCount((_latest.evidence?.items || []).length));
   } catch (err) {
-    renderError(_container.querySelector('#evidence-panel'), err);
+    if (!isMounted()) return;
+    renderError(_container?.querySelector('#evidence-panel'), err);
   }
 }
 
 async function runEvidence() {
+  if (!isMounted()) return;
   const cfg = readConfig();
-  setLoading(_container.querySelector('#evidence-panel'), c('scanning'));
+  setLoading(_container?.querySelector('#evidence-panel'), c('scanning'));
   try {
     _latest.evidence = await api.intelligence.scan({
       universe: cfg.universe,
@@ -494,19 +520,22 @@ async function runEvidence() {
       quota_guard: true,
       limit: 20,
     });
+    if (!isMounted()) return;
     renderEvidence(_latest.evidence.items || []);
     toast.success(c('scan'), localizedCount(_latest.evidence.items?.length || 0));
   } catch (err) {
-    renderError(_container.querySelector('#evidence-panel'), err);
+    if (!isMounted()) return;
+    renderError(_container?.querySelector('#evidence-panel'), err);
     toast.error(c('scan'), err.message);
   }
 }
 
 async function runDecision() {
+  if (!isMounted()) return;
   const cfg = readConfig();
-  setLoading(_container.querySelector('#decision-summary'), c('explaining'));
-  setLoading(_container.querySelector('#debate-summary'), c('explaining'));
-  setLoading(_container.querySelector('#risk-summary'), c('explaining'));
+  setLoading(_container?.querySelector('#decision-summary'), c('explaining'));
+  setLoading(_container?.querySelector('#debate-summary'), c('explaining'));
+  setLoading(_container?.querySelector('#risk-summary'), c('explaining'));
   try {
     const [decision, debatePayload, riskPayload] = await Promise.all([
       api.decision.explain({
@@ -522,31 +551,36 @@ async function runDecision() {
       api.trading.debateRuns(cfg.symbol, 6).catch(() => ({ debates: [] })),
       api.trading.riskBoard(cfg.symbol, 6).catch(() => ({ approvals: [], latest_approval: null })),
     ]);
+    if (!isMounted()) return;
     _latest.decision = decision;
     _latest.debate = debatePayload?.debates?.[0] || null;
     _latest.risk = riskPayload?.latest_approval || riskPayload?.approvals?.[0] || null;
     renderDecision(decision);
-    renderEvidence(decision.main_evidence || []);
+    renderEvidence(mergedEvidenceItems(decision.main_evidence || []));
     renderCounterEvidence(decision.counter_evidence || []);
     renderDebateSummary(_latest.debate);
     renderRiskSummary(_latest.risk);
     toast.success(c('explain'), actionLabel(decision.action || decision.mode || 'neutral'));
   } catch (err) {
-    renderError(_container.querySelector('#decision-summary'), err);
-    renderError(_container.querySelector('#debate-summary'), err);
-    renderError(_container.querySelector('#risk-summary'), err);
+    if (!isMounted()) return;
+    renderError(_container?.querySelector('#decision-summary'), err);
+    renderError(_container?.querySelector('#debate-summary'), err);
+    renderError(_container?.querySelector('#risk-summary'), err);
     toast.error(c('explain'), err.message);
   }
 }
 
 async function loadAudit() {
+  if (!isMounted()) return;
   const cfg = readConfig();
-  setLoading(_container.querySelector('#audit-panel'), c('auditLoading'));
+  setLoading(_container?.querySelector('#audit-panel'), c('auditLoading'));
   try {
     _latest.audit = await api.decision.auditTrail(cfg.symbol, 20);
+    if (!isMounted()) return;
     renderAudit(_latest.audit?.decisions || _latest.audit?.records || []);
   } catch (err) {
-    renderError(_container.querySelector('#audit-panel'), err);
+    if (!isMounted()) return;
+    renderError(_container?.querySelector('#audit-panel'), err);
   }
 }
 
@@ -557,13 +591,21 @@ function renderCached() {
   if (_latest.audit) renderAudit(_latest.audit.decisions || _latest.audit.records || []);
   renderDebateSummary(_latest.debate);
   renderRiskSummary(_latest.risk);
+  queueEvidenceLayoutSync();
 }
 
 function renderEvidence(items) {
-  _container.querySelector('#evidence-panel').innerHTML = renderEvidenceItems(items, { maxItems: 8, scroll: true });
+  if (!_container) return;
+  _container.querySelector('#evidence-panel').innerHTML = renderEvidenceItems(items, {
+    limit: null,
+    scroll: false,
+    listClass: 'decision-evidence-list',
+  });
+  queueEvidenceLayoutSync();
 }
 
 function renderDecision(report) {
+  if (!_container) return;
   const status = _container.querySelector('#decision-status');
   if (status) status.textContent = `${report.symbol || ''} / ${actionLabel(report.action || report.mode || 'shadow')}`;
   const verifier = report.verifier_checks || {};
@@ -610,21 +652,27 @@ function renderDecision(report) {
       <div class="workbench-report-text">${esc(report.simulation ? c('bridgeSimHint') : c('noEmbeddedSimulation'))}</div>
     </section>
   `;
+  queueEvidenceLayoutSync();
 }
 
 function renderCounterEvidence(items) {
+  if (!_container) return;
   const host = _container.querySelector('#counter-panel');
   if (!items?.length) {
     host.innerHTML = renderCounterReadyState();
+    queueEvidenceLayoutSync();
     return;
   }
   host.innerHTML = renderEvidenceItems(items, { maxItems: 5, scroll: true });
+  queueEvidenceLayoutSync();
 }
 
 function renderAudit(records) {
+  if (!_container) return;
   const host = _container.querySelector('#audit-panel');
   if (!records?.length) {
     host.innerHTML = renderAuditReadyState();
+    queueEvidenceLayoutSync();
     return;
   }
   host.innerHTML = `
@@ -637,13 +685,16 @@ function renderAudit(records) {
       `).join('')}
     </div>
   `;
+  queueEvidenceLayoutSync();
 }
 
 function renderDebateSummary(debate) {
+  if (!_container) return;
   const host = _container.querySelector('#debate-summary');
   if (!host) return;
   if (!debate) {
     host.innerHTML = renderDebateReadyState();
+    queueEvidenceLayoutSync();
     return;
   }
   host.innerHTML = `
@@ -662,13 +713,16 @@ function renderDebateSummary(debate) {
       <div class="workbench-kv-row"><span>${c('bearLabel')}</span><strong>${esc((debate.bear_thesis || '-').slice(0, 44))}</strong></div>
     </div>
   `;
+  queueEvidenceLayoutSync();
 }
 
 function renderRiskSummary(approval) {
+  if (!_container) return;
   const host = _container.querySelector('#risk-summary');
   if (!host) return;
   if (!approval) {
     host.innerHTML = renderRiskReadyState();
+    queueEvidenceLayoutSync();
     return;
   }
   const blocks = approval.hard_blocks || [];
@@ -692,6 +746,84 @@ function renderRiskSummary(approval) {
       `).join('')}
     </div>
   `;
+  queueEvidenceLayoutSync();
+}
+
+function installEvidenceAutoLayout() {
+  _evidenceResizeObserver?.disconnect();
+  _evidenceResizeObserver = null;
+  if (!_container || !window.ResizeObserver) return;
+  const leftStack = _container.querySelector('.decision-stack--left');
+  const rightStack = _container.querySelector('.decision-stack--right');
+  if (!leftStack || !rightStack) return;
+  _evidenceResizeObserver = new ResizeObserver(() => queueEvidenceLayoutSync());
+  _evidenceResizeObserver.observe(leftStack);
+  _evidenceResizeObserver.observe(rightStack);
+  queueEvidenceLayoutSync();
+}
+
+function queueEvidenceLayoutSync() {
+  if (!isMounted()) return;
+  if (_evidenceResizeFrame) cancelAnimationFrame(_evidenceResizeFrame);
+  _evidenceResizeFrame = requestAnimationFrame(() => {
+    _evidenceResizeFrame = 0;
+    syncEvidenceLayout();
+  });
+}
+
+function syncEvidenceLayout() {
+  if (!isMounted()) return;
+  const evidenceCard = _container.querySelector('.decision-evidence-card');
+  const evidencePanel = _container.querySelector('#evidence-panel');
+  const evidenceList = evidencePanel?.querySelector('.decision-evidence-list');
+  const rightStack = _container.querySelector('.decision-stack--right');
+  if (!evidenceCard || !evidencePanel || !rightStack) return;
+
+  evidenceCard.style.minHeight = '';
+  evidenceCard.style.height = '';
+  evidencePanel.style.minHeight = '';
+  evidencePanel.style.height = '';
+  if (evidenceList) {
+    evidenceList.style.maxHeight = '';
+    evidenceList.style.overflowY = '';
+  }
+
+  if (window.innerWidth <= 1100 || !evidenceList) return;
+
+  const cardRect = evidenceCard.getBoundingClientRect();
+  const panelRect = evidencePanel.getBoundingClientRect();
+  const rightRect = rightStack.getBoundingClientRect();
+  const viewportBottom = window.innerHeight - 24;
+  const targetBottom = Math.max(cardRect.top + 320, Math.min(rightRect.bottom, viewportBottom));
+  const availableCardHeight = Math.max(320, Math.round(targetBottom - cardRect.top));
+  const availablePanelHeight = Math.max(240, Math.round(targetBottom - panelRect.top));
+  const availableListHeight = Math.max(240, Math.round(targetBottom - panelRect.top - 8));
+
+  evidenceCard.style.minHeight = `${availableCardHeight}px`;
+  evidenceCard.style.height = `${availableCardHeight}px`;
+  evidencePanel.style.minHeight = `${availablePanelHeight}px`;
+  evidencePanel.style.height = `${availablePanelHeight}px`;
+
+  if (evidenceList.scrollHeight > availableListHeight + 4) {
+    evidenceList.style.maxHeight = `${availableListHeight}px`;
+    evidenceList.style.overflowY = 'auto';
+  }
+}
+
+function mergedEvidenceItems(decisionEvidence = [], fallbackEvidence = _latest?.evidence?.items || []) {
+  const primary = Array.isArray(fallbackEvidence) && fallbackEvidence.length ? fallbackEvidence : decisionEvidence;
+  const secondary = primary === fallbackEvidence ? decisionEvidence : fallbackEvidence;
+  const seen = new Set();
+  const merged = [];
+  [primary, secondary].forEach((bucket) => {
+    (Array.isArray(bucket) ? bucket : []).forEach((item, index) => {
+      const key = item?.item_id || item?.evidence_id || item?.title || `${item?.provider || 'item'}-${index}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(item);
+    });
+  });
+  return merged;
 }
 
 function renderDecisionReadyState() {
