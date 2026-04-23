@@ -1,1 +1,1 @@
-"""Utility scripts exposed as importable modules for tests and local tooling."""
+"""Runtime helper scripts for product and acceptance workflows."""

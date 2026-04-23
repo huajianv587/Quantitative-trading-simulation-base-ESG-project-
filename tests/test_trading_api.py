@@ -42,6 +42,35 @@ class _TradingStub:
                 "requires_risk_approval": True,
             }
         ]
+        self._sync_policy_runtime()
+
+    def _sync_policy_runtime(self):
+        requested_mode = str(self._policy.get("execution_mode") or "paper").lower()
+        paper_ready = True
+        live_available = False
+        live_ready = False
+        block_reason = None
+        next_actions = []
+        if requested_mode == "live" and not live_available:
+            block_reason = "live_credentials_missing"
+            next_actions = ["add_live_alpaca_keys", "switch_to_paper_mode"]
+        effective_mode = "live" if requested_mode == "live" and live_ready else "paper"
+        warnings = []
+        if block_reason:
+            warnings.append("live_mode_selected")
+            warnings.append(block_reason)
+        self._policy.update(
+            {
+                "requested_mode": requested_mode,
+                "effective_mode": effective_mode,
+                "paper_ready": paper_ready,
+                "live_ready": live_ready,
+                "live_available": live_available,
+                "block_reason": block_reason,
+                "next_actions": next_actions,
+                "warnings": warnings,
+            }
+        )
 
     def execution_intent_contract(self):
         return {
@@ -170,6 +199,34 @@ class _TradingStub:
         }
 
     def run_trading_cycle(self, **kwargs):
+        if self._policy["requested_mode"] == "live" and self._policy["block_reason"]:
+            return {
+                "bundle_id": "bundle-live-blocked",
+                "symbol": kwargs["symbol"],
+                "execution": {
+                    **self.execution_result_contract(),
+                    "status": "blocked",
+                    "submitted": False,
+                    "execution_mode": self._policy["effective_mode"],
+                    "warnings": [self._policy["block_reason"]],
+                    "policy_gate_warnings": [self._policy["block_reason"]],
+                    "next_action": self._policy["next_actions"][0],
+                },
+                "execution_intent": self.execution_intent_contract(),
+                "execution_result": {
+                    **self.execution_result_contract(),
+                    "status": "blocked",
+                    "submitted": False,
+                    "execution_mode": self._policy["effective_mode"],
+                    "warnings": [self._policy["block_reason"]],
+                    "policy_gate_warnings": [self._policy["block_reason"]],
+                    "next_action": self._policy["next_actions"][0],
+                },
+                "execution_path": self.execution_path_status(),
+                "autopilot_policy": self._policy,
+                "policy_gate_warnings": [self._policy["block_reason"]],
+                "next_actions": self._policy["next_actions"],
+            }
         execution_result = self.execution_result_contract()
         return {
             "bundle_id": "bundle-1",
@@ -216,10 +273,15 @@ class _TradingStub:
 
     def save_autopilot_policy(self, payload):
         self._policy.update(payload)
+        self._sync_policy_runtime()
         return self._policy
 
     def arm_autopilot(self, *, armed):
-        self._policy["armed"] = armed
+        if armed and self._policy["requested_mode"] == "live" and self._policy["block_reason"]:
+            self._policy["armed"] = False
+        else:
+            self._policy["armed"] = armed
+        self._sync_policy_runtime()
         return self._policy
 
     def list_strategies(self):
@@ -236,17 +298,24 @@ class _TradingStub:
     def execution_path_status(self):
         return {
             "generated_at": "2026-04-20T12:00:00Z",
-            "mode": "paper",
+            "mode": self._policy["effective_mode"],
+            "requested_mode": self._policy["requested_mode"],
+            "effective_mode": self._policy["effective_mode"],
+            "paper_ready": self._policy["paper_ready"],
+            "live_ready": self._policy["live_ready"],
+            "live_available": self._policy["live_available"],
+            "block_reason": self._policy["block_reason"],
+            "next_actions": self._policy["next_actions"],
             "armed": self._policy["armed"],
             "daily_budget_cap": self._policy["daily_budget_cap"],
             "budget_remaining": self._policy["daily_budget_cap"],
             "judge_passed": True,
             "risk_passed": True,
             "kill_switch": False,
-            "current_stage": "idle",
+            "current_stage": "blocked" if self._policy["block_reason"] else "idle",
             "stages": [{"stage": "scan", "status": "ready"}, {"stage": "judge", "status": "passed"}, {"stage": "risk", "status": "passed"}, {"stage": "submit", "status": "ready"}],
             "lineage": ["scan", "factors", "debate", "judge", "risk", "submit", "monitor", "review"],
-            "warnings": [],
+            "warnings": [self._policy["block_reason"]] if self._policy["block_reason"] else [],
         }
 
     def dashboard_state(self, provider="auto"):
@@ -363,6 +432,10 @@ def test_autopilot_strategy_and_dashboard_routes(monkeypatch):
     policy = client.get("/api/v1/trading/autopilot/policy")
     assert policy.status_code == 200
     assert policy.json()["policy_id"] == "autopilot-default"
+    assert policy.json()["requested_mode"] == "paper"
+    assert policy.json()["effective_mode"] == "paper"
+    assert policy.json()["paper_ready"] is True
+    assert policy.json()["live_available"] is False
 
     saved = client.post("/api/v1/trading/autopilot/policy", json={"daily_budget_cap": 12000, "auto_submit_enabled": True})
     assert saved.status_code == 200
@@ -394,6 +467,8 @@ def test_autopilot_strategy_and_dashboard_routes(monkeypatch):
     execution_path = client.get("/api/v1/trading/execution-path/status")
     assert execution_path.status_code == 200
     assert execution_path.json()["mode"] == "paper"
+    assert execution_path.json()["requested_mode"] == "paper"
+    assert execution_path.json()["effective_mode"] == "paper"
 
     dashboard_state = client.get("/api/v1/trading/dashboard/state?provider=alpaca")
     assert dashboard_state.status_code == 200
@@ -407,3 +482,30 @@ def test_autopilot_strategy_and_dashboard_routes(monkeypatch):
     assert fusion.json()["execution_intent_contract"]["intent_id"] == "intent-execution-sample"
     assert fusion.json()["execution_result_contract"]["status"] == "submitted"
     assert fusion.json()["factor_pipeline_manifest"]["manifest_id"] == "factor-pipeline-current"
+
+
+def test_live_mode_is_saved_but_execution_stays_blocked_until_ready(monkeypatch):
+    stub = _TradingStub()
+    monkeypatch.setattr(trading_router, "_trading_service", lambda: stub)
+    client = TestClient(main_module.app)
+
+    saved = client.post("/api/v1/trading/autopilot/policy", json={"execution_mode": "live"})
+    assert saved.status_code == 200
+    payload = saved.json()
+    assert payload["execution_mode"] == "live"
+    assert payload["requested_mode"] == "live"
+    assert payload["effective_mode"] == "paper"
+    assert payload["live_ready"] is False
+    assert payload["live_available"] is False
+    assert payload["block_reason"] == "live_credentials_missing"
+
+    arm = client.post("/api/v1/trading/autopilot/arm", json={"armed": True})
+    assert arm.status_code == 200
+    assert arm.json()["armed"] is False
+    assert arm.json()["block_reason"] == "live_credentials_missing"
+
+    cycle = client.post("/api/v1/trading/cycle/run", json={"symbol": "AAPL"})
+    assert cycle.status_code == 200
+    assert cycle.json()["execution"]["submitted"] is False
+    assert cycle.json()["execution"]["status"] == "blocked"
+    assert cycle.json()["execution"]["policy_gate_warnings"] == ["live_credentials_missing"]

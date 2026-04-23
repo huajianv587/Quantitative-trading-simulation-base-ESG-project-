@@ -1,8 +1,7 @@
 """
-Auth router - register / login / reset-password
-- Local SQLite is the primary development auth store.
-- Supabase mirror is best-effort and optional.
-- Reset flow keeps the existing dev-token convenience for local testing.
+Auth router - register / login / reset-password.
+Primary auth backend is configurable; real-mode acceptance targets Supabase.
+Local/dev runtimes can still expose a dev reset token when explicitly allowed.
 """
 from __future__ import annotations
 
@@ -12,6 +11,7 @@ import os
 import secrets
 import sys
 import time
+from urllib.parse import parse_qs, urlparse
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -25,7 +25,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "esg-quant-secret-change-in-prod-2026")
 _TOKEN_TTL = 86400 * 7
 _RESET_TTL = 3600
-_repo = get_auth_repository()
 
 
 def _hash_password(password: str) -> str:
@@ -88,9 +87,30 @@ class ResetConfirmPayload(BaseModel):
     new_password: str
 
 
+def _repo():
+    return get_auth_repository()
+
+
+def _extract_reset_token(raw: str) -> str:
+    token = (raw or "").strip()
+    if not token:
+        return ""
+    if "://" not in token:
+        return token
+    parsed = urlparse(token)
+    params = parse_qs(parsed.query or "")
+    if params.get("token"):
+        return str(params["token"][0]).strip()
+    if parsed.fragment and "token=" in parsed.fragment:
+        fragment_params = parse_qs(parsed.fragment.split("?", 1)[-1])
+        if fragment_params.get("token"):
+            return str(fragment_params["token"][0]).strip()
+    return token
+
+
 @router.get("/status")
 def auth_status():
-    return _repo.status()
+    return _repo().status()
 
 
 @router.post("/register")
@@ -100,12 +120,21 @@ def register(req: RegisterRequest):
         raise HTTPException(status_code=400, detail="Invalid email address")
     if len(req.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    if _repo.get_user_by_email(email):
-        _repo.record_auth_audit(event_type="register", email=email, success=False, detail="duplicate_email")
+    repo = _repo()
+    if repo.get_user_by_email(email):
+        repo.record_auth_audit(event_type="register", email=email, success=False, detail="duplicate_email")
         raise HTTPException(status_code=409, detail="Email already registered")
 
-    user = _repo.register_user(email=email, name=req.name, password_hash=_hash_password(req.password))
-    _repo.record_auth_audit(event_type="register", email=email, user_id=user["id"], success=True, detail="sqlite_primary")
+    user = repo.register_user(email=email, name=req.name, password_hash=_hash_password(req.password))
+    repo_status = repo.status()
+    backend_detail = repo_status.get("effective_backend", repo_status.get("backend", "unknown"))
+    repo.record_auth_audit(
+        event_type="register",
+        email=email,
+        user_id=user["id"],
+        success=True,
+        detail=f"{backend_detail}_primary",
+    )
     token = _make_token(user["id"])
     return {
         "token": token,
@@ -122,13 +151,14 @@ def register(req: RegisterRequest):
 @router.post("/login")
 def login(req: LoginRequest):
     email = req.email.strip().lower()
-    user = _repo.get_user_by_email(email)
+    repo = _repo()
+    user = repo.get_user_by_email(email)
     if not user or not _verify_password(req.password, str(user["password_hash"])):
-        _repo.record_auth_audit(event_type="login", email=email, success=False, detail="invalid_credentials")
+        repo.record_auth_audit(event_type="login", email=email, success=False, detail="invalid_credentials")
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = _make_token(str(user["id"]))
-    _repo.record_auth_audit(event_type="login", email=email, user_id=str(user["id"]), success=True, detail="token_issued")
+    repo.record_auth_audit(event_type="login", email=email, user_id=str(user["id"]), success=True, detail="token_issued")
     return {
         "token": token,
         "user": {
@@ -143,13 +173,14 @@ def login(req: LoginRequest):
 @router.post("/reset-password/request")
 def reset_request(payload: ResetRequestPayload):
     email = payload.email.strip().lower()
-    user = _repo.get_user_by_email(email)
+    repo = _repo()
+    user = repo.get_user_by_email(email)
     if not user:
-        _repo.record_auth_audit(event_type="reset_request", email=email, success=True, detail="masked_missing_user")
+        repo.record_auth_audit(event_type="reset_request", email=email, success=True, detail="masked_missing_user")
         return {"message": "If that email is registered, a reset link has been sent."}
 
     reset_token = secrets.token_urlsafe(32)
-    _repo.create_reset_token(token=reset_token, email=email, expires_at=int(time.time()) + _RESET_TTL)
+    repo.create_reset_token(token=reset_token, email=email, expires_at=int(time.time()) + _RESET_TTL)
 
     is_dev = os.getenv("APP_MODE", "dev").lower() in ("dev", "development", "local") or "pytest" in sys.modules
     response: dict[str, Any] = {"message": "If that email is registered, a reset link has been sent."}
@@ -180,7 +211,7 @@ def reset_request(payload: ResetRequestPayload):
     if is_dev:
         response["_dev_token"] = reset_token
 
-    _repo.record_auth_audit(event_type="reset_request", email=email, user_id=str(user["id"]), success=True, detail="token_created")
+    repo.record_auth_audit(event_type="reset_request", email=email, user_id=str(user["id"]), success=True, detail="token_created")
     return response
 
 
@@ -189,24 +220,26 @@ def reset_confirm(payload: ResetConfirmPayload):
     if len(payload.new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    token_record = _repo.get_reset_token(payload.token)
+    repo = _repo()
+    resolved_token = _extract_reset_token(payload.token)
+    token_record = repo.get_reset_token(resolved_token)
     if not token_record:
-        _repo.record_auth_audit(event_type="reset_confirm", success=False, detail="invalid_token")
+        repo.record_auth_audit(event_type="reset_confirm", success=False, detail="invalid_token")
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
     if int(token_record.get("used") or 0):
-        _repo.record_auth_audit(event_type="reset_confirm", email=str(token_record["email"]), success=False, detail="token_used")
+        repo.record_auth_audit(event_type="reset_confirm", email=str(token_record["email"]), success=False, detail="token_used")
         raise HTTPException(status_code=400, detail="Reset token already used")
     if int(time.time()) > int(token_record.get("expires_at") or 0):
-        _repo.record_auth_audit(event_type="reset_confirm", email=str(token_record["email"]), success=False, detail="token_expired")
+        repo.record_auth_audit(event_type="reset_confirm", email=str(token_record["email"]), success=False, detail="token_expired")
         raise HTTPException(status_code=400, detail="Reset token has expired")
 
-    updated = _repo.update_password(email=str(token_record["email"]), password_hash=_hash_password(payload.new_password))
+    updated = repo.update_password(email=str(token_record["email"]), password_hash=_hash_password(payload.new_password))
     if not updated:
-        _repo.record_auth_audit(event_type="reset_confirm", email=str(token_record["email"]), success=False, detail="user_missing")
+        repo.record_auth_audit(event_type="reset_confirm", email=str(token_record["email"]), success=False, detail="user_missing")
         raise HTTPException(status_code=404, detail="User not found")
 
-    _repo.consume_reset_token(payload.token)
-    _repo.record_auth_audit(
+    repo.consume_reset_token(resolved_token)
+    repo.record_auth_audit(
         event_type="reset_confirm",
         email=str(updated["email"]),
         user_id=str(updated["id"]),
@@ -221,7 +254,7 @@ def verify_token(token: str):
     user_id = _verify_token(token)
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    user = _repo.get_user_by_id(user_id)
+    user = _repo().get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {

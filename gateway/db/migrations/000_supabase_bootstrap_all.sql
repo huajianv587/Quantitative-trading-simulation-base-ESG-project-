@@ -402,7 +402,12 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
     started_at   TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     events_found INT DEFAULT 0,
+    events_saved INT DEFAULT 0,
     error_msg    TEXT,
+    source_summary JSONB DEFAULT '{}'::jsonb,
+    blocked_reason TEXT,
+    next_actions JSONB DEFAULT '[]'::jsonb,
+    checkpoint_state JSONB DEFAULT '{}'::jsonb,
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -411,6 +416,26 @@ CREATE INDEX IF NOT EXISTS idx_job_status
 
 CREATE INDEX IF NOT EXISTS idx_job_created
     ON scan_jobs (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS scan_source_state (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    lane VARCHAR(50) NOT NULL,
+    source_key VARCHAR(100) NOT NULL,
+    company_key VARCHAR(255) NOT NULL,
+    checkpoint_value JSONB DEFAULT '{}'::jsonb,
+    last_status VARCHAR(30) DEFAULT 'idle',
+    blocked_reason TEXT,
+    events_found INT DEFAULT 0,
+    events_saved INT DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (lane, source_key, company_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_source_state_lane_source
+    ON scan_source_state (lane, source_key);
+
+CREATE INDEX IF NOT EXISTS idx_scan_source_state_updated_at
+    ON scan_source_state (updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS notification_logs (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -455,6 +480,11 @@ ALTER TABLE user_preferences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE in_app_notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE event_user_matches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scan_source_state ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow all for scan source state" ON scan_source_state;
+CREATE POLICY "Allow all for scan source state"
+    ON scan_source_state FOR ALL USING (true) WITH CHECK (true);
 
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at
@@ -469,6 +499,11 @@ CREATE TRIGGER update_user_holdings_updated_at
 DROP TRIGGER IF EXISTS update_user_preferences_updated_at ON user_preferences;
 CREATE TRIGGER update_user_preferences_updated_at
     BEFORE UPDATE ON user_preferences
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_scan_source_state_updated_at ON scan_source_state;
+CREATE TRIGGER update_scan_source_state_updated_at
+    BEFORE UPDATE ON scan_source_state
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ---------------------------------------------------------------------------
@@ -594,5 +629,112 @@ UPDATE esg_events
 SET event_type = LOWER(event_type)
 WHERE event_type IS NOT NULL
   AND event_type <> LOWER(event_type);
+
+-- ---------------------------------------------------------------------------
+-- 007_add_auth_runtime_tables.sql
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS user_id VARCHAR(255);
+
+UPDATE users
+SET user_id = COALESCE(user_id, id::text)
+WHERE user_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_id_unique
+    ON users (user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+    ON users (LOWER(email));
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    used_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_email
+    ON password_reset_tokens (email);
+
+CREATE TABLE IF NOT EXISTS auth_audit (
+    audit_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    email TEXT,
+    user_id TEXT,
+    success INTEGER NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_audit_event_created
+    ON auth_audit (event_type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_auth_audit_email_created
+    ON auth_audit (email, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS mailbox_delivery_logs (
+    log_id TEXT PRIMARY KEY,
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    status TEXT NOT NULL,
+    detail TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailbox_delivery_logs_recipient_created
+    ON mailbox_delivery_logs (recipient, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ui_audit_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    target TEXT,
+    before_json TEXT,
+    after_json TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ui_audit_events_type_created
+    ON ui_audit_events (event_type, created_at DESC);
+
+ALTER TABLE password_reset_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE auth_audit ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mailbox_delivery_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ui_audit_events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow all for auth users" ON users;
+CREATE POLICY "Allow all for auth users"
+    ON users FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow all for password reset tokens" ON password_reset_tokens;
+CREATE POLICY "Allow all for password reset tokens"
+    ON password_reset_tokens FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow all for auth audit" ON auth_audit;
+CREATE POLICY "Allow all for auth audit"
+    ON auth_audit FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow all for mailbox delivery logs" ON mailbox_delivery_logs;
+CREATE POLICY "Allow all for mailbox delivery logs"
+    ON mailbox_delivery_logs FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow all for ui audit events" ON ui_audit_events;
+CREATE POLICY "Allow all for ui audit events"
+    ON ui_audit_events FOR ALL USING (true) WITH CHECK (true);
+
+DROP TRIGGER IF EXISTS update_auth_users_updated_at ON users;
+CREATE TRIGGER update_auth_users_updated_at
+    BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 COMMIT;

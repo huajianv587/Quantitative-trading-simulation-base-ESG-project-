@@ -1,604 +1,553 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
-import { getLang, getLocale, onLangChange, translateLoose } from '../i18n.js?v=8';
+import { getLang, getLocale, onLangChange } from '../i18n.js?v=8';
+import {
+  emptyState,
+  esc,
+  metric,
+  miniMetric,
+  renderError,
+  setLoading,
+  splitTokens,
+  statusBadge,
+} from './workbench-utils.js?v=8';
 
-let _pollTimer = null;
-let _currentContainer = null;
+let _container = null;
 let _langCleanup = null;
-let _pipelineAnimId = null;
-let _pipelineParticles = [];
+let _pollTimer = null;
+let _activeJobId = '';
+let _lastRegistry = null;
+let _lastQuota = null;
+let _lastRuns = null;
+let _lastJob = null;
 
-const isLight = () => document.body.classList.contains('light');
-const PIPE_BG = () => isLight() ? '#F0F4FF' : '#04040C';
-const PIPE_DOT = () => isLight() ? 'rgba(0,168,85,0.10)' : 'rgba(0,255,136,0.07)';
-
-const PIPELINE_NODES = [
-  { id: 'raw',      label: 'Raw Ingestion',     icon: '⬇',  status: 'live',    x: 40,  y: 120 },
-  { id: 'clean',    label: 'Data Cleaning',      icon: '🧹', status: 'live',    x: 160, y: 120 },
-  { id: 'enrich',   label: 'ESG Enrichment',     icon: '🌿', status: 'live',    x: 280, y: 120 },
-  { id: 'feature',  label: 'Feature Store',      icon: '📐', status: 'live',    x: 400, y: 120 },
-  { id: 'model',    label: 'Model Input',         icon: '🧠', status: 'live',    x: 520, y: 120 },
-  { id: 'signal',   label: 'Signal Output',       icon: '📡', status: 'live',    x: 640, y: 120 },
-];
-
-const SOURCES = [
-  { id: 'esg_news',    name: 'ESG News Feed',        type: 'Stream', freshness: '2min',   records: '14.2K', status: 'live',    lag: '< 1min' },
-  { id: 'price_data',  name: 'Price / OHLCV',         type: 'Batch',  freshness: '1min',   records: '8.4M',  status: 'live',    lag: '< 30s' },
-  { id: 'company_snap',name: 'Company Snapshots',      type: 'Batch',  freshness: '4 hrs',  records: '142K',  status: 'live',    lag: '< 5min' },
-  { id: 'esg_scores',  name: 'ESG Scores (Refinitiv)', type: 'Daily',  freshness: '23 hrs', records: '3.1K',  status: 'stale',   lag: '2 hrs' },
-  { id: 'filings',     name: 'SEC Filings',            type: 'Event',  freshness: '6 hrs',  records: '287K',  status: 'live',    lag: '< 1hr' },
-  { id: 'macro',       name: 'Macro Indicators',       type: 'Daily',  freshness: '18 hrs', records: '12K',   status: 'live',    lag: '< 1hr' },
-  { id: 'sentiment',   name: 'Sentiment NLP',          type: 'Stream', freshness: '5min',   records: '91K',   status: 'live',    lag: '< 2min' },
-  { id: 'alt_data',    name: 'Alternative Data',        type: 'Batch',  freshness: '2 hrs',  records: '520K',  status: 'warning', lag: '45min' },
-];
-
-const SOURCE_TYPE_ZH = {
-  Stream: '流式',
-  Batch: '批处理',
-  Event: '事件',
-  Daily: '每日',
+const COPY = {
+  en: {
+    title: 'Data Management',
+    subtitle: 'Source registry, sync jobs, quota guard, and ingestion runs.',
+    syncTitle: 'Sync Control',
+    syncSub: 'Start a real company snapshot refresh job and monitor it live.',
+    companies: 'Companies / Tickers',
+    companiesPlaceholder: 'Tesla\nMicrosoft\nNVIDIA',
+    sources: 'Provider focus (optional)',
+    sourcesPlaceholder: 'alpaca_market, sec_edgar, local_esg',
+    forceRefresh: 'Force refresh',
+    startSync: 'Start Sync',
+    refreshAll: 'Refresh All',
+    syncing: 'Starting...',
+    activeJob: 'Active Job',
+    noJobs: 'No active sync job yet.',
+    registry: 'Source Registry',
+    registrySub: 'Real provider configuration, quota posture, and capabilities.',
+    runs: 'Recent Ingestion Runs',
+    runsSub: 'Latest connector and evidence runs stored by the backend.',
+    metrics: 'Source Health',
+    metricsSub: 'Live summary of provider readiness and quota guard.',
+    configured: 'Configured',
+    providers: 'Providers',
+    quota: 'Quota Guard',
+    runsCount: 'Recent Runs',
+    protected: 'protected',
+    disabled: 'disabled',
+    nextAction: 'Next Action',
+    nextActionHint: 'Start a sync job or inspect a provider row to review readiness and fallback posture.',
+    warning: 'Warning',
+    noRuns: 'No connector runs are available yet.',
+    syncStarted: 'Sync started',
+    syncComplete: 'Sync complete',
+    syncErrors: 'Sync completed with errors',
+    syncFailed: 'Sync failed',
+    syncErrorTitle: 'Sync request failed',
+    syncErrorDetail: 'The backend rejected the sync request. Check service readiness and admin credentials.',
+    updatedAt: 'Updated',
+    total: 'Total',
+    synced: 'Synced',
+    failed: 'Failed',
+    runId: 'Run ID',
+    mode: 'Mode',
+    scope: 'Scope',
+    symbolCount: 'Symbols',
+    items: 'Items',
+    status: 'Status',
+    sourceChain: 'Capabilities',
+    refreshed: 'Data source views refreshed',
+    missingCompanies: 'Enter at least one company or ticker',
+    staleRefreshing: 'Showing the latest saved state while refreshing...',
+  },
+  zh: {
+    title: '数据管理',
+    subtitle: '真实数据源注册表、同步作业、配额保护与摄取运行记录。',
+    syncTitle: '同步控制',
+    syncSub: '启动真实公司快照刷新作业，并实时查看进度。',
+    companies: '公司 / 股票代码',
+    companiesPlaceholder: 'Tesla\nMicrosoft\nNVIDIA',
+    sources: '数据源焦点（可选）',
+    sourcesPlaceholder: 'alpaca_market, sec_edgar, local_esg',
+    forceRefresh: '强制刷新',
+    startSync: '开始同步',
+    refreshAll: '刷新全部',
+    syncing: '正在启动...',
+    activeJob: '当前作业',
+    noJobs: '还没有活动中的同步作业。',
+    registry: '数据源注册表',
+    registrySub: '真实 provider 配置、配额状态与能力说明。',
+    runs: '最近摄取运行',
+    runsSub: '后端已保存的连接器与证据运行记录。',
+    metrics: '数据源健康概览',
+    metricsSub: 'Provider readiness 与配额保护的实时摘要。',
+    configured: '已配置',
+    providers: '数据源',
+    quota: '配额保护',
+    runsCount: '最近运行',
+    protected: '已保护',
+    disabled: '已关闭',
+    nextAction: '下一步动作',
+    nextActionHint: '启动同步作业，或检查数据源行来确认 readiness 与 fallback 姿态。',
+    warning: '警告',
+    noRuns: '还没有可显示的连接器运行记录。',
+    syncStarted: '同步已启动',
+    syncComplete: '同步完成',
+    syncErrors: '同步完成，但存在错误',
+    syncFailed: '同步失败',
+    syncErrorTitle: '同步请求失败',
+    syncErrorDetail: '后端拒绝了同步请求。请检查服务 readiness 与管理员凭证。',
+    updatedAt: '更新时间',
+    total: '总数',
+    synced: '成功',
+    failed: '失败',
+    runId: '运行 ID',
+    mode: '模式',
+    scope: '范围',
+    symbolCount: '标的数',
+    items: '条目',
+    status: '状态',
+    sourceChain: '能力',
+    refreshed: '数据源视图已刷新',
+    missingCompanies: '请至少输入一个公司或股票代码',
+    staleRefreshing: '先展示最近保存的状态，再在后台刷新...',
+  },
 };
 
-function formatUnitSpan(value) {
-  const raw = String(value || '').trim();
-  if (getLang() !== 'zh') return raw;
-  return raw
-    .replace(/hrs?/g, '小时')
-    .replace(/hr/g, '小时')
-    .replace(/min/g, '分钟')
-    .replace(/s\b/g, '秒');
+function c(key) {
+  const lang = getLang() === 'zh' ? 'zh' : 'en';
+  return COPY[lang][key] || COPY.en[key] || key;
 }
 
-function formatFreshness(value) {
-  return getLang() === 'zh' ? `${formatUnitSpan(value)} 前` : `${value} ago`;
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
 }
 
-function formatLag(value) {
-  return getLang() === 'zh' ? `延迟 ${formatUnitSpan(value)}` : `lag ${value}`;
+function parseCompanies(raw) {
+  return splitTokens(raw || '', { delimiters: /[\n,]+/ });
 }
 
-function formatRecordsMeta(type, records) {
-  return getLang() === 'zh'
-    ? `${SOURCE_TYPE_ZH[type] || translateLoose(type)} · ${records} 条记录`
-    : `${type} · ${records} records`;
+function parseProviders(raw) {
+  return splitTokens(raw || '', { delimiters: /[\n,\s]+/ });
 }
 
-export function render(container) {
-  if (_pollTimer) window.clearInterval(_pollTimer);
-  if (_pipelineAnimId) { cancelAnimationFrame(_pipelineAnimId); _pipelineAnimId = null; }
-  _currentContainer = container;
-  container.innerHTML = buildShell();
-  bindEvents(container);
-  drawPipelineFlow(container);
-  renderFreshness(container);
-  _langCleanup ||= onLangChange(() => {
-    if (_currentContainer?.isConnected) render(_currentContainer);
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function formatTimestamp(value) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString(getLocale(), {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
-export function destroy() {
-  if (_pollTimer) window.clearInterval(_pollTimer);
-  if (_pipelineAnimId) { cancelAnimationFrame(_pipelineAnimId); _pipelineAnimId = null; }
-  _pollTimer = null;
-  _currentContainer = null;
-  _pipelineParticles = [];
-  _langCleanup?.();
-  _langCleanup = null;
-}
-
-/* ── Shell ── */
 function buildShell() {
   return `
-  <div class="page-header">
-    <div>
-      <div class="page-header__title">Data Management</div>
-      <div class="page-header__sub">Pipeline Monitor · Data Freshness · Sync Control · Ingestion Logs</div>
-    </div>
-    <div class="page-header__actions">
-      <button class="btn btn-ghost btn-sm" id="btn-refresh-all">↺ Refresh All</button>
-    </div>
-  </div>
-
-  <!-- Pipeline Flow Visualization -->
-  <div class="card" style="margin-bottom:20px">
-    <div class="card-header">
-      <span class="card-title">Data Pipeline</span>
-      <div style="display:flex;align-items:center;gap:8px">
-        <div class="live-dot"></div>
-        <span style="font-size:10px;font-family:var(--f-mono);color:var(--green)">ALL SYSTEMS NOMINAL</span>
+    <div class="page-header">
+      <div>
+        <div class="page-header__title">${c('title')}</div>
+        <div class="page-header__sub">${c('subtitle')}</div>
+      </div>
+      <div class="page-header__actions">
+        <button class="btn btn-ghost btn-sm" id="btn-refresh-all">${c('refreshAll')}</button>
       </div>
     </div>
-    <div class="pipeline-canvas-wrap" style="padding:8px 16px 16px">
-      <canvas id="pipeline-canvas" height="160" style="width:100%;cursor:pointer"></canvas>
-    </div>
-  </div>
 
-  <div class="grid-sidebar" style="align-items:start">
-
-    <!-- LEFT: Sync Control -->
-    <div style="display:flex;flex-direction:column;gap:14px">
-
-      <div class="run-panel">
-        <div class="run-panel__header">
-          <div class="run-panel__title">Sync Control</div>
-          <div class="run-panel__sub">Trigger company snapshot refresh</div>
-        </div>
-        <div class="run-panel__body">
-          <div class="form-group">
-            <label class="form-label">Companies / Tickers</label>
-            <textarea class="form-textarea" id="sync-companies" rows="5" placeholder="Tesla&#10;Microsoft&#10;NVIDIA">Tesla
+    <div class="grid-sidebar" style="align-items:start">
+      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+        <section class="run-panel">
+          <div class="run-panel__header">
+            <div class="run-panel__title">${c('syncTitle')}</div>
+            <div class="run-panel__sub">${c('syncSub')}</div>
+          </div>
+          <div class="run-panel__body">
+            <div class="form-group">
+              <label class="form-label">${c('companies')}</label>
+              <textarea class="form-textarea" id="sync-companies" rows="5" placeholder="${c('companiesPlaceholder')}">Tesla
 Microsoft
 NVIDIA</textarea>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Data Sources</label>
-            <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px" id="source-select-chips">
-              ${['All Sources','ESG Scores','Price Data','Filings','Sentiment'].map((s, i) => `
-                <button class="filter-chip${i===0?' active':''}" data-src="${s}">${s}</button>
-              `).join('')}
             </div>
-          </div>
-          <div class="form-row">
-            <div class="form-group" style="flex-direction:row;align-items:center;gap:10px">
-              <label class="form-label" style="margin:0;flex:1">Force Refresh</label>
+            <div class="form-group">
+              <label class="form-label">${c('sources')}</label>
+              <input class="form-input" id="sync-sources" placeholder="${c('sourcesPlaceholder')}" value="alpaca_market, sec_edgar, local_esg">
+            </div>
+            <div class="form-group" style="flex-direction:row;align-items:center;justify-content:space-between">
+              <label class="form-label" style="margin:0">${c('forceRefresh')}</label>
               <label class="toggle">
                 <input type="checkbox" id="sync-force">
                 <span class="toggle-track"></span>
               </label>
             </div>
-            <div class="form-group" style="flex-direction:row;align-items:center;gap:10px">
-              <label class="form-label" style="margin:0;flex:1">Priority</label>
-              <label class="toggle">
-                <input type="checkbox" id="sync-priority">
-                <span class="toggle-track"></span>
-              </label>
+            <div class="workbench-kv-list" style="margin-top:8px">
+              <div class="workbench-kv-row">
+                <span>${c('nextAction')}</span>
+                <strong>${c('nextActionHint')}</strong>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="run-panel__foot">
-          <button class="btn btn-primary btn-lg" id="sync-btn" style="flex:1">▶ Start Sync</button>
-        </div>
+          <div class="run-panel__foot workbench-action-grid">
+            <button class="btn btn-primary btn-lg workbench-action-btn" id="sync-btn">${c('startSync')}</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <span class="card-title">${c('activeJob')}</span>
+            <span id="job-count" style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)"></span>
+          </div>
+          <div class="card-body" id="sync-body">
+            ${emptyState(c('noJobs'))}
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <span class="card-title">${c('runs')}</span>
+            <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${c('runsSub')}</span>
+          </div>
+          <div class="card-body" id="runs-body">
+            ${emptyState(c('noRuns'))}
+          </div>
+        </section>
       </div>
 
-      <!-- Active Jobs -->
-      <div class="card">
-        <div class="card-header"><span class="card-title">Active Jobs</span>
-          <span id="job-count" style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)"></span>
-        </div>
-        <div id="sync-body" style="display:flex;flex-direction:column;gap:0">
-          <div style="padding:14px 16px;color:var(--text-dim);font-size:11px">No active sync jobs</div>
-        </div>
+      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+        <section class="card">
+          <div class="card-header">
+            <span class="card-title">${c('metrics')}</span>
+            <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${c('metricsSub')}</span>
+          </div>
+          <div class="card-body" id="metrics-body">
+            <div class="workbench-metric-grid">
+              ${metric(c('providers'), '-', '')}
+              ${metric(c('configured'), '-', '')}
+              ${metric(c('quota'), '-', '')}
+              ${metric(c('runsCount'), '-', '')}
+            </div>
+          </div>
+        </section>
+
+        <section class="run-panel connector-registry-panel">
+          <div class="run-panel__header">
+            <div class="run-panel__title">${c('registry')}</div>
+            <div class="run-panel__sub">${c('registrySub')}</div>
+          </div>
+          <div class="run-panel__body connector-registry-body" id="registry-body">
+            ${emptyState('Loading registry...')}
+          </div>
+        </section>
       </div>
-
-      <!-- Logs -->
-      <div class="card">
-        <div class="card-header"><span class="card-title">Ingestion Log</span>
-          <button class="btn btn-ghost btn-sm" id="btn-clear-log">Clear</button>
-        </div>
-        <div id="ingestion-log" style="font-family:var(--f-mono);font-size:10px;max-height:200px;overflow-y:auto;padding:10px 14px;color:var(--text-dim);line-height:1.6">
-          <span style="color:var(--green)">[10:24:01]</span> price_data: 8,412,300 records refreshed<br>
-          <span style="color:var(--green)">[10:23:18]</span> esg_news: 142 new articles ingested<br>
-          <span style="color:var(--green)">[10:20:44]</span> sentiment_nlp: batch scored 89 documents<br>
-          <span style="color:var(--amber)">[10:15:02]</span> alt_data: connector timeout, retrying…<br>
-          <span style="color:var(--green)">[10:14:55]</span> company_snapshots: TSLA, MSFT, NVDA refreshed<br>
-          <span style="color:var(--green)">[09:58:30]</span> macro_indicators: 12 series updated<br>
-        </div>
-      </div>
-    </div>
-
-    <!-- RIGHT: Freshness & Sources -->
-    <div style="display:flex;flex-direction:column;gap:14px">
-
-      <!-- Freshness KPIs -->
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px" id="freshness-kpis">
-        ${[
-          ['Live Feeds', '6/8', 'var(--green)'],
-          ['Avg Freshness', getLang() === 'zh' ? '4.2 小时' : '4.2 hrs', 'var(--amber)'],
-          ['Records Today', '9.1M', 'var(--cyan)'],
-          ['Alerts', '1 warning', 'var(--amber)'],
-        ].map(([l,v,c]) => `
-          <div class="metric-card">
-            <div class="metric-label">${l}</div>
-            <div class="metric-value" style="color:${c};font-size:18px">${v}</div>
-          </div>`).join('')}
-      </div>
-
-      <!-- Data Sources Table -->
-      <div class="card">
-        <div class="card-header"><span class="card-title">Data Source Freshness</span></div>
-        <div class="freshness-row-list" id="freshness-list"></div>
-      </div>
-
-      <!-- Throughput chart -->
-      <div class="card">
-        <div class="card-header"><span class="card-title">Ingestion Throughput (24h)</span></div>
-        <div class="card-body" style="padding:0">
-          <canvas id="throughput-canvas" height="140" style="width:100%"></canvas>
-        </div>
-      </div>
-
-    </div>
-  </div>`;
-}
-
-/* ── Pipeline Flow Canvas (Sci-fi animated) ── */
-function drawPipelineFlow(container) {
-  if (_pipelineAnimId) { cancelAnimationFrame(_pipelineAnimId); _pipelineAnimId = null; }
-
-  const canvas = container.querySelector('#pipeline-canvas');
-  if (!canvas) return;
-
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.parentElement?.offsetWidth || 760;
-  const H = 160;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  canvas.style.height = H + 'px';
-
-  const N = PIPELINE_NODES.length;
-  const nodeW = 82, nodeH = 46;
-  const gapX  = (W - N * nodeW) / (N + 1);
-  const nodeY  = H / 2 - nodeH / 2;
-
-  PIPELINE_NODES.forEach((node, i) => {
-    node._x = gapX + i * (nodeW + gapX);
-    node._y = nodeY;
-  });
-
-  // Init particles (3 per connection gap)
-  _pipelineParticles = [];
-  for (let i = 0; i < N - 1; i++) {
-    for (let j = 0; j < 3; j++) {
-      _pipelineParticles.push({
-        from: i, to: i + 1,
-        progress: Math.random(),
-        speed: 0.12 + Math.random() * 0.18,
-        size:  1.5 + Math.random() * 2,
-      });
-    }
-  }
-
-  let lastTs = 0;
-  function frame(ts) {
-    if (!canvas.isConnected) { _pipelineAnimId = null; return; }
-    const dt = Math.min((ts - lastTs) / 1000, 0.1);
-    lastTs = ts;
-
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.scale(dpr, dpr);
-
-    /* ── Background ── */
-    ctx.fillStyle = PIPE_BG(); ctx.fillRect(0, 0, W, H);
-    // Dot-matrix grid
-    ctx.fillStyle = PIPE_DOT();
-    for (let gx = 14; gx < W; gx += 22) {
-      for (let gy = 10; gy < H; gy += 18) { ctx.fillRect(gx - 0.5, gy - 0.5, 1, 1); }
-    }
-    // Horizontal scan line
-    const scanY = (ts / 3000 % 1) * H;
-    const scanGrad = ctx.createLinearGradient(0, scanY - 20, 0, scanY + 20);
-    scanGrad.addColorStop(0,   'rgba(0,255,136,0)');
-    scanGrad.addColorStop(0.5, 'rgba(0,255,136,0.06)');
-    scanGrad.addColorStop(1,   'rgba(0,255,136,0)');
-    ctx.fillStyle = scanGrad; ctx.fillRect(0, scanY - 20, W, 40);
-
-    /* ── Corner brackets ── */
-    const brk = 14;
-    ctx.strokeStyle = 'rgba(0,255,136,0.4)'; ctx.lineWidth = 1.5;
-    [[4, 4, 1, 1], [W-4, 4, -1, 1], [4, H-4, 1, -1], [W-4, H-4, -1, -1]].forEach(([cx, cy, sx, sy]) => {
-      ctx.beginPath();
-      ctx.moveTo(cx + sx * brk, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + sy * brk);
-      ctx.stroke();
-    });
-
-    /* ── Connection tracks ── */
-    PIPELINE_NODES.forEach((node, i) => {
-      if (i >= N - 1) return;
-      const x1 = node._x + nodeW + 2, x2 = PIPELINE_NODES[i+1]._x - 2, y = H / 2;
-      // Track glow
-      ctx.strokeStyle = 'rgba(0,255,136,0.12)'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke();
-      // Track core
-      ctx.strokeStyle = 'rgba(0,255,136,0.22)'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke();
-      // Arrow tip
-      ctx.fillStyle = 'rgba(0,255,136,0.5)';
-      ctx.beginPath();
-      ctx.moveTo(x2 - 7, y - 3.5); ctx.lineTo(x2 + 1, y); ctx.lineTo(x2 - 7, y + 3.5);
-      ctx.closePath(); ctx.fill();
-    });
-
-    /* ── Update + draw particles ── */
-    _pipelineParticles.forEach(p => {
-      p.progress += p.speed * dt;
-      if (p.progress >= 1) { p.progress = 0; p.speed = 0.12 + Math.random() * 0.18; }
-      const fn = PIPELINE_NODES[p.from], tn = PIPELINE_NODES[p.to];
-      const x1 = fn._x + nodeW + 2, x2 = tn._x - 2, y = H / 2;
-      const px = x1 + (x2 - x1) * p.progress;
-      // Radial glow
-      const rg = ctx.createRadialGradient(px, y, 0, px, y, p.size * 4);
-      rg.addColorStop(0, 'rgba(0,255,136,0.95)');
-      rg.addColorStop(0.4, 'rgba(0,255,136,0.4)');
-      rg.addColorStop(1, 'rgba(0,255,136,0)');
-      ctx.fillStyle = rg;
-      ctx.beginPath(); ctx.arc(px, y, p.size * 4, 0, Math.PI * 2); ctx.fill();
-    });
-
-    /* ── Draw nodes ── */
-    const T = ts / 1000;
-    PIPELINE_NODES.forEach((node, i) => {
-      const x = node._x, y = node._y;
-      const isWarn = node.status === 'warning';
-      const gColor = isWarn ? '#FFB300' : '#00FF88';
-      const pulse  = (Math.sin(T * 1.6 + i * 0.9) + 1) / 2; // 0-1
-
-      // Outer halo pulse
-      ctx.globalAlpha = 0.04 + pulse * 0.07;
-      ctx.fillStyle = gColor;
-      roundRect(ctx, x - 5, y - 5, nodeW + 10, nodeH + 10, 12);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      // Node fill
-      ctx.fillStyle = isWarn ? 'rgba(255,179,0,0.08)' : 'rgba(0,255,136,0.06)';
-      roundRect(ctx, x, y, nodeW, nodeH, 8); ctx.fill();
-
-      // Node border (pulsing)
-      const borderAlpha = 0.28 + pulse * 0.28;
-      ctx.strokeStyle = isWarn ? `rgba(255,179,0,${borderAlpha})` : `rgba(0,255,136,${borderAlpha})`;
-      ctx.lineWidth = 1.5;
-      roundRect(ctx, x, y, nodeW, nodeH, 8); ctx.stroke();
-
-      // Micro corner brackets on each node
-      const b = 5;
-      ctx.strokeStyle = isWarn ? 'rgba(255,179,0,0.8)' : 'rgba(0,255,136,0.8)';
-      ctx.lineWidth = 1;
-      [[x, y, 1, 1], [x+nodeW, y, -1, 1], [x, y+nodeH, 1, -1], [x+nodeW, y+nodeH, -1, -1]].forEach(([cx, cy, sx, sy]) => {
-        ctx.beginPath();
-        ctx.moveTo(cx + sx * b, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + sy * b);
-        ctx.stroke();
-      });
-
-      // Status dot
-      ctx.beginPath(); ctx.arc(x + nodeW - 9, y + 9, 3, 0, Math.PI * 2);
-      ctx.fillStyle = gColor;
-      ctx.shadowColor = gColor; ctx.shadowBlur = 8 * dpr;
-      ctx.fill(); ctx.shadowBlur = 0;
-
-      // Icon
-      ctx.font = '13px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      ctx.fillText(node.icon, x + nodeW / 2, y + 16);
-
-      // Label
-      ctx.fillStyle = 'rgba(180,210,255,0.75)'; ctx.font = '7.5px IBM Plex Mono';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-      const label = translateLoose(node.label);
-      // Wrap long labels
-      const words = label.split(' ');
-      if (words.length > 1 && label.length > 10) {
-        const mid = Math.ceil(words.length / 2);
-        ctx.fillText(words.slice(0, mid).join(' '), x + nodeW / 2, y + 29);
-        ctx.fillText(words.slice(mid).join(' '), x + nodeW / 2, y + 38);
-      } else {
-        ctx.fillText(label, x + nodeW / 2, y + 31);
-      }
-    });
-
-    ctx.restore();
-    _pipelineAnimId = requestAnimationFrame(frame);
-  }
-
-  _pipelineAnimId = requestAnimationFrame(frame);
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.arcTo(x + w, y, x + w, y + r, r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
-  ctx.lineTo(x + r, y + h);
-  ctx.arcTo(x, y + h, x, y + h - r, r);
-  ctx.lineTo(x, y + r);
-  ctx.arcTo(x, y, x + r, y, r);
-  ctx.closePath();
-}
-
-/* ── Freshness Table ── */
-function renderFreshness(container) {
-  container.querySelector('#freshness-list').innerHTML = SOURCES.map(s => {
-    const statusColor = s.status === 'live' ? 'var(--green)' : s.status === 'stale' ? 'var(--red)' : 'var(--amber)';
-    const statusLabel = s.status.toUpperCase();
-    return `
-    <div class="freshness-row">
-      <div style="display:flex;align-items:center;gap:8px;flex:1">
-        <span style="width:6px;height:6px;border-radius:50%;background:${statusColor};flex-shrink:0"></span>
-        <div>
-          <div style="font-size:11px;color:var(--text-primary);font-weight:500">${translateLoose(s.name)}</div>
-          <div style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">${s.type} · ${s.records} records</div>
-        </div>
-      </div>
-      <div style="text-align:right">
-        <div style="font-size:10px;font-family:var(--f-mono);color:${statusColor}">${formatFreshness(s.freshness)}</div>
-        <div style="font-size:9px;color:var(--text-dim)">${formatLag(s.lag)}</div>
-      </div>
-      <button class="btn btn-ghost btn-sm freshness-sync-btn" data-sid="${s.id}" style="padding:3px 8px;font-size:9px;margin-left:8px">${translateLoose('Sync')}</button>
     </div>`;
+}
+
+export async function render(container) {
+  destroy();
+  _container = container;
+  _container.innerHTML = buildShell();
+  bindEvents();
+  _langCleanup = onLangChange(() => {
+    if (!isMounted()) return;
+    const companies = _container.querySelector('#sync-companies')?.value || '';
+    const sources = _container.querySelector('#sync-sources')?.value || '';
+    const forceRefresh = Boolean(_container.querySelector('#sync-force')?.checked);
+    _container.innerHTML = buildShell();
+    bindEvents();
+    _container.querySelector('#sync-companies').value = companies;
+    _container.querySelector('#sync-sources').value = sources;
+    _container.querySelector('#sync-force').checked = forceRefresh;
+    renderMetrics();
+    renderRegistry();
+    renderRuns();
+    renderJob();
+  });
+  await refreshAll({ silent: false });
+}
+
+export function destroy() {
+  if (_pollTimer) {
+    window.clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
+  _container = null;
+  _lastJob = null;
+  _langCleanup?.();
+  _langCleanup = null;
+}
+
+function bindEvents() {
+  if (!_container) return;
+  _container.querySelector('#btn-refresh-all')?.addEventListener('click', () => refreshAll({ silent: false }));
+  _container.querySelector('#sync-btn')?.addEventListener('click', () => startSync());
+}
+
+async function refreshAll(options = {}) {
+  if (!isMounted()) return;
+  if (!options.silent) {
+    setLoading(_container.querySelector('#registry-body'), 'Loading registry...');
+    _container.querySelector('#runs-body').innerHTML = emptyState(c('staleRefreshing'));
+  }
+
+  const [registryResult, quotaResult, runsResult] = await Promise.allSettled([
+    api.connectors.registry(),
+    api.connectors.quota(),
+    api.connectors.runs(8),
+  ]);
+
+  if (!isMounted()) return;
+
+  _lastRegistry = registryResult.status === 'fulfilled' ? registryResult.value : null;
+  _lastQuota = quotaResult.status === 'fulfilled' ? quotaResult.value : null;
+  _lastRuns = runsResult.status === 'fulfilled' ? runsResult.value : null;
+
+  renderMetrics();
+  renderRegistry();
+  renderRuns();
+
+  if (!options.silent) {
+    const errors = [registryResult, quotaResult, runsResult].filter((item) => item.status === 'rejected');
+    if (errors.length) {
+      toast.error(c('warning'), errors.map((item) => item.reason?.message || String(item.reason || '')).join(' / '));
+    } else {
+      toast.success(c('refreshAll'), c('refreshed'));
+    }
+  }
+}
+
+function renderMetrics() {
+  if (!_container) return;
+  const target = _container.querySelector('#metrics-body');
+  const providers = safeArray(_lastRegistry?.providers);
+  const quotaProviders = safeArray(_lastQuota?.providers);
+  const configured = providers.filter((item) => item.configured).length;
+  const guarded = quotaProviders.every((item) => item.quota_mode === 'free_tier_guarded') && quotaProviders.length > 0;
+  const runsCount = safeArray(_lastRuns?.runs).length;
+  target.innerHTML = `
+    <div class="workbench-metric-grid">
+      ${metric(c('providers'), providers.length, providers.length ? 'positive' : '')}
+      ${metric(c('configured'), configured, configured ? 'positive' : '')}
+      ${metric(c('quota'), guarded ? c('protected') : c('disabled'), guarded ? 'positive' : 'negative')}
+      ${metric(c('runsCount'), runsCount, runsCount ? 'positive' : '')}
+    </div>`;
+}
+
+function renderRegistry() {
+  if (!_container) return;
+  const target = _container.querySelector('#registry-body');
+  if (!_lastRegistry) {
+    renderError(target, new Error('Provider registry unavailable'));
+    return;
+  }
+
+  const quotaMap = new Map(
+    safeArray(_lastQuota?.providers).map((row) => [row.provider, row]),
+  );
+
+  const rows = safeArray(_lastRegistry.providers).map((row) => {
+    const quota = quotaMap.get(row.provider_id) || {};
+    const capabilities = safeArray(row.capabilities).slice(0, 4);
+    return `
+      <article class="live-provider-card">
+        <div class="live-provider-card__head">
+          <strong>${esc(row.display_name)}</strong>
+          ${statusBadge(row.configured ? 'configured' : 'missing_key')}
+        </div>
+        <p>${esc(row.free_tier_note || '')}</p>
+        <div class="workbench-mini-grid">
+          ${miniMetric(c('mode'), esc(String(_lastRegistry.mode || 'free_tier_first').replace(/_/g, '-')))}
+          ${miniMetric('daily', row.daily_limit ?? '-')}
+          ${miniMetric('scan', row.scan_budget ?? '-')}
+          ${miniMetric('left', quota.remaining_estimate ?? '-')}
+        </div>
+        <div class="workbench-kv-list">
+          <div class="workbench-kv-row">
+            <span>${c('status')}</span>
+            <strong>${row.configured ? c('configured') : 'missing key'}</strong>
+          </div>
+          <div class="workbench-kv-row">
+            <span>${c('sourceChain')}</span>
+            <strong>${capabilities.length ? esc(capabilities.join(', ')) : '-'}</strong>
+          </div>
+          <div class="workbench-kv-row">
+            <span>${c('updatedAt')}</span>
+            <strong>${formatTimestamp(quota.reset_at_utc)}</strong>
+          </div>
+        </div>
+      </article>`;
   }).join('');
 
-  container.querySelectorAll('.freshness-row > div:first-child > div > div:last-child').forEach((el, index) => {
-    const source = SOURCES[index];
-    if (source) el.textContent = formatRecordsMeta(source.type, source.records);
-  });
-
-  // Draw throughput chart after freshness renders
-  setTimeout(() => drawThroughput(container), 50);
-
-  container.querySelector('#freshness-list').addEventListener('click', e => {
-    const btn = e.target.closest('.freshness-sync-btn');
-    if (!btn) return;
-    const src = SOURCES.find(s => s.id === btn.dataset.sid);
-    if (src) toast.info(translateLoose('Sync triggered'), translateLoose(src.name));
-  });
+  target.innerHTML = `
+    <div class="connector-provider-shell">
+      <div class="live-provider-grid connector-provider-scroll">${rows || emptyState(c('providers'))}</div>
+    </div>`;
 }
 
-/* ── Throughput Chart ── */
-function drawThroughput(container) {
-  const canvas = container.querySelector('#throughput-canvas');
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.parentElement?.offsetWidth || 400, H = 140;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  canvas.style.height = H + 'px';
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = PIPE_BG(); ctx.fillRect(0, 0, W, H);
+function renderRuns() {
+  if (!_container) return;
+  const target = _container.querySelector('#runs-body');
+  const runs = safeArray(_lastRuns?.runs);
+  if (!runs.length) {
+    target.innerHTML = emptyState(c('noRuns'));
+    return;
+  }
 
-  const hours = 24;
-  const data = Array.from({length: hours}, (_, i) => {
-    const base = 300 + Math.sin(i * 0.4) * 100;
-    return Math.max(50, base + (Math.random() - 0.5) * 80);
-  });
-
-  const padL=36, padR=12, padT=10, padB=24;
-  const cW=W-padL-padR, cH=H-padT-padB;
-  const maxV = Math.max(...data) * 1.1;
-  const px = i => padL + (i/(data.length-1))*cW;
-  const py = v => padT + cH - (v/maxV)*cH;
-
-  // Grid
-  [0,0.5,1].forEach(t => {
-    const y = padT + cH*(1-t);
-    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y);
-    ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.lineWidth=1; ctx.stroke();
-    ctx.fillStyle='rgba(140,160,220,0.35)'; ctx.font=`8px IBM Plex Mono`; ctx.textAlign='right';
-    ctx.fillText(Math.round(maxV*t)+'K', padL-3, y+3);
-  });
-
-  // Bar chart
-  const barW = cW / hours * 0.6;
-  data.forEach((v, i) => {
-    const x = padL + (i/(hours-1))*cW - barW/2;
-    const barH = (v/maxV)*cH;
-    const grad = ctx.createLinearGradient(0, py(v), 0, padT+cH);
-    grad.addColorStop(0, 'rgba(0,255,136,0.6)');
-    grad.addColorStop(1, 'rgba(0,255,136,0.1)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, py(v), barW, barH);
-  });
-
-  // Hour labels
-  [0,6,12,18,23].forEach(i => {
-    ctx.fillStyle='rgba(140,160,220,0.4)'; ctx.font=`8px IBM Plex Mono`; ctx.textAlign='center';
-    ctx.fillText(`${i}:00`, px(i), H-padB+12);
-  });
+  target.innerHTML = runs.map((run) => {
+    const summary = run.summary || {};
+    const universe = safeArray(run.universe);
+    return `
+      <div class="workbench-item">
+        <div class="workbench-item__head">
+          <strong>${esc(run.run_id || '-')}</strong>
+          ${statusBadge(summary.failed ? 'failed' : 'ready')}
+        </div>
+        <div class="workbench-item__summary">${esc((run.lineage || []).join(' -> ') || 'connector run')}</div>
+        <div class="workbench-mini-grid">
+          ${miniMetric(c('mode'), run.mode || '-')}
+          ${miniMetric(c('symbolCount'), universe.length)}
+          ${miniMetric(c('items'), safeArray(run.items).length)}
+          ${miniMetric(c('updatedAt'), formatTimestamp(run.generated_at))}
+        </div>
+      </div>`;
+  }).join('');
 }
 
-/* ── Events ── */
-function bindEvents(container) {
-  container.querySelector('#sync-btn').addEventListener('click', () => startSync(container));
-  container.querySelector('#btn-refresh-all').addEventListener('click', () => {
-    renderFreshness(container);
-    toast.info(translateLoose('Data sources refreshed'));
-  });
-  container.querySelector('#btn-clear-log').addEventListener('click', () => {
-    container.querySelector('#ingestion-log').innerHTML = `<span style="color:var(--text-dim)">${translateLoose('Log cleared.')}</span>`;
-  });
+function renderJob() {
+  if (!_container) return;
+  const target = _container.querySelector('#sync-body');
+  const countEl = _container.querySelector('#job-count');
+  if (!_activeJobId) {
+    countEl.textContent = '';
+    target.innerHTML = emptyState(c('noJobs'));
+    return;
+  }
 
-  container.querySelector('#source-select-chips').addEventListener('click', e => {
-    const chip = e.target.closest('.filter-chip');
-    if (!chip) return;
-    container.querySelectorAll('#source-select-chips .filter-chip').forEach(c => c.classList.toggle('active', c === chip));
-  });
+  const job = _lastJob;
+  if (!job) {
+    countEl.textContent = _activeJobId;
+    target.innerHTML = emptyState(c('activeJob'), _activeJobId);
+    return;
+  }
+
+  const total = Number(job.companies_total || job.companies_to_sync || 0);
+  const synced = Number(job.companies_synced || 0);
+  const failed = Number(job.companies_failed || 0);
+  const complete = total > 0 ? Math.min(100, Math.round(((synced + failed) / total) * 100)) : (job.status === 'started' ? 5 : 100);
+  const done = String(job.status || '').startsWith('completed');
+  countEl.textContent = done ? '' : _activeJobId;
+  target.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <strong style="font-family:var(--f-mono);font-size:11px">${esc(job.job_id || _activeJobId)}</strong>
+        ${statusBadge(job.status || 'pending')}
+      </div>
+      <div style="background:rgba(255,255,255,0.06);border-radius:4px;height:8px;overflow:hidden">
+        <div style="width:${complete}%;height:100%;background:${done ? 'var(--green)' : 'var(--amber)'};transition:width 0.35s ease"></div>
+      </div>
+      <div class="workbench-mini-grid">
+        ${miniMetric(c('total'), total || '-')}
+        ${miniMetric(c('synced'), synced)}
+        ${miniMetric(c('failed'), failed)}
+        ${miniMetric(c('updatedAt'), formatTimestamp(job.updated_at))}
+      </div>
+    </div>`;
 }
 
-/* ── Sync ── */
-async function startSync(container) {
-  const btn = container.querySelector('#sync-btn');
-  btn.disabled = true; btn.textContent = translateLoose('● Starting…');
+async function startSync() {
+  if (!isMounted()) return;
+  const btn = _container.querySelector('#sync-btn');
+  const companies = parseCompanies(_container.querySelector('#sync-companies')?.value || '');
+  const providers = parseProviders(_container.querySelector('#sync-sources')?.value || '');
+  const forceRefresh = Boolean(_container.querySelector('#sync-force')?.checked);
 
-  const companies = container.querySelector('#sync-companies').value.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
-  const forceRefresh = container.querySelector('#sync-force').checked;
+  if (!companies.length) {
+    toast.error(c('syncErrorTitle'), c('missingCompanies'));
+    return;
+  }
 
+  btn.disabled = true;
+  btn.textContent = c('syncing');
   try {
-    const response = await api.admin.dataSync.start({ companies, force_refresh: forceRefresh });
-    toast.success('Sync started', response.job_id);
-    renderJobStatus(container, response);
-    pollStatus(container, response.job_id);
-    appendLog(container, `Sync job ${response.job_id} started for: ${companies.join(', ')}`);
-  } catch(err) {
-    // Mock sync
-    const mockJob = { job_id: 'JOB-' + Date.now(), status: 'running', companies, progress: 0 };
-    renderJobStatus(container, mockJob);
-    simulateMockSync(container, mockJob, companies);
-    toast.error('API error', err.message + ' — running mock sync');
+    const response = await api.admin.dataSync.start({
+      companies,
+      sources: providers,
+      force_refresh: forceRefresh,
+    });
+    _activeJobId = response.job_id;
+    _lastJob = {
+      job_id: response.job_id,
+      status: response.status,
+      companies_total: response.companies_to_sync || companies.length,
+      companies_synced: 0,
+      companies_failed: 0,
+      updated_at: new Date().toISOString(),
+    };
+    renderJob();
+    toast.success(c('syncStarted'), response.job_id);
+    pollStatus(response.job_id);
+  } catch (error) {
+    _lastJob = null;
+    _activeJobId = '';
+    renderJob();
+    const target = _container.querySelector('#sync-body');
+    target.innerHTML = emptyState(c('syncErrorTitle'), `${c('syncErrorDetail')} ${error.message || ''}`.trim());
+    toast.error(c('syncFailed'), error.message || c('syncErrorDetail'));
   } finally {
-    btn.disabled = false; btn.textContent = translateLoose('▶ Start Sync');
+    btn.disabled = false;
+    btn.textContent = c('startSync');
   }
 }
 
-function simulateMockSync(container, job, companies) {
-  let progress = 0;
-  const timer = setInterval(() => {
-    progress += Math.random() * 20 + 5;
-    if (progress >= 100) {
-      progress = 100;
-      job.status = 'completed';
-      clearInterval(timer);
-      appendLog(container, `✓ Sync ${job.job_id} completed — ${companies.length} companies updated`);
-      toast.success(translateLoose('Sync complete'), translateLoose(`${companies.length} companies refreshed`));
-    }
-    job.progress = Math.min(progress, 100);
-    renderJobStatus(container, job);
-  }, 600);
-}
+function pollStatus(jobId) {
+  if (_pollTimer) {
+    window.clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
 
-function pollStatus(container, jobId) {
-  if (_pollTimer) window.clearInterval(_pollTimer);
+  const handleStatus = (status) => {
+    if (!isMounted()) return;
+    _lastJob = status;
+    _activeJobId = status.job_id || jobId;
+    renderJob();
+    if (String(status.status || '').startsWith('completed')) {
+      window.clearInterval(_pollTimer);
+      _pollTimer = null;
+      if (status.status === 'completed_with_errors') {
+        toast.error(c('syncErrors'), `${status.companies_failed || 0} failed`);
+      } else {
+        toast.success(c('syncComplete'), `${status.companies_synced || 0}/${status.companies_total || 0}`);
+      }
+      refreshAll({ silent: true });
+    }
+  };
+
   _pollTimer = window.setInterval(async () => {
     try {
       const status = await api.admin.dataSync.status(jobId);
-      renderJobStatus(container, status);
-      if (status.status?.startsWith('completed')) {
-        window.clearInterval(_pollTimer); _pollTimer = null;
-        toast.success(translateLoose('Sync complete'), jobId);
-      }
-    } catch {
-      window.clearInterval(_pollTimer); _pollTimer = null;
+      handleStatus(status);
+    } catch (error) {
+      window.clearInterval(_pollTimer);
+      _pollTimer = null;
+      if (!isMounted()) return;
+      toast.error(c('syncFailed'), error.message || c('syncErrorDetail'));
     }
-  }, 1500);
-}
-
-function renderJobStatus(container, job) {
-  const jobsEl = container.querySelector('#sync-body');
-  const countEl = container.querySelector('#job-count');
-  const progress = Math.round(job.progress || 0);
-  const isDone = job.status === 'completed';
-  const color = isDone ? 'var(--green)' : 'var(--amber)';
-  countEl.textContent = isDone ? '' : translateLoose('1 active');
-
-  jobsEl.innerHTML = `
-  <div style="padding:12px 16px;display:flex;flex-direction:column;gap:10px">
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <span style="font-size:11px;font-family:var(--f-mono);color:var(--text-dim)">${job.job_id}</span>
-      <span class="badge badge-${isDone?'filled':'pending'}">${(job.status||'').toUpperCase()}</span>
-    </div>
-    <div style="background:rgba(255,255,255,0.06);border-radius:3px;height:6px;overflow:hidden">
-      <div style="width:${progress}%;height:100%;background:${color};border-radius:3px;transition:width 0.4s ease"></div>
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:10px;font-family:var(--f-mono);color:var(--text-dim)">
-      <span>${(job.companies||[]).join(', ')}</span>
-      <span style="color:${color}">${progress}%</span>
-    </div>
-  </div>`;
-}
-
-function appendLog(container, msg) {
-  const log = container.querySelector('#ingestion-log');
-  const ts = new Date().toLocaleTimeString(getLocale());
-  log.innerHTML = `<span style="color:var(--green)">[${ts}]</span> ${msg}<br>` + log.innerHTML;
+  }, 1200);
 }

@@ -119,6 +119,95 @@ class QuantSystemService:
             self.alpaca.set_runtime_mode(normalized_mode)
         return adapter, normalized_mode
 
+    def _connection_status_for_mode(self, adapter: Any, mode: str) -> dict[str, Any]:
+        try:
+            status = adapter.connection_status(mode)
+        except TypeError:
+            if hasattr(adapter, "set_runtime_mode"):
+                adapter.set_runtime_mode(mode)
+            status = adapter.connection_status()
+        return dict(status or {})
+
+    def _execution_mode_state(
+        self,
+        *,
+        adapter: Any,
+        requested_mode: str,
+        connected: bool = False,
+        failure_reason: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_mode = self._normalize_broker_mode(requested_mode)
+        paper_connection = self._connection_status_for_mode(adapter, "paper")
+        live_connection = self._connection_status_for_mode(adapter, "live")
+        paper_ready = bool(paper_connection.get("paper_configured", paper_connection.get("configured")))
+        if adapter.broker_id == "alpaca":
+            live_available = bool(
+                live_connection.get("live_available")
+                or live_connection.get("live_configured")
+            )
+        else:
+            live_available = bool(live_connection.get("configured"))
+        live_enabled = bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False)) if adapter.broker_id == "alpaca" else False
+        live_ready = bool(live_available and live_enabled and (connected or normalized_mode != "live" or not failure_reason))
+        effective_mode = "live" if normalized_mode == "live" and live_ready else "paper"
+        block_reason = None
+        next_actions: list[str] = []
+        if normalized_mode == "live" and not live_ready:
+            if not live_available:
+                block_reason = "live_credentials_missing"
+                next_actions = ["add_live_alpaca_keys", "switch_to_paper_mode"]
+            elif not live_enabled:
+                block_reason = "live_trading_disabled"
+                next_actions = ["keep_using_paper_mode", "enable_live_trading_when_ready"]
+            elif failure_reason:
+                block_reason = "live_account_unavailable"
+                next_actions = ["verify_live_account_permissions", "switch_to_paper_mode"]
+            else:
+                block_reason = "live_not_ready"
+                next_actions = ["verify_live_broker_readiness", "switch_to_paper_mode"]
+        elif normalized_mode == "paper" and not paper_ready:
+            block_reason = "paper_credentials_missing"
+            next_actions = ["configure_paper_credentials"]
+        return {
+            "requested_mode": normalized_mode,
+            "effective_mode": effective_mode,
+            "paper_ready": paper_ready,
+            "live_ready": live_ready,
+            "live_available": live_available,
+            "block_reason": block_reason,
+            "next_actions": next_actions,
+            "paper_connection": paper_connection,
+            "live_connection": live_connection,
+        }
+
+    def _with_execution_mode_state(
+        self,
+        payload: dict[str, Any],
+        *,
+        adapter: Any,
+        requested_mode: str,
+        connected: bool = False,
+        failure_reason: str | None = None,
+    ) -> dict[str, Any]:
+        mode_state = self._execution_mode_state(
+            adapter=adapter,
+            requested_mode=requested_mode,
+            connected=connected,
+            failure_reason=failure_reason,
+        )
+        enriched = dict(payload)
+        enriched["requested_mode"] = mode_state["requested_mode"]
+        enriched["effective_mode"] = mode_state["effective_mode"]
+        enriched["paper_ready"] = mode_state["paper_ready"]
+        enriched["live_ready"] = mode_state["live_ready"]
+        enriched["live_available"] = mode_state["live_available"]
+        enriched["block_reason"] = mode_state["block_reason"]
+        enriched["next_actions"] = list(mode_state["next_actions"])
+        if "connected" in enriched:
+            requested_connected = bool(enriched.get("connected", connected))
+            enriched["connected"] = bool(requested_connected and not mode_state["block_reason"])
+        return enriched
+
     @staticmethod
     def _market_surface_catalog() -> list[dict[str, Any]]:
         return [
@@ -806,16 +895,16 @@ class QuantSystemService:
     def _dashboard_provider_chain(provider: str | None) -> tuple[str, list[str]]:
         preferred = str(provider or "auto").strip().lower() or "auto"
         if preferred == "alpaca":
-            return preferred, ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"]
+            return preferred, ["alpaca", "yfinance", "cache", "synthetic"]
         if preferred == "twelvedata":
             return preferred, ["twelvedata", "alpaca", "yfinance", "cache", "synthetic"]
         if preferred == "yfinance":
-            return preferred, ["yfinance", "alpaca", "twelvedata", "cache", "synthetic"]
+            return preferred, ["yfinance", "alpaca", "cache", "synthetic"]
         if preferred == "cache":
             return preferred, ["cache", "synthetic"]
         if preferred == "synthetic":
             return preferred, ["synthetic"]
-        return "auto", ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"]
+        return "auto", ["alpaca", "yfinance", "cache", "synthetic"]
 
     @staticmethod
     def _build_synthetic_dashboard_bars(symbol: str, *, limit: int) -> pd.DataFrame:
@@ -860,7 +949,7 @@ class QuantSystemService:
 
     @staticmethod
     def _normalize_market_data_provider_chain(configured: str | None = None) -> list[str]:
-        raw = configured or "twelvedata,alpaca,yfinance,cache"
+        raw = configured or "alpaca,yfinance,cache,synthetic"
         aliases = {
             "twelve_data": "twelvedata",
             "twelve-data": "twelvedata",
@@ -875,7 +964,19 @@ class QuantSystemService:
             provider = aliases.get(item.strip().lower(), item.strip().lower())
             if provider in allowed and provider not in values:
                 values.append(provider)
-        return values or ["twelvedata", "alpaca", "yfinance", "cache"]
+        return values or ["alpaca", "yfinance", "cache", "synthetic"]
+
+    @staticmethod
+    def _parse_iso_timestamp(raw_value: Any) -> datetime | None:
+        if not raw_value:
+            return None
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
     def build_dashboard_overview(self) -> dict[str, Any]:
         overview = self.build_platform_overview()
@@ -985,6 +1086,181 @@ class QuantSystemService:
                 }
                 for signal in overview["top_signals"][:5]
             ],
+        }
+
+    def build_research_context(
+        self,
+        *,
+        symbol: str | None = None,
+        provider: str = "auto",
+        limit: int = 6,
+    ) -> dict[str, Any]:
+        from gateway.quant.intelligence import QuantIntelligenceService
+
+        overview = self.build_platform_overview()
+        watchlist = list(overview.get("watchlist_signals") or [])
+        preferred_provider, default_chain = self._dashboard_provider_chain(provider)
+        selected_symbol = str(symbol or (watchlist[0]["symbol"] if watchlist else "AAPL")).upper().strip()
+
+        chart_payload: dict[str, Any]
+        try:
+            chart_payload = self.build_dashboard_chart(symbol=selected_symbol, timeframe="1D", provider=preferred_provider)
+        except Exception as exc:
+            chart_payload = {
+                "selected_provider": preferred_provider,
+                "provider_status": {
+                    "available": False,
+                    "provider": "unavailable",
+                    "selected_provider": preferred_provider,
+                    "error": str(exc),
+                },
+                "data_source_chain": default_chain,
+                "fallback_preview": {
+                    "symbol": selected_symbol,
+                    "source": "unavailable",
+                    "source_chain": default_chain,
+                    "last_snapshot": None,
+                    "reason": [str(exc)],
+                    "next_actions": ["Refresh research context", "Switch symbol", "Open connector center"],
+                },
+                "warning": str(exc),
+            }
+
+        provider_chain = list(chart_payload.get("data_source_chain") or default_chain)
+        provider_status = dict(chart_payload.get("provider_status") or {})
+        fallback_preview = dict(chart_payload.get("fallback_preview") or {})
+        warning_message = chart_payload.get("warning")
+
+        quote_symbols: list[str] = []
+        for candidate in [selected_symbol] + [str(item.get("symbol") or "").upper().strip() for item in watchlist]:
+            if candidate and candidate not in quote_symbols:
+                quote_symbols.append(candidate)
+            if len(quote_symbols) >= 5:
+                break
+
+        watchlist_lookup = {str(item.get("symbol") or "").upper().strip(): item for item in watchlist}
+        quote_strip: list[dict[str, Any]] = []
+        for quote_symbol in quote_symbols:
+            signal = watchlist_lookup.get(quote_symbol, {})
+            market_payload = None
+            try:
+                market_payload = self.market_data.get_daily_bars(
+                    quote_symbol,
+                    limit=2,
+                    provider_order_override=[name for name in provider_chain if name != "synthetic"],
+                    allow_stale_cache=True,
+                )
+            except Exception:
+                market_payload = None
+
+            bars = market_payload.bars if market_payload is not None else None
+            price = None
+            change_pct = None
+            source = signal.get("market_data_source") or "unavailable"
+            cache_hit = None
+            if bars is not None and not bars.empty:
+                closes = bars["close"].astype(float).tolist()
+                price = round(float(closes[-1]), 4)
+                if len(closes) >= 2 and closes[-2]:
+                    change_pct = round((closes[-1] - closes[-2]) / closes[-2], 6)
+                source = getattr(market_payload, "provider", None) or source
+                cache_hit = bool(getattr(market_payload, "cache_hit", False))
+            if change_pct is None:
+                change_pct = float(signal.get("expected_return") or 0.0)
+
+            quote_strip.append(
+                {
+                    "symbol": quote_symbol,
+                    "company_name": str(signal.get("company_name") or quote_symbol),
+                    "price": price,
+                    "change_pct": round(float(change_pct), 6) if change_pct is not None else None,
+                    "source": str(source or "unavailable"),
+                    "provider_status": {
+                        "available": bool(source and source != "unavailable"),
+                        "provider": str(source or "unavailable"),
+                        "selected_provider": preferred_provider,
+                        "cache_hit": cache_hit,
+                    },
+                    "warning": None if source and source != "unavailable" else "No live quote payload returned for this symbol.",
+                }
+            )
+
+        intelligence = QuantIntelligenceService(self)
+        evidence_payload = intelligence.list_evidence(symbol=selected_symbol, limit=max(3, int(limit)))
+        feed: list[dict[str, Any]] = []
+        latest_published_at: datetime | None = None
+        for item in evidence_payload.get("items", [])[: max(3, int(limit))]:
+            metadata = item.get("metadata") or {}
+            sentiment = str(metadata.get("sentiment") or metadata.get("direction") or "neutral").lower().strip()
+            if sentiment not in {"long", "short", "positive", "negative", "neutral"}:
+                sentiment = "neutral"
+            published_at = item.get("published_at") or item.get("observed_at")
+            parsed_published = self._parse_iso_timestamp(published_at)
+            if parsed_published and (latest_published_at is None or parsed_published > latest_published_at):
+                latest_published_at = parsed_published
+            feed.append(
+                {
+                    "item_id": str(item.get("item_id") or ""),
+                    "item_type": str(item.get("item_type") or ""),
+                    "symbol": str(item.get("symbol") or ""),
+                    "title": str(item.get("title") or "Untitled evidence"),
+                    "summary": str(item.get("summary") or ""),
+                    "source": str(item.get("source") or ""),
+                    "provider": str(item.get("provider") or ""),
+                    "published_at": published_at,
+                    "freshness_score": item.get("freshness_score"),
+                    "confidence": item.get("confidence"),
+                    "quality_score": item.get("quality_score"),
+                    "sentiment": "long" if sentiment == "positive" else "short" if sentiment == "negative" else sentiment,
+                    "url": item.get("url"),
+                }
+            )
+
+        momentum_leaders = [
+            {
+                "symbol": item.get("symbol"),
+                "company_name": item.get("company_name"),
+                "house_score": item.get("house_score") or item.get("overall_score"),
+                "expected_return": item.get("expected_return"),
+                "confidence": item.get("confidence"),
+                "source": item.get("market_data_source") or "quant_system",
+            }
+            for item in watchlist[:5]
+        ]
+
+        degraded = not bool(provider_status.get("available")) or bool(warning_message) or not feed
+        warning = None
+        if warning_message or not feed:
+            warning = {
+                "code": "research_context_degraded",
+                "message": str(warning_message or "Evidence feed is temporarily unavailable."),
+                "severity": "warning",
+                "next_actions": fallback_preview.get("next_actions")
+                or ["Refresh research context", "Switch symbol", "Open market radar"],
+            }
+
+        freshness = {
+            "generated_at": _iso_now(),
+            "latest_feed_event_at": latest_published_at.isoformat() if latest_published_at else None,
+            "evidence_bundle_count": int(evidence_payload.get("bundle_count") or 0),
+            "quote_count": len(quote_strip),
+        }
+
+        return {
+            "generated_at": _iso_now(),
+            "symbol": selected_symbol,
+            "provider": preferred_provider,
+            "quote_strip": quote_strip,
+            "momentum_leaders": momentum_leaders,
+            "feed": feed,
+            "provider_status": provider_status,
+            "source_chain": provider_chain,
+            "freshness": freshness,
+            "degraded": degraded,
+            "fallback_preview": fallback_preview,
+            "warning": warning,
+            "next_actions": fallback_preview.get("next_actions")
+            or ["Refresh research context", "Open intelligence evidence", "Switch symbol"],
         }
 
     def run_research_pipeline(
@@ -2241,6 +2517,13 @@ class QuantSystemService:
             "generated_at": _iso_now(),
             "broker_id": broker_id,
             "mode": normalized_mode,
+            "requested_mode": account.get("requested_mode", normalized_mode),
+            "effective_mode": account.get("effective_mode", normalized_mode),
+            "paper_ready": account.get("paper_ready"),
+            "live_ready": account.get("live_ready"),
+            "live_available": account.get("live_available"),
+            "block_reason": account.get("block_reason"),
+            "next_actions": account.get("next_actions", []),
             "execution_id": latest_execution,
             "controls": self.get_execution_controls(),
             "account": account,
@@ -2263,23 +2546,23 @@ class QuantSystemService:
 
     def get_execution_account(self, broker: str | None = None, mode: str = "paper") -> dict[str, Any]:
         adapter, normalized_mode = self._prepare_broker_adapter(broker, mode)
-        status = adapter.connection_status()
+        status = self._connection_status_for_mode(adapter, normalized_mode)
         descriptor = adapter.descriptor().model_dump()
         if not status.get("configured"):
-            return {
+            return self._with_execution_mode_state({
                 "connected": False,
                 "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": status,
                 "warnings": [f"{adapter.label} credentials are not configured for the current runtime."],
-            }
+            }, adapter=adapter, requested_mode=normalized_mode)
 
         try:
             account = adapter.get_account()
             account_snapshot = self._summarize_broker_account(adapter.broker_id, account)
             account_snapshot["account_mode"] = normalized_mode
             clock_snapshot = self._safe_get_clock(adapter)
-            return {
+            return self._with_execution_mode_state({
                 "connected": True,
                 "mode": normalized_mode,
                 "broker": descriptor,
@@ -2291,16 +2574,16 @@ class QuantSystemService:
                     market_clock=clock_snapshot,
                     submit_orders=False,
                 ),
-            }
+            }, adapter=adapter, requested_mode=normalized_mode, connected=True)
         except Exception as exc:
             logger.warning(f"Failed to load {adapter.label} account status: {exc}")
-            return {
+            return self._with_execution_mode_state({
                 "connected": False,
                 "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": status,
                 "warnings": [str(exc)],
-            }
+            }, adapter=adapter, requested_mode=normalized_mode, failure_reason=str(exc))
 
     def list_execution_orders(
         self,
@@ -2310,30 +2593,34 @@ class QuantSystemService:
         mode: str = "paper",
     ) -> dict[str, Any]:
         adapter, normalized_mode = self._prepare_broker_adapter(broker, mode)
-        connection = adapter.connection_status()
+        connection = self._connection_status_for_mode(adapter, normalized_mode)
         descriptor = adapter.descriptor().model_dump()
         if not connection.get("configured"):
-            return {"connected": False, "mode": normalized_mode, "orders": [], "broker": descriptor, "broker_connection": connection}
+            return self._with_execution_mode_state(
+                {"connected": False, "mode": normalized_mode, "orders": [], "broker": descriptor, "broker_connection": connection},
+                adapter=adapter,
+                requested_mode=normalized_mode,
+            )
 
         try:
             orders = adapter.list_orders(status=status, limit=limit)
-            return {
+            return self._with_execution_mode_state({
                 "connected": True,
                 "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": connection,
                 "orders": [self._summarize_broker_order(adapter.broker_id, item) for item in orders],
-            }
+            }, adapter=adapter, requested_mode=normalized_mode, connected=True)
         except Exception as exc:
             logger.warning(f"Failed to list {adapter.label} orders: {exc}")
-            return {
+            return self._with_execution_mode_state({
                 "connected": False,
                 "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": connection,
                 "orders": [],
                 "warnings": [str(exc)],
-            }
+            }, adapter=adapter, requested_mode=normalized_mode, failure_reason=str(exc))
 
     def get_execution_order(
         self,
@@ -2345,7 +2632,7 @@ class QuantSystemService:
         record = self._find_journal_record(journal, order_id) if journal else None
         broker_id = broker or (journal or {}).get("broker_id") or self.default_broker
         adapter, normalized_mode = self._prepare_broker_adapter(broker_id, (journal or {}).get("mode", "paper"))
-        connection = adapter.connection_status()
+        connection = self._connection_status_for_mode(adapter, normalized_mode)
         descriptor = adapter.descriptor().model_dump()
 
         summary = None
@@ -2374,30 +2661,34 @@ class QuantSystemService:
 
     def list_execution_positions(self, broker: str | None = None, mode: str = "paper") -> dict[str, Any]:
         adapter, normalized_mode = self._prepare_broker_adapter(broker, mode)
-        connection = adapter.connection_status()
+        connection = self._connection_status_for_mode(adapter, normalized_mode)
         descriptor = adapter.descriptor().model_dump()
         if not connection.get("configured"):
-            return {"connected": False, "mode": normalized_mode, "positions": [], "broker": descriptor, "broker_connection": connection}
+            return self._with_execution_mode_state(
+                {"connected": False, "mode": normalized_mode, "positions": [], "broker": descriptor, "broker_connection": connection},
+                adapter=adapter,
+                requested_mode=normalized_mode,
+            )
 
         try:
             positions = adapter.list_positions()
-            return {
+            return self._with_execution_mode_state({
                 "connected": True,
                 "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": connection,
                 "positions": [self._summarize_broker_position(adapter.broker_id, item) for item in positions],
-            }
+            }, adapter=adapter, requested_mode=normalized_mode, connected=True)
         except Exception as exc:
             logger.warning(f"Failed to list {adapter.label} positions: {exc}")
-            return {
+            return self._with_execution_mode_state({
                 "connected": False,
                 "mode": normalized_mode,
                 "broker": descriptor,
                 "broker_connection": connection,
                 "positions": [],
                 "warnings": [str(exc)],
-            }
+            }, adapter=adapter, requested_mode=normalized_mode, failure_reason=str(exc))
 
     def create_execution_plan(
         self,
@@ -2488,7 +2779,7 @@ class QuantSystemService:
             submitted=False,
             broker_status="planned",
             warnings=list(risk_warnings),
-            broker_connection=adapter.connection_status(),
+            broker_connection=self._connection_status_for_mode(adapter, normalized_mode),
         )
 
         payload = plan.model_dump()
@@ -2529,20 +2820,44 @@ class QuantSystemService:
         payload["canary_summary"] = canary_summary
         payload["model_registry"] = self.build_model_registry()
 
+        mode_state = self._execution_mode_state(
+            adapter=adapter,
+            requested_mode=payload["mode"],
+        )
+        payload["requested_mode"] = mode_state["requested_mode"]
+        payload["effective_mode"] = mode_state["effective_mode"]
+        payload["paper_ready"] = mode_state["paper_ready"]
+        payload["live_ready"] = mode_state["live_ready"]
+        payload["live_available"] = mode_state["live_available"]
+        payload["block_reason"] = mode_state["block_reason"]
+        payload["next_actions"] = list(mode_state["next_actions"])
+
         live_enabled = bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False))
         if payload["mode"] == "live":
             if broker_id != "alpaca":
                 payload["ready"] = False
                 payload["broker_status"] = "blocked"
                 payload["warnings"].append("Live routing is currently only enabled for Alpaca.")
+                payload["block_reason"] = "live_not_supported_for_broker"
+                payload["next_actions"] = ["switch_to_alpaca_or_paper_mode"]
+            elif not payload.get("live_available"):
+                payload["ready"] = False
+                payload["broker_status"] = "blocked"
+                payload["warnings"].append("Live mode was selected, but live Alpaca credentials are not configured yet.")
+                payload["block_reason"] = "live_credentials_missing"
+                payload["next_actions"] = ["add_live_alpaca_keys", "switch_to_paper_mode"]
             elif not live_enabled:
                 payload["ready"] = False
                 payload["broker_status"] = "blocked"
                 payload["warnings"].append("Live trading is disabled in server settings. Keep validating in Alpaca Paper first.")
+                payload["block_reason"] = "live_trading_disabled"
+                payload["next_actions"] = ["keep_using_paper_mode", "enable_live_trading_when_ready"]
             elif not bool(live_confirmed):
                 payload["ready"] = False
                 payload["broker_status"] = "awaiting_live_confirmation"
                 payload["warnings"].append("Live order routing requires an explicit operator confirmation before submission.")
+                payload["block_reason"] = "live_confirmation_required"
+                payload["next_actions"] = ["confirm_live_submit_or_switch_to_paper"]
 
         if submit_orders and payload["ready"] and (payload["mode"] == "paper" or (payload["mode"] == "live" and live_enabled and live_confirmed)):
             self._submit_broker_orders(
@@ -2589,7 +2904,7 @@ class QuantSystemService:
     ) -> dict[str, Any]:
         journal = self._require_execution_journal(execution_id)
         adapter, normalized_mode = self._prepare_broker_adapter(broker or journal.get("broker_id"), journal.get("mode", "paper"))
-        connection = adapter.connection_status()
+        connection = self._connection_status_for_mode(adapter, normalized_mode)
         if not connection.get("configured"):
             raise ValueError(f"{adapter.label} is not configured in the current runtime")
 

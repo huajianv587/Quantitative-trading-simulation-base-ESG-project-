@@ -63,4 +63,4 @@ class UserReportSubscribeRequest(BaseModel):
 
 class PushRuleTestRequest(BaseModel):
     test_user_id: str
-    mock_report: Dict[str, Any]
+    report_id: Optional[str] = None

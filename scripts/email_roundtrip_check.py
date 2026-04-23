@@ -24,6 +24,16 @@ def emit_json(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def write_report(target: str, payload: dict) -> None:
+    if not target:
+        return
+    path = Path(target)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def imap_config() -> dict[str, str | int | bool]:
     port = int(os.getenv("IMAP_PORT", "993") or 993)
     return {
@@ -86,10 +96,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--recipient", default=os.getenv("EMAIL_TEST_RECIPIENT") or os.getenv("SMTP_USER") or "")
     parser.add_argument("--poll-seconds", type=int, default=90)
+    parser.add_argument("--write-report", default="")
     args = parser.parse_args()
 
     if not args.recipient:
-        emit_json({"ok": False, "stage": "config", "detail": "recipient_missing", "smtp": smtp_config_snapshot()})
+        payload = {"ok": False, "stage": "config", "detail": "recipient_missing", "smtp": smtp_config_snapshot()}
+        write_report(args.write_report, payload)
+        emit_json(payload)
         return 1
 
     subject = f"Quant Terminal email roundtrip {int(time.time())}"
@@ -112,15 +125,15 @@ def main() -> int:
     imap_result = find_subject(subject, args.poll_seconds) if send_result.get("ok") else {"ok": False, "detail": "smtp_failed"}
 
     ok = bool(send_result.get("ok") and imap_result.get("ok"))
-    emit_json(
-        {
-            "ok": ok,
-            "recipient": args.recipient,
-            "subject": subject,
-            "smtp": send_result,
-            "imap": imap_result,
-        }
-    )
+    payload = {
+        "ok": ok,
+        "recipient": args.recipient,
+        "subject": subject,
+        "smtp": send_result,
+        "imap": imap_result,
+    }
+    write_report(args.write_report, payload)
+    emit_json(payload)
     return 0 if ok else 1
 
 

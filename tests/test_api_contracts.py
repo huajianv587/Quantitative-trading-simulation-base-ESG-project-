@@ -279,26 +279,123 @@ def test_sync_status_tracks_background_result(monkeypatch):
     assert fake_manager.calls == [("Tesla", True), ("BadCo", True)]
 
 
-def test_push_rule_test_endpoint_accepts_json_body(monkeypatch):
+def test_push_rule_test_endpoint_uses_latest_real_report(monkeypatch):
     fake_rule = type(
         "FakeRule",
         (),
         {"condition": "overall_score < 40", "push_channels": ["email", "webhook"]},
     )()
     fake_scheduler = type("FakeScheduler", (), {"push_rules_cache": {"rule-1": fake_rule}})()
+    fake_db = _FakeSupabaseClient(
+        {
+            "esg_reports": [
+                {
+                    "id": "report-old",
+                    "report_type": "weekly",
+                    "generated_at": "2026-04-01T10:00:00",
+                    "data": {"overall_score": 72},
+                },
+                {
+                    "id": "report-new",
+                    "report_type": "daily",
+                    "generated_at": "2026-04-02T10:00:00",
+                    "data": {"overall_score": 35},
+                },
+            ]
+        }
+    )
+    monkeypatch.setattr(main_module.runtime, "ensure_optional_services", lambda **_kwargs: None)
     monkeypatch.setattr(main_module.runtime, "report_scheduler", fake_scheduler)
+    monkeypatch.setattr(main_module.runtime, "get_client", lambda: fake_db)
+    monkeypatch.setattr(main_module.runtime, "report_jobs", {})
     client = TestClient(main_module.app)
 
     response = client.post(
         "/admin/push-rules/rule-1/test",
         headers=ADMIN_HEADERS,
-        json={"test_user_id": "u-1", "mock_report": {"overall_score": 35}},
+        json={"test_user_id": "u-1"},
     )
 
     assert response.status_code == 200
     data = response.json()
+    assert data["status"] == "success"
+    assert data["report_id"] == "report-new"
+    assert data["report_type"] == "daily"
     assert data["results"]["matched"] is True
     assert data["results"]["channels_tested"] == ["email", "webhook"]
+
+
+def test_push_rule_test_endpoint_accepts_explicit_report_id(monkeypatch):
+    fake_rule = type(
+        "FakeRule",
+        (),
+        {"condition": "overall_score >= 80", "push_channels": ["in_app"]},
+    )()
+    fake_scheduler = type("FakeScheduler", (), {"push_rules_cache": {"rule-1": fake_rule}})()
+    fake_db = _FakeSupabaseClient(
+        {
+            "esg_reports": [
+                {
+                    "id": "report-a",
+                    "report_type": "daily",
+                    "generated_at": "2026-04-01T10:00:00",
+                    "data": {"overall_score": 25},
+                },
+                {
+                    "id": "report-b",
+                    "report_type": "daily",
+                    "generated_at": "2026-04-03T10:00:00",
+                    "data": {"overall_score": 91},
+                },
+            ]
+        }
+    )
+    monkeypatch.setattr(main_module.runtime, "ensure_optional_services", lambda **_kwargs: None)
+    monkeypatch.setattr(main_module.runtime, "report_scheduler", fake_scheduler)
+    monkeypatch.setattr(main_module.runtime, "get_client", lambda: fake_db)
+    monkeypatch.setattr(main_module.runtime, "report_jobs", {})
+    client = TestClient(main_module.app)
+
+    response = client.post(
+        "/admin/push-rules/rule-1/test",
+        headers=ADMIN_HEADERS,
+        json={"test_user_id": "u-1", "report_id": "report-a"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["report_id"] == "report-a"
+    assert data["results"]["matched"] is False
+    assert data["results"]["channels_tested"] == ["in_app"]
+
+
+def test_push_rule_test_endpoint_blocks_without_real_report(monkeypatch):
+    fake_rule = type(
+        "FakeRule",
+        (),
+        {"condition": "overall_score < 40", "push_channels": ["email"]},
+    )()
+    fake_scheduler = type("FakeScheduler", (), {"push_rules_cache": {"rule-1": fake_rule}})()
+    fake_db = _FakeSupabaseClient({"esg_reports": []})
+    monkeypatch.setattr(main_module.runtime, "ensure_optional_services", lambda **_kwargs: None)
+    monkeypatch.setattr(main_module.runtime, "report_scheduler", fake_scheduler)
+    monkeypatch.setattr(main_module.runtime, "get_client", lambda: fake_db)
+    monkeypatch.setattr(main_module.runtime, "report_jobs", {})
+    client = TestClient(main_module.app)
+
+    response = client.post(
+        "/admin/push-rules/rule-1/test",
+        headers=ADMIN_HEADERS,
+        json={"test_user_id": "u-1"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "blocked"
+    assert data["block_reason"] == "real_report_required"
+    assert data["report_id"] is None
+    assert data["results"]["matched"] is False
 
 
 def test_user_subscriptions_endpoint_reads_database(monkeypatch):
@@ -328,3 +425,53 @@ def test_user_subscriptions_endpoint_reads_database(monkeypatch):
     data = response.json()
     assert data["subscriptions"][0]["subscription_id"] == "sub-1"
     assert data["subscriptions"][0]["companies"] == ["Tesla"]
+
+
+def test_scheduler_scan_status_exposes_lane_summary(monkeypatch):
+    fake_status = {
+        "status": "completed",
+        "source_summary": {
+            "news": {"status": "completed", "events_found": 2, "events_saved": 2},
+            "reports": {"status": "blocked", "events_found": 0, "events_saved": 0},
+            "compliance": {"status": "degraded", "events_found": 0, "events_saved": 0},
+        },
+        "blocked_reason": None,
+        "next_actions": ["refresh sources"],
+        "checkpoint_state": {"newsapi": {"latest_checkpoint": {"apple": {}}}},
+    }
+    fake_orchestrator = type("FakeOrchestrator", (), {"get_scan_status": lambda self: fake_status})()
+    monkeypatch.setattr(main_module.runtime, "get_orchestrator", lambda: fake_orchestrator)
+    client = TestClient(main_module.app)
+
+    response = client.get("/scheduler/scan/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["data"]["source_summary"]["news"]["events_found"] == 2
+    assert payload["data"]["source_summary"]["reports"]["status"] == "blocked"
+
+
+def test_scheduler_statistics_exposes_lane_statistics(monkeypatch):
+    monkeypatch.setattr(
+        main_module.runtime,
+        "get_scheduler_statistics",
+        lambda days=7: {
+            "period_days": days,
+            "total_scans": 3,
+            "lane_statistics": {
+                "news": {"runs": 3, "events_found": 4, "events_saved": 4, "blocked_runs": 0},
+                "reports": {"runs": 3, "events_found": 1, "events_saved": 1, "blocked_runs": 1},
+                "compliance": {"runs": 3, "events_found": 0, "events_saved": 0, "blocked_runs": 2},
+            },
+        },
+    )
+    client = TestClient(main_module.app)
+
+    response = client.get("/scheduler/statistics", params={"days": 14})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["period_days"] == 14
+    assert payload["lane_statistics"]["news"]["events_found"] == 4
+    assert payload["lane_statistics"]["reports"]["blocked_runs"] == 1

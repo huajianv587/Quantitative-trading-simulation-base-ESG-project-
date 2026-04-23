@@ -20,28 +20,36 @@ let _policy = null;
 const COPY = {
   en: {
     title: 'Autopilot Policy',
-    subtitle: 'Unified execution policy surface for budget caps, strategy allowlists, and runtime guardrails.',
+    subtitle: 'Primary control surface for requested mode, guardrails, and execution automation.',
     refresh: 'Refresh Policy',
     save: 'Save Policy',
     saveFailed: 'Save failed',
     arm: 'Arm Autopilot',
     disarm: 'Disarm',
-    paperOnly: 'Execution Surface',
     loading: 'Loading autopilot policy...',
     saving: 'Saving autopilot policy...',
     saved: 'Autopilot policy saved',
     armed: 'Autopilot armed',
     disarmed: 'Autopilot disarmed',
-    runtime: 'Runtime State',
+    armBlocked: 'Live mode is selected but not ready yet.',
+    runtime: 'Mode Summary',
     guardrails: 'Guardrails',
     allowlists: 'Allowlists',
     warnings: 'Warnings',
     protections: 'Protections',
-    mode: 'Execution Mode',
+    requestedMode: 'Requested Mode',
+    effectiveMode: 'Effective Mode',
+    paperReady: 'Paper Readiness',
+    liveReady: 'Live Readiness',
+    liveAvailable: 'Live Available',
+    blockReason: 'Block Reason',
+    nextActions: 'Next Actions',
+    modeSelect: 'Execution Mode',
+    paperMode: 'Paper (Simulated)',
+    liveMode: 'Live (Real)',
     autoSubmit: 'Auto Submit',
-    runtimeArm: 'Runtime Arm',
+    runtimeArm: 'Autopilot Arm',
     killSwitch: 'Kill Switch',
-    protectionMeaning: 'Protection Meaning',
     dailyBudget: 'Daily Budget Cap ($)',
     perTrade: 'Per-Trade Cap ($)',
     maxOpen: 'Max Open Positions',
@@ -52,37 +60,52 @@ const COPY = {
     ttl: 'Signal TTL (min)',
     universe: 'Allowed Universe',
     strategies: 'Allowed Strategies',
-    nextAction: 'Next Action',
-    nextActionReady: 'Trading Ops can arm and run one cycle once both gates are open.',
-    nextActionGuarded: 'Open both gates or clear warnings before auto-submit can proceed.',
-    policyHint: 'Judge + Risk Manager remain mandatory gates. This page controls execution automation without bypassing broker readiness.',
     noWarnings: 'No policy warnings',
-    noWarningsHint: 'Current execution policy is internally consistent.',
+    noWarningsHint: 'The current policy is internally consistent.',
+    policyHint: 'Paper is the current recommended path. Live can be selected now, but execution stays blocked until live credentials, live account readiness, and broker gates all pass.',
+    nextActionReady: 'Paper is ready. You can arm autopilot and run one cycle from Trading Ops.',
+    nextActionGuarded: 'Keep validating in paper, or finish live readiness before enabling live execution.',
+    on: 'On',
+    off: 'Off',
+    yes: 'Yes',
+    no: 'No',
+    unknown: 'Not set',
+    recommendedPath: 'Current Recommendation',
+    paperPreferred: 'Paper is the active product path',
+    liveDeferred: 'Live is visible and selectable, but still gated',
   },
   zh: {
     title: '自动驾驶策略',
-    subtitle: '统一执行面：集中管理预算上限、策略白名单与运行时门禁。',
+    subtitle: '统一管理请求模式、执行门禁与自动化策略，这是当前唯一的模式主入口。',
     refresh: '刷新策略',
     save: '保存策略',
     saveFailed: '保存失败',
     arm: '武装自动驾驶',
     disarm: '解除武装',
-    paperOnly: '执行面',
     loading: '正在加载自动驾驶策略...',
     saving: '正在保存自动驾驶策略...',
     saved: '自动驾驶策略已保存',
     armed: '自动驾驶已武装',
     disarmed: '自动驾驶已解除武装',
-    runtime: '运行状态',
+    armBlocked: '当前已选择 Live 模式，但实盘尚未就绪，暂时不能武装。',
+    runtime: '模式摘要',
     guardrails: '门禁参数',
     allowlists: '白名单',
     warnings: '风险提示',
-    protections: '保护项',
-    mode: '执行模式',
+    protections: '保护与说明',
+    requestedMode: '当前选择模式',
+    effectiveMode: '当前生效模式',
+    paperReady: 'Paper 就绪状态',
+    liveReady: 'Live 就绪状态',
+    liveAvailable: 'Live 可用性',
+    blockReason: '阻断原因',
+    nextActions: '下一步动作',
+    modeSelect: '执行模式',
+    paperMode: 'Paper（模拟）',
+    liveMode: 'Live（实盘）',
     autoSubmit: '自动提交',
-    runtimeArm: '运行态武装',
+    runtimeArm: '自动驾驶武装',
     killSwitch: '熔断总开关',
-    protectionMeaning: '保护说明',
     dailyBudget: '每日预算上限 ($)',
     perTrade: '单笔上限 ($)',
     maxOpen: '最大持仓数',
@@ -93,12 +116,19 @@ const COPY = {
     ttl: '信号 TTL（分钟）',
     universe: '允许股票池',
     strategies: '允许策略',
-    nextAction: '下一步动作',
-    nextActionReady: '两道门都打开后，可以在 Trading Ops 中武装并运行一次闭环。',
-    nextActionGuarded: '先打开必要门禁或清除警告，再进入自动提交流程。',
-    policyHint: 'Judge 与 Risk Manager 仍然是强制双门禁；此页控制通用执行自动化，不绕过券商就绪状态。',
     noWarnings: '暂无策略警告',
-    noWarningsHint: '当前执行策略配置自洽。',
+    noWarningsHint: '当前策略配置没有发现明显冲突。',
+    policyHint: '当前推荐路径仍然是 Paper。Live 模式已经可见可选，但只有在 live account、live keys 与 broker readiness 全部通过后才会真正执行。',
+    nextActionReady: 'Paper 已就绪，可以在交易运维里武装并运行一次闭环。',
+    nextActionGuarded: '继续在 Paper 验证；如果想切到 Live，请先完成凭证、账户与门禁就绪。',
+    on: '开启',
+    off: '关闭',
+    yes: '是',
+    no: '否',
+    unknown: '未设置',
+    recommendedPath: '当前推荐路径',
+    paperPreferred: '当前产品主路径仍是 Paper',
+    liveDeferred: 'Live 已预留，但暂时受门禁限制',
   },
 };
 
@@ -107,51 +137,64 @@ function c(key) {
   return COPY[lang][key] || COPY.en[key] || key;
 }
 
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
+}
+
 function autoSubmitEnabled(policy = _policy) {
   return Boolean(policy?.auto_submit_enabled || policy?.paper_auto_submit_enabled);
 }
 
 function yesNo(value) {
-  if (getLang() === 'zh') return value ? '开启' : '关闭';
-  return value ? 'on' : 'off';
+  return value ? c('yes') : c('no');
 }
 
-function protectionLabel(value) {
-  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (normalized === 'auto_submit_disabled') {
-    return getLang() === 'zh' ? '自动提交关闭' : 'Auto submit disabled';
-  }
-  const map = {
-    judge_gate: getLang() === 'zh' ? 'Judge 门禁' : 'Judge gate',
-    risk_gate: getLang() === 'zh' ? 'Risk 门禁' : 'Risk gate',
-    daily_budget: getLang() === 'zh' ? '日预算保护' : 'Daily budget',
-    kill_switch: c('killSwitch'),
-    duplicate_order_guard: getLang() === 'zh' ? '重复订单保护' : 'Duplicate order guard',
-    stale_signal_guard: getLang() === 'zh' ? '过期信号保护' : 'Stale signal guard',
-    drawdown_guard: getLang() === 'zh' ? '回撤保护' : 'Drawdown guard',
-    notifier_guard: getLang() === 'zh' ? '通知保护' : 'Notifier guard',
-  };
-  return map[normalized] || normalized.replace(/_/g, ' ').trim() || '-';
+function onOff(value) {
+  return value ? c('on') : c('off');
 }
 
-function protectionDetail(value) {
-  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (normalized === 'auto_submit_disabled') {
-    return getLang() === 'zh'
-      ? '自动提交目前处于关闭状态，执行链路会停留在 review / guarded。'
-      : 'Auto submit is currently disabled, so the execution path stays in review/guarded mode.';
-  }
+function humanMode(value) {
+  return String(value || '').trim().toLowerCase() === 'live' ? c('liveMode') : c('paperMode');
+}
+
+function humanReason(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const isZh = getLang() === 'zh';
   const map = {
-    judge_gate: getLang() === 'zh' ? '任何自动提交前都必须先通过 judge 结论。' : 'Judge verdict must clear before any auto-submit.',
-    risk_gate: getLang() === 'zh' ? 'Risk Manager 审批仍然是硬门禁。' : 'Risk Manager approval remains a hard gate.',
-    daily_budget: getLang() === 'zh' ? '超过每日预算后不会继续自动提交。' : 'Auto-submit stops once the daily budget cap is exhausted.',
-    kill_switch: getLang() === 'zh' ? '紧急停机后只保留审计与只读状态。' : 'Emergency stop keeps the page audit-only and blocks submit.',
-    duplicate_order_guard: getLang() === 'zh' ? '防止同一标的在短窗口内重复生成订单。' : 'Prevents duplicate orders in the same short window.',
-    stale_signal_guard: getLang() === 'zh' ? '过期信号不会继续流入自动提交流程。' : 'Stale signals are blocked from the auto-submit path.',
-    drawdown_guard: getLang() === 'zh' ? '回撤过大时会把策略留在 review / guarded 状态。' : 'Large drawdowns keep the strategy in review/guarded mode.',
-    notifier_guard: getLang() === 'zh' ? '关键动作需要可见通知链路，避免 silent failure。' : 'Critical actions stay visible through the notifier chain.',
+    live_credentials_missing: isZh ? '尚未配置 Live 专属 Alpaca 凭证。' : 'Live-specific Alpaca credentials are missing.',
+    live_trading_disabled: isZh ? '服务端仍关闭了 Live 提交。' : 'Live routing is still disabled in server settings.',
+    live_account_unavailable: isZh ? 'Live 账户尚未接通，或当前密钥没有实盘权限。' : 'Live account is unavailable or current keys do not have live permission.',
+    live_not_ready: isZh ? '实盘门禁还没有全部通过。' : 'Live readiness has not passed yet.',
+    live_mode_selected: isZh ? '当前已选择 Live 模式，但还没有达到真实执行条件。' : 'Live mode is selected, but it is not ready for execution yet.',
+    paper_credentials_missing: isZh ? 'Paper 凭证未配置。' : 'Paper credentials are missing.',
+    auto_submit_disabled: isZh ? '自动提交当前处于关闭状态。' : 'Auto submit is currently disabled.',
+    autopilot_disarmed: isZh ? '自动驾驶当前未武装。' : 'Autopilot is currently disarmed.',
+    kill_switch_enabled: isZh ? '熔断总开关已开启。' : 'Kill switch is enabled.',
+    daily_budget_not_set: isZh ? '每日预算上限尚未配置。' : 'Daily budget cap is not configured.',
+    no_strategy_allowlist: isZh ? '策略白名单为空。' : 'Strategy allowlist is empty.',
+    judge_gate: isZh ? 'Judge 门禁' : 'Judge gate',
+    risk_gate: isZh ? 'Risk 门禁' : 'Risk gate',
+    kelly_cap: isZh ? 'Kelly 上限' : 'Kelly cap',
+    budget_gate: isZh ? '预算门禁' : 'Budget gate',
   };
-  return map[normalized] || value || '-';
+  return map[normalized] || (value ? String(value) : c('unknown'));
+}
+
+function humanNextAction(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const isZh = getLang() === 'zh';
+  const map = {
+    add_live_alpaca_keys: isZh ? '补充 ALPACA_LIVE_API_KEY / ALPACA_LIVE_API_SECRET。' : 'Add ALPACA_LIVE_API_KEY / ALPACA_LIVE_API_SECRET.',
+    keep_using_paper_mode: isZh ? '先继续使用 Paper 完整验证策略。' : 'Keep validating on Paper first.',
+    enable_live_trading_after_paper_stabilizes: isZh ? '等 Paper 路径稳定后，再打开 Live 提交开关。' : 'Enable live routing only after the paper path stabilizes.',
+    enable_live_trading_when_ready: isZh ? '确认流程稳定后，再打开 Live 交易开关。' : 'Enable live trading only after the path is ready.',
+    verify_live_account_and_permissions: isZh ? '确认 Live account 已开通，且密钥具备实盘权限。' : 'Verify the live account and confirm the keys have live permission.',
+    verify_live_account_permissions: isZh ? '确认 Live 账户和密钥权限都已打通。' : 'Verify live account and key permissions.',
+    verify_live_broker_readiness: isZh ? '检查 broker readiness、预算门禁与风控门禁。' : 'Verify broker readiness and execution gates.',
+    configure_paper_credentials: isZh ? '补充 Paper 凭证，恢复当前推荐执行路径。' : 'Configure paper credentials to restore the default execution path.',
+    switch_to_paper_mode: isZh ? '切回 Paper 模式继续验证。' : 'Switch back to Paper mode and keep validating.',
+  };
+  return map[normalized] || (value ? String(value) : c('unknown'));
 }
 
 function parseNumber(selector, fallback = 0) {
@@ -172,7 +215,7 @@ export async function render(container) {
   renderShell();
   wire();
   _langCleanup = onLangChange(() => {
-    if (!_container?.isConnected) return;
+    if (!isMounted()) return;
     renderShell();
     wire();
     renderPolicy();
@@ -188,6 +231,7 @@ export function destroy() {
 }
 
 function renderShell() {
+  if (!_container) return;
   _container.innerHTML = `
     <div class="workbench-page autopilot-policy-page" data-no-autotranslate="true">
       <section class="run-panel">
@@ -197,12 +241,7 @@ function renderShell() {
         </div>
         <div class="run-panel__body">
           <div class="preview-step-grid" id="autopilot-kpis">${emptyState(c('loading'))}</div>
-          <div class="workbench-inline-status" id="autopilot-mode-strip">
-            <div class="factor-check-row">
-              <span>${c('mode')}</span>
-              <strong class="is-watch">${esc((_policy?.execution_mode || 'paper').toUpperCase())}</strong>
-            </div>
-          </div>
+          <div class="workbench-inline-status" id="autopilot-mode-strip">${emptyState(c('loading'))}</div>
         </div>
         <div class="run-panel__foot workbench-action-grid">
           <button class="btn workbench-action-btn workbench-action-btn--secondary" id="btn-autopilot-refresh">${c('refresh')}</button>
@@ -235,6 +274,7 @@ function renderShell() {
 }
 
 function wire() {
+  if (!isMounted()) return;
   _container.querySelector('#btn-autopilot-refresh')?.addEventListener('click', refreshPolicy);
   _container.querySelector('#btn-autopilot-save')?.addEventListener('click', savePolicy);
   _container.querySelector('#btn-autopilot-arm')?.addEventListener('click', armPolicy);
@@ -242,25 +282,34 @@ function wire() {
 }
 
 async function refreshPolicy() {
-  ['#autopilot-kpis', '#autopilot-guardrails', '#autopilot-allowlists', '#autopilot-warnings', '#autopilot-protections'].forEach((selector) => {
-    setLoading(_container.querySelector(selector), c('loading'));
-  });
+  if (!isMounted()) return;
+  ['#autopilot-kpis', '#autopilot-guardrails', '#autopilot-allowlists', '#autopilot-warnings', '#autopilot-protections']
+    .forEach((selector) => {
+      const host = _container?.querySelector(selector);
+      if (host) setLoading(host, c('loading'));
+    });
   try {
     _policy = await api.trading.autopilotPolicy();
+    if (!isMounted()) return;
     renderPolicy();
   } catch (error) {
-    ['#autopilot-kpis', '#autopilot-guardrails', '#autopilot-allowlists', '#autopilot-warnings', '#autopilot-protections'].forEach((selector) => {
-      renderError(_container.querySelector(selector), error);
-    });
+    if (!isMounted()) return;
+    ['#autopilot-kpis', '#autopilot-guardrails', '#autopilot-allowlists', '#autopilot-warnings', '#autopilot-protections']
+      .forEach((selector) => {
+        const host = _container?.querySelector(selector);
+        if (host) renderError(host, error);
+      });
   }
 }
 
 async function savePolicy() {
+  if (!isMounted()) return;
   try {
-    setLoading(_container.querySelector('#autopilot-guardrails'), c('saving'));
+    const guardrailsHost = _container?.querySelector('#autopilot-guardrails');
+    if (guardrailsHost) setLoading(guardrailsHost, c('saving'));
     const enabled = boolValue('#autopilot-enabled');
     const payload = {
-      execution_mode: String(_policy?.execution_mode || 'paper').toLowerCase() === 'live' ? 'live' : 'paper',
+      execution_mode: textValue('#autopilot-mode-select') === 'live' ? 'live' : 'paper',
       execution_permission: 'auto_submit',
       auto_submit_enabled: enabled,
       paper_auto_submit_enabled: enabled,
@@ -279,10 +328,13 @@ async function savePolicy() {
       protections: Array.isArray(_policy?.protections) ? _policy.protections : [],
     };
     _policy = await api.trading.saveAutopilotPolicy(payload);
+    if (!isMounted()) return;
     renderPolicy();
     toast.success(c('saved'));
   } catch (error) {
-    renderError(_container.querySelector('#autopilot-guardrails'), error);
+    if (!isMounted()) return;
+    const guardrailsHost = _container?.querySelector('#autopilot-guardrails');
+    if (guardrailsHost) renderError(guardrailsHost, error);
     toast.error(c('saveFailed'), error.message || '');
   }
 }
@@ -290,25 +342,31 @@ async function savePolicy() {
 async function armPolicy() {
   try {
     _policy = await api.trading.autopilotArm({ armed: true });
+    if (!isMounted()) return;
     renderPolicy();
+    if (_policy?.block_reason && !_policy?.armed) {
+      toast.error(c('armBlocked'), humanReason(_policy.block_reason));
+      return;
+    }
     toast.success(c('armed'));
   } catch (error) {
-    toast.error(c('armed'), error.message || '');
+    toast.error(c('arm'), error.message || '');
   }
 }
 
 async function disarmPolicy() {
   try {
     _policy = await api.trading.autopilotDisarm({ armed: false });
+    if (!isMounted()) return;
     renderPolicy();
     toast.success(c('disarmed'));
   } catch (error) {
-    toast.error(c('disarmed'), error.message || '');
+    toast.error(c('disarm'), error.message || '');
   }
 }
 
 function renderPolicy() {
-  if (!_policy) return;
+  if (!_policy || !isMounted()) return;
   renderKpis();
   renderGuardrails();
   renderAllowlists();
@@ -317,34 +375,48 @@ function renderPolicy() {
 }
 
 function renderKpis() {
-  const ready = Boolean(
-    (_policy.execution_permission === 'auto_submit' || _policy.execution_permission === 'paper_auto_submit')
-      && autoSubmitEnabled(_policy)
-      && _policy.armed
-      && !_policy.kill_switch
-  );
-  const modeStrip = _container.querySelector('#autopilot-mode-strip');
-  if (modeStrip) {
-    modeStrip.innerHTML = `
-      <div class="factor-check-row">
-        <span>${c('mode')}</span>
-        <strong class="is-watch">${esc(`${_policy.execution_mode || 'paper'} / ${_policy.execution_permission || 'manual_review'}`)}</strong>
-      </div>
-    `;
-  }
-  _container.querySelector('#autopilot-kpis').innerHTML = `
-    ${metric(c('mode'), `${_policy.execution_mode || 'paper'} / ${_policy.execution_permission || 'manual_review'}`)}
-    ${metric(c('autoSubmit'), yesNo(autoSubmitEnabled(_policy)), autoSubmitEnabled(_policy) ? 'positive' : 'risk')}
-    ${metric(c('runtimeArm'), yesNo(_policy.armed), _policy.armed ? 'positive' : 'risk')}
-    ${metric(c('killSwitch'), yesNo(_policy.kill_switch), _policy.kill_switch ? 'risk' : 'positive')}
-    ${metric(c('dailyBudget'), `$${Number(_policy.daily_budget_cap || 0).toLocaleString()}`)}
-    ${metric(c('nextAction'), ready ? c('nextActionReady') : c('nextActionGuarded'), ready ? 'positive' : 'risk')}
+  const host = _container?.querySelector('#autopilot-kpis');
+  const modeStrip = _container?.querySelector('#autopilot-mode-strip');
+  if (!host || !modeStrip) return;
+
+  const requestedMode = _policy.requested_mode || _policy.execution_mode || 'paper';
+  const effectiveMode = _policy.effective_mode || 'paper';
+  const nextActionSummary = _policy.block_reason ? c('nextActionGuarded') : c('nextActionReady');
+
+  host.innerHTML = `
+    ${metric(c('requestedMode'), humanMode(requestedMode))}
+    ${metric(c('effectiveMode'), humanMode(effectiveMode), effectiveMode === 'live' ? 'risk' : 'positive')}
+    ${metric(c('paperReady'), yesNo(_policy.paper_ready), _policy.paper_ready ? 'positive' : 'risk')}
+    ${metric(c('liveReady'), yesNo(_policy.live_ready), _policy.live_ready ? 'positive' : 'risk')}
+    ${metric(c('autoSubmit'), onOff(autoSubmitEnabled(_policy)), autoSubmitEnabled(_policy) ? 'positive' : 'risk')}
+    ${metric(c('runtimeArm'), onOff(_policy.armed), _policy.armed ? 'positive' : 'risk')}
+    ${metric(c('killSwitch'), onOff(_policy.kill_switch), _policy.kill_switch ? 'risk' : 'positive')}
+    ${metric(c('recommendedPath'), _policy.block_reason ? c('liveDeferred') : c('paperPreferred'), _policy.block_reason ? 'risk' : 'positive')}
+  `;
+
+  modeStrip.innerHTML = `
+    <div class="workbench-kv-list compact-kv-list">
+      <div class="workbench-kv-row"><span>${c('requestedMode')}</span><strong>${esc(humanMode(requestedMode))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('effectiveMode')}</span><strong>${esc(humanMode(effectiveMode))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('liveAvailable')}</span><strong>${esc(yesNo(_policy.live_available))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('blockReason')}</span><strong>${esc(humanReason(_policy.block_reason))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('nextActions')}</span><strong>${esc((_policy.next_actions || []).map(humanNextAction).join(' / ') || nextActionSummary)}</strong></div>
+    </div>
   `;
 }
 
 function renderGuardrails() {
-  _container.querySelector('#autopilot-guardrails').innerHTML = `
+  const host = _container?.querySelector('#autopilot-guardrails');
+  if (!host) return;
+  host.innerHTML = `
     <div class="grid-2 compact-control-grid">
+      <label class="field">
+        <span>${c('modeSelect')}</span>
+        <select id="autopilot-mode-select">
+          <option value="paper" ${(_policy.execution_mode || 'paper') === 'paper' ? 'selected' : ''}>${c('paperMode')}</option>
+          <option value="live" ${_policy.execution_mode === 'live' ? 'selected' : ''}>${c('liveMode')}</option>
+        </select>
+      </label>
       <label class="field">
         <span>${c('dailyBudget')}</span>
         <input id="autopilot-daily-budget" type="number" value="${esc(_policy.daily_budget_cap ?? 0)}">
@@ -387,16 +459,26 @@ function renderGuardrails() {
         <span>${c('killSwitch')}</span>
         <strong><input id="autopilot-kill-switch" type="checkbox" ${_policy.kill_switch ? 'checked' : ''}></strong>
       </label>
+      <div class="factor-check-row">
+        <span>${c('paperReady')}</span>
+        <strong>${esc(yesNo(_policy.paper_ready))}</strong>
+      </div>
+      <div class="factor-check-row">
+        <span>${c('liveReady')}</span>
+        <strong>${esc(yesNo(_policy.live_ready))}</strong>
+      </div>
     </div>
     <div class="workbench-section">
-      <div class="workbench-section__title">${c('paperOnly')}</div>
+      <div class="workbench-section__title">${c('runtime')}</div>
       <p class="workbench-section__hint">${c('policyHint')}</p>
     </div>
   `;
 }
 
 function renderAllowlists() {
-  _container.querySelector('#autopilot-allowlists').innerHTML = `
+  const host = _container?.querySelector('#autopilot-allowlists');
+  if (!host) return;
+  host.innerHTML = `
     <div class="grid-1 compact-control-grid">
       <label class="field field--with-preview">
         <span>${c('universe')}</span>
@@ -414,15 +496,17 @@ function renderAllowlists() {
 
 function renderWarnings() {
   const warnings = Array.isArray(_policy.warnings) ? _policy.warnings : [];
-  _container.querySelector('#autopilot-warnings').innerHTML = warnings.length ? `
+  const host = _container?.querySelector('#autopilot-warnings');
+  if (!host) return;
+  host.innerHTML = warnings.length ? `
     <div class="workbench-list">
       ${warnings.map((warning) => `
         <article class="workbench-item">
           <div class="workbench-item__head">
-            <strong>${esc(protectionLabel(warning))}</strong>
+            <strong>${esc(humanReason(warning))}</strong>
             ${statusBadge('watch')}
           </div>
-          <p>${esc(protectionDetail(warning))}</p>
+          <p>${esc(humanReason(warning))}</p>
         </article>
       `).join('')}
     </div>
@@ -431,27 +515,27 @@ function renderWarnings() {
 
 function renderProtections() {
   const protections = Array.isArray(_policy.protections) ? _policy.protections : [];
-  _container.querySelector('#autopilot-protections').innerHTML = `
+  const host = _container?.querySelector('#autopilot-protections');
+  if (!host) return;
+  host.innerHTML = `
     <div class="workbench-metric-grid">
-      ${metric(c('runtimeArm'), yesNo(_policy.armed), _policy.armed ? 'positive' : 'risk')}
-      ${metric(c('autoSubmit'), yesNo(autoSubmitEnabled(_policy)), autoSubmitEnabled(_policy) ? 'positive' : 'risk')}
-      ${metric(c('maxWeight'), pct(_policy.max_symbol_weight || 0))}
-      ${metric(c('drawdown'), pct(_policy.drawdown_limit || 0), 'risk')}
+      ${metric(c('requestedMode'), humanMode(_policy.requested_mode || _policy.execution_mode || 'paper'))}
+      ${metric(c('effectiveMode'), humanMode(_policy.effective_mode || 'paper'), (_policy.effective_mode || 'paper') === 'live' ? 'risk' : 'positive')}
+      ${metric(c('liveAvailable'), yesNo(_policy.live_available), _policy.live_available ? 'positive' : 'risk')}
+      ${metric(c('blockReason'), humanReason(_policy.block_reason), _policy.block_reason ? 'risk' : 'positive')}
     </div>
     <div class="token-preview">
-      ${protections.map((item) => `<span class="token-chip token-chip--accent">${esc(protectionLabel(item))}</span>`).join('')}
+      ${(protections.length ? protections : ['judge_gate', 'risk_gate']).map((item) => `
+        <span class="token-chip token-chip--accent">${esc(humanReason(item))}</span>
+      `).join('')}
     </div>
     <div class="workbench-kv-list compact-kv-list">
-      ${protections.map((item) => `
-        <div class="workbench-kv-row">
-          <span>${esc(protectionLabel(item))}</span>
-          <strong>${esc(protectionDetail(item))}</strong>
-        </div>
-      `).join('')}
-      <div class="workbench-kv-row">
-        <span>${c('nextAction')}</span>
-        <strong>${esc(_policy.armed && autoSubmitEnabled(_policy) && !_policy.kill_switch ? c('nextActionReady') : c('nextActionGuarded'))}</strong>
-      </div>
+      <div class="workbench-kv-row"><span>${c('requestedMode')}</span><strong>${esc(humanMode(_policy.requested_mode || _policy.execution_mode || 'paper'))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('effectiveMode')}</span><strong>${esc(humanMode(_policy.effective_mode || 'paper'))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('paperReady')}</span><strong>${esc(yesNo(_policy.paper_ready))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('liveReady')}</span><strong>${esc(yesNo(_policy.live_ready))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('maxWeight')}</span><strong>${esc(pct(_policy.max_symbol_weight || 0))}</strong></div>
+      <div class="workbench-kv-row"><span>${c('nextActions')}</span><strong>${esc((_policy.next_actions || []).map(humanNextAction).join(' / ') || (_policy.block_reason ? c('nextActionGuarded') : c('nextActionReady')))}</strong></div>
     </div>
   `;
 }

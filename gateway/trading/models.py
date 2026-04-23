@@ -209,6 +209,13 @@ class AutopilotPolicy(BaseModel):
     policy_id: str
     generated_at: str
     execution_mode: Literal["paper", "live"] = "paper"
+    requested_mode: Literal["paper", "live"] = "paper"
+    effective_mode: Literal["paper", "live"] = "paper"
+    paper_ready: bool = True
+    live_ready: bool = False
+    live_available: bool = False
+    block_reason: str | None = None
+    next_actions: list[str] = Field(default_factory=list)
     execution_permission: Literal["research", "auto_submit", "manual_review", "paper_auto_submit"] = "auto_submit"
     auto_submit_enabled: bool = False
     paper_auto_submit_enabled: bool = False
@@ -232,6 +239,13 @@ class AutopilotPolicy(BaseModel):
 class ExecutionPathStatus(BaseModel):
     generated_at: str
     mode: str = "paper"
+    requested_mode: str = "paper"
+    effective_mode: str = "paper"
+    paper_ready: bool = True
+    live_ready: bool = False
+    live_available: bool = False
+    block_reason: str | None = None
+    next_actions: list[str] = Field(default_factory=list)
     armed: bool = False
     daily_budget_cap: float = Field(ge=0.0, default=0.0)
     budget_remaining: float = Field(ge=0.0, default=0.0)

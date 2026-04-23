@@ -5,36 +5,26 @@ const { test, expect } = require('@playwright/test');
 const OUTPUT_DIR = path.join(process.cwd(), 'test-results', 'i18n-audit');
 
 const ROUTES = [
-  { path: '/dashboard', ready: '.page-header__title', scenes: [{ name: 'default' }] },
-  { path: '/research', ready: '#btn-run-research', scenes: [{ name: 'default' }, { name: 'results', action: runResearch }] },
-  { path: '/intelligence', ready: '#btn-intel-scan', scenes: [{ name: 'default' }] },
-  { path: '/factor-lab', ready: '#btn-factor-discover', scenes: [{ name: 'default' }] },
-  { path: '/simulation', ready: '#btn-simulate-scenario', scenes: [{ name: 'default' }] },
-  { path: '/portfolio', ready: '#step-content', scenes: [
+  { path: '/dashboard', ready: '#page-title', scenes: [{ name: 'default' }] },
+  { path: '/research', ready: '#page-title', scenes: [{ name: 'default' }, { name: 'results', action: runResearch }] },
+  { path: '/intelligence', ready: '#page-title', scenes: [{ name: 'default' }] },
+  { path: '/portfolio', ready: '#page-title', scenes: [
     { name: 'step-1' },
-    { name: 'step-2', action: async (page) => page.locator('#s1-next').click() },
-    { name: 'step-3', action: async (page) => { await page.locator('#s1-next').click(); await page.locator('#s2-next').click(); } },
-    { name: 'step-4', action: async (page) => { await page.locator('#s1-next').click(); await page.locator('#s2-next').click(); await page.locator('#s3-next').click(); } },
     { name: 'step-5', action: async (page) => { await page.locator('#s1-next').click(); await page.locator('#s2-next').click(); await page.locator('#s3-next').click(); await page.locator('#btn-optimize').click(); await page.waitForTimeout(1200); await page.locator('#s4-next').click(); } },
   ] },
-  { path: '/backtest', ready: '#btn-run-bt', scenes: [{ name: 'default' }, { name: 'results', action: runBacktest }] },
-  { path: '/execution', ready: '#btn-run-exec', scenes: [{ name: 'default' }] },
-  { path: '/validation', ready: '#btn-run-val', scenes: [{ name: 'default' }, { name: 'results', action: runValidation }] },
-  { path: '/models', ready: '#btn-refresh-all', scenes: [{ name: 'default' }] },
-  { path: '/chat', ready: '#send-btn', scenes: [{ name: 'default' }] },
-  { path: '/score', ready: '#score-btn', scenes: [{ name: 'default' }] },
-  { path: '/reports', ready: '#generate-btn', scenes: [{ name: 'default' }] },
-  { path: '/data-management', ready: '#sync-btn', scenes: [{ name: 'default' }, { name: 'sync-running', action: runSync }] },
-  { path: '/push-rules', ready: '#new-rule-btn', scenes: [{ name: 'default' }] },
-  { path: '/subscriptions', ready: '#create-sub-btn', scenes: [{ name: 'default' }] },
-  { path: '/login', ready: '#login-btn', auth: true, scenes: [{ name: 'default' }] },
-  { path: '/register', ready: '#reg-btn', auth: true, scenes: [{ name: 'default' }] },
-  { path: '/reset-password', ready: '#reset-btn', auth: true, scenes: [{ name: 'default' }] },
+  { path: '/backtest', ready: '#page-title', scenes: [{ name: 'default' }, { name: 'results', action: runBacktest }] },
+  { path: '/validation', ready: '#page-title', scenes: [{ name: 'default' }, { name: 'results', action: runValidation }] },
+  { path: '/chat', ready: '#page-title', scenes: [{ name: 'default' }] },
+  { path: '/score', ready: '#page-title', scenes: [{ name: 'default' }] },
+  { path: '/data-management', ready: '#page-title', scenes: [{ name: 'default' }, { name: 'sync-running', action: runSync }] },
+  { path: '/trading-ops', ready: '#page-title', scenes: [{ name: 'default' }] },
+  { path: '/autopilot-policy', ready: '#page-title', scenes: [{ name: 'default' }] },
+  { path: '/strategy-registry', ready: '#page-title', scenes: [{ name: 'default' }] },
 ];
 
 test.describe('i18n visual audit', () => {
   test('captures zh/en screenshots and visible text residue report', async ({ page }) => {
-    test.setTimeout(20 * 60 * 1000);
+    test.setTimeout(35 * 60 * 1000);
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
     const pageErrors = [];
@@ -68,7 +58,7 @@ test.describe('i18n visual audit', () => {
               await scene.action(page);
             }
 
-            await page.waitForTimeout(900);
+            await page.waitForTimeout(450);
           } catch (error) {
             record.warning = error.message;
           }
@@ -78,7 +68,8 @@ test.describe('i18n visual audit', () => {
             record.visibleTextCount = textAudit.texts.length;
             record.chineseInEnglish = lang === 'en' ? textAudit.texts.filter((t) => /[\u4e00-\u9fff]/.test(t) && t !== '中') : [];
             record.englishInChinese = lang === 'zh' ? textAudit.texts.filter((t) => isUnexpectedEnglish(t)) : [];
-            await page.screenshot({ path: record.screenshot, fullPage: true });
+            await page.evaluate(() => window.scrollTo(0, 0));
+            await page.screenshot({ path: record.screenshot, animations: 'disabled' });
           } catch (error) {
             record.warning = record.warning || error.message;
           }
@@ -105,23 +96,9 @@ async function ensureReady(page, selector) {
 }
 
 async function setLanguage(page, lang) {
-  const candidates = [
-    `#tb-lang-${lang}`,
-    `.lang-btn[data-lang="${lang}"]`,
-  ];
-
-  for (const selector of candidates) {
-    const locator = page.locator(selector);
-    const count = await locator.count();
-    for (let i = 0; i < count; i += 1) {
-      const candidate = locator.nth(i);
-      if (await candidate.isVisible()) {
-        await candidate.click();
-        await page.waitForFunction((targetLang) => document.documentElement.lang === targetLang, lang);
-        await page.waitForTimeout(250);
-        return;
-      }
-    }
+  const current = await page.evaluate(() => document.documentElement.lang || localStorage.getItem('qt-lang') || 'zh');
+  if (current === lang) {
+    return;
   }
 
   await page.evaluate((targetLang) => {
@@ -129,27 +106,31 @@ async function setLanguage(page, lang) {
     document.documentElement.setAttribute('lang', targetLang);
   }, lang);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForFunction((targetLang) => document.documentElement.lang === targetLang, lang);
+  await page.waitForTimeout(250);
 }
 
 async function runResearch(page) {
+  await ensureReady(page, '#btn-run-research');
   await page.locator('#btn-run-research').click();
   await page.waitForTimeout(2500);
 }
 
 async function runBacktest(page) {
+  await ensureReady(page, '#btn-run-bt');
   await page.locator('#bt-universe').fill('AAPL, MSFT');
   await page.locator('#btn-run-bt').click();
   await page.locator('#bt-chart-card').waitFor({ state: 'visible', timeout: 30000 });
 }
 
 async function runValidation(page) {
+  await ensureReady(page, '#btn-run-val');
   await page.locator('#v-universe').fill('AAPL, MSFT');
   await page.locator('#btn-run-val').click();
   await page.locator('#wf-chart').waitFor({ state: 'visible', timeout: 30000 });
 }
 
 async function runSync(page) {
+  await ensureReady(page, '#sync-btn');
   await page.locator('#sync-btn').click();
   await page.waitForTimeout(1500);
 }

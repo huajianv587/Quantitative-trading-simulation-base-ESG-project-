@@ -1202,6 +1202,10 @@ body.c-hover #c-ring { width: 46px; height: 46px; border-color: var(--green); bo
   justify-content: space-between;
   gap: 10px;
 }
+.factor-card__head > div {
+  min-width: 0;
+  flex: 1 1 auto;
+}
 .factor-card__head strong {
   display: block;
   color: var(--text-primary);
@@ -1214,12 +1218,28 @@ body.c-hover #c-ring { width: 46px; height: 46px; border-color: var(--green); bo
   margin-top: 3px;
   color: var(--text-dim);
   font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.factor-card__head .badge {
+  max-width: 96px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  justify-content: flex-end;
+  text-align: right;
+  flex: 0 0 auto;
 }
 .factor-card p {
   margin-top: 8px;
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.65;
+}
+.factor-card .workbench-mini-grid,
+.factor-card .workbench-mini-metric,
+.factor-card .workbench-mini-metric span,
+.factor-card .workbench-mini-metric strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .factor-card__foot {
   display: flex;

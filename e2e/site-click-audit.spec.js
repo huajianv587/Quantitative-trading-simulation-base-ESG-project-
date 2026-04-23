@@ -116,6 +116,69 @@ function buildResearchSignals() {
   ];
 }
 
+function buildResearchContext(symbol = 'NVDA') {
+  return {
+    generated_at: new Date().toISOString(),
+    symbol,
+    provider: 'auto',
+    quote_strip: [
+      { symbol: 'NVDA', company_name: 'NVIDIA', last_price: 922.14, change_pct: 0.023, source: 'alpaca' },
+      { symbol: 'AAPL', company_name: 'Apple', last_price: 187.42, change_pct: 0.011, source: 'alpaca' },
+      { symbol: 'MSFT', company_name: 'Microsoft', last_price: 421.18, change_pct: 0.016, source: 'alpaca' },
+    ],
+    momentum_leaders: buildResearchSignals(),
+    feed: [
+      {
+        item_id: 'ctx-001',
+        title: `${symbol} factor momentum`,
+        summary: 'Trend strength remains above the peer median and the evidence chain is intact.',
+        item_type: 'model_signal',
+        provider: 'alpaca',
+        quality_score: 0.92,
+        published_at: new Date().toISOString(),
+      },
+      {
+        item_id: 'ctx-002',
+        title: `${symbol} SEC filing context`,
+        summary: 'Recent filing references governance continuity and stable disclosure posture.',
+        item_type: 'filing',
+        provider: 'sec_edgar',
+        quality_score: 0.87,
+        published_at: new Date().toISOString(),
+      },
+    ],
+    provider_status: {
+      provider: 'alpaca',
+      availability: 'ready',
+      degraded_from: null,
+    },
+    source_chain: ['alpaca', 'yfinance', 'sec_edgar', 'cache', 'local_esg'],
+    freshness: { quote_strip: 'live', feed: 'recent' },
+    degraded: false,
+    fallback_preview: null,
+    warning: null,
+    next_actions: ['Run research', 'Open market radar'],
+  };
+}
+
+function buildDashboardState() {
+  return {
+    generated_at: new Date().toISOString(),
+    symbol: 'NVDA',
+    selected_provider: 'auto',
+    source: 'alpaca',
+    source_chain: ['alpaca', 'yfinance', 'cache', 'synthetic'],
+    provider_status: {
+      provider: 'alpaca',
+      availability: 'ready',
+      degraded_from: null,
+    },
+    fallback_preview: null,
+    degraded: false,
+    next_actions: ['Refresh dashboard state'],
+  };
+}
+
 function buildPortfolioHoldings() {
   return [
     { symbol: 'COST', weight: 0.34, sector: 'Consumer Staples', esg_score: 86 },
@@ -351,12 +414,16 @@ async function stubSiteAuditApis(page) {
   });
 
   await page.route('**/api/v1/quant/research/run', async (route) => {
-    await fulfillJson(route, {
-      research_id: 'research-e2e-001',
-      generated_at: new Date().toISOString(),
-      signals: buildResearchSignals(),
+      await fulfillJson(route, {
+        research_id: 'research-e2e-001',
+        generated_at: new Date().toISOString(),
+        signals: buildResearchSignals(),
+      });
     });
-  });
+  await page.route('**/api/v1/quant/research/context?*', async (route) => {
+      const url = new URL(route.request().url());
+      await fulfillJson(route, buildResearchContext(url.searchParams.get('symbol') || 'NVDA'));
+    });
 
   await page.route('**/api/v1/quant/portfolio/optimize', async (route) => {
     await fulfillJson(route, {
@@ -483,11 +550,28 @@ async function stubSiteAuditApis(page) {
   });
 
   await page.route('**/agent/analyze', async (route) => {
-    await fulfillJson(route, {
-      answer: 'NVDA remains favored because model quality, regime support, and ESG resilience all stay constructive.',
-      sources: ['platform.overview', 'signal_stack'],
+      await fulfillJson(route, {
+        answer: 'NVDA remains favored because model quality, regime support, and ESG resilience all stay constructive.',
+        sources: ['platform.overview', 'signal_stack'],
+      });
     });
-  });
+  await page.route('**/session?*', async (route) => {
+      const url = new URL(route.request().url());
+      await fulfillJson(route, {
+        session_id: url.searchParams.get('session_id') || 'chat-e2e-001',
+        created: true,
+      });
+    });
+  await page.route('**/history/*', async (route) => {
+      const sessionId = route.request().url().split('/history/')[1]?.split('?')[0] || 'chat-e2e-001';
+      await fulfillJson(route, {
+        session_id: sessionId,
+        messages: [],
+      });
+    });
+  await page.route('**/api/v1/trading/dashboard/state?*', async (route) => {
+      await fulfillJson(route, buildDashboardState());
+    });
 
   await page.route('**/agent/esg-score', async (route) => {
     await fulfillJson(route, buildScorePayload());

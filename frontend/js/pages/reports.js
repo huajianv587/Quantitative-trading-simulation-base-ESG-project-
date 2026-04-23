@@ -1,407 +1,410 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
-import { getLocale } from '../i18n.js?v=8';
+import { getLang, getLocale, onLangChange } from '../i18n.js?v=8';
+import { emptyState, esc, metric, renderError, setLoading, splitTokens, statusBadge } from './workbench-utils.js?v=8';
 
-const REPORT_TYPES = [
-  { value: 'daily',   label: 'Daily Digest',        desc: 'Top signals, score updates, alerts' },
-  { value: 'weekly',  label: 'Weekly Summary',       desc: 'Portfolio review, ESG movers, attribution' },
-  { value: 'monthly', label: 'Monthly Deep-Dive',    desc: 'Full factor analysis, peer benchmarks, forecasts' },
-  { value: 'adhoc',   label: 'Ad-Hoc Analysis',      desc: 'Custom companies, custom period' },
-];
+const REPORT_TYPES = ['daily', 'weekly', 'monthly'];
 
-const HISTORY = [
-  { id: 'RPT-2024-04-12', type: 'daily',   title: 'Daily Digest — Apr 12',    status: 'ready',  ts: '10:00 AM', size: '42 KB' },
-  { id: 'RPT-2024-04-07', type: 'weekly',  title: 'Weekly Summary — W14',     status: 'ready',  ts: 'Apr 7',    size: '184 KB' },
-  { id: 'RPT-2024-03-31', type: 'monthly', title: 'Monthly Deep-Dive — Mar',  status: 'ready',  ts: 'Apr 1',    size: '614 KB' },
-  { id: 'RPT-2024-04-11', type: 'daily',   title: 'Daily Digest — Apr 11',    status: 'ready',  ts: 'Yesterday',size: '38 KB' },
-  { id: 'RPT-2024-04-10', type: 'adhoc',   title: 'Ad-Hoc: NVDA vs AMD',      status: 'ready',  ts: 'Apr 10',   size: '91 KB' },
-];
+let _container = null;
+let _langCleanup = null;
+let _activeType = 'daily';
+let _history = [];
+let _currentReport = null;
 
-export function render(container) {
-  container.innerHTML = buildShell();
-  bindEvents(container);
-  renderHistory(container);
-  // Auto-load a mock report for the selected type
-  renderReport(container, mockReport('daily', ['Tesla', 'Microsoft']));
+const COPY = {
+  en: {
+    title: 'Report Center',
+    subtitle: 'Generate, review, and export real ESG research reports.',
+    generateTitle: 'Generate Report',
+    generateSub: 'Create a real report from the backend report generator.',
+    type: 'Report Type',
+    companies: 'Companies / Tickers',
+    companiesPlaceholder: 'Tesla, Microsoft, NVIDIA',
+    generate: 'Generate',
+    generating: 'Generating...',
+    loadLatest: 'Load Latest',
+    archive: 'Latest Archive',
+    archiveSub: 'Latest real report per supported report type.',
+    bodyTitle: 'Report Workspace',
+    bodySub: 'Current report payload, grounding summary, and company analysis table.',
+    noReport: 'No report loaded',
+    noReportHint: 'Generate a report or load the latest backend report to begin.',
+    emptyArchive: 'No saved reports are available yet.',
+    generated: 'Report generated',
+    latestLoaded: 'Latest report loaded',
+    latestMissing: 'No latest report is available for the selected type',
+    requestFailed: 'Report request failed',
+    summary: 'Executive Summary',
+    stats: 'Report Stats',
+    findings: 'Key Findings',
+    alerts: 'Risk Alerts',
+    analyses: 'Company Analyses',
+    reportType: 'Type',
+    generatedAt: 'Generated',
+    grounded: 'Grounded',
+    citations: 'Citations',
+    totalCompanies: 'Companies',
+    confidence: 'Confidence',
+    company: 'Company',
+    ticker: 'Ticker',
+    overall: 'Overall',
+    environment: 'E',
+    social: 'S',
+    governance: 'G',
+    recommendation: 'Signal',
+    noAnalyses: 'The backend returned no company analyses for this report.',
+  },
+  zh: {
+    title: '报告中心',
+    subtitle: '生成、查看并导出真实 ESG 研究报告。',
+    generateTitle: '生成报告',
+    generateSub: '通过后端报告生成器创建真实报告。',
+    type: '报告类型',
+    companies: '公司 / 股票代码',
+    companiesPlaceholder: 'Tesla, Microsoft, NVIDIA',
+    generate: '生成报告',
+    generating: '正在生成...',
+    loadLatest: '加载最新',
+    archive: '最新报告归档',
+    archiveSub: '按支持的报告类型显示最近一次真实报告。',
+    bodyTitle: '报告工作区',
+    bodySub: '当前报告载荷、grounding 摘要与公司分析表。',
+    noReport: '还没有加载报告',
+    noReportHint: '先生成报告，或加载后端最近一次真实报告。',
+    emptyArchive: '还没有可显示的已保存报告。',
+    generated: '报告已生成',
+    latestLoaded: '已加载最新报告',
+    latestMissing: '当前类型还没有最新报告',
+    requestFailed: '报告请求失败',
+    summary: '执行摘要',
+    stats: '报告统计',
+    findings: '关键发现',
+    alerts: '风险提醒',
+    analyses: '公司分析',
+    reportType: '类型',
+    generatedAt: '生成时间',
+    grounded: '已 grounding',
+    citations: '引用数',
+    totalCompanies: '公司数',
+    confidence: '置信度',
+    company: '公司',
+    ticker: '代码',
+    overall: '总分',
+    environment: 'E',
+    social: 'S',
+    governance: 'G',
+    recommendation: '信号',
+    noAnalyses: '后端这次没有返回公司分析结果。',
+  },
+};
+
+function c(key) {
+  const lang = getLang() === 'zh' ? 'zh' : 'en';
+  return COPY[lang][key] || COPY.en[key] || key;
 }
 
-/* ── Shell ── */
-function buildShell() {
-  return `
-  <div class="page-header">
-    <div>
-      <div class="page-header__title">Report Center</div>
-      <div class="page-header__sub">Generate · Schedule · Archive · Export ESG Research Reports</div>
-    </div>
-    <div class="page-header__actions">
-      <button class="btn btn-ghost btn-sm" id="btn-schedule">⏰ Schedule</button>
-      <button class="btn btn-ghost btn-sm" id="btn-download">⬇ Download</button>
-    </div>
-  </div>
-
-  <div class="grid-sidebar" style="align-items:start">
-
-    <!-- LEFT: Config + History -->
-    <div style="display:flex;flex-direction:column;gap:14px">
-
-      <div class="run-panel">
-        <div class="run-panel__header">
-          <div class="run-panel__title">Generate Report</div>
-          <div class="run-panel__sub">Choose type, scope and options</div>
-        </div>
-        <div class="run-panel__body">
-          <!-- Report type cards -->
-          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px" id="rtype-list">
-            ${REPORT_TYPES.map(rt => `
-              <div class="rtype-card${rt.value==='daily'?' active':''}" data-rtype="${rt.value}">
-                <div class="rtype-card-title">${rt.label}</div>
-                <div class="rtype-card-desc">${rt.desc}</div>
-              </div>`).join('')}
-          </div>
-          <input type="hidden" id="report-type" value="daily">
-
-          <div class="form-group">
-            <label class="form-label">Companies / Tickers</label>
-            <input class="form-input" id="report-companies" value="Tesla, Microsoft" placeholder="Tesla, Apple, NVDA…">
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">Start Date</label>
-              <input class="form-input" id="report-start" type="date">
-            </div>
-            <div class="form-group">
-              <label class="form-label">End Date</label>
-              <input class="form-input" id="report-end" type="date">
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Sections to Include</label>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px" id="section-chips">
-              ${['ESG Scores','Factor Analysis','Peer Comparison','Risk Attribution','Signals','Forecasts'].map(s =>
-                `<button class="filter-chip active" data-section="${s}" style="font-size:9px;padding:3px 8px">${s}</button>`
-              ).join('')}
-            </div>
-          </div>
-        </div>
-        <div class="run-panel__foot" style="gap:8px">
-          <button class="btn btn-primary btn-lg" id="generate-btn" style="flex:1">▶ Generate</button>
-          <button class="btn btn-ghost btn-lg" id="load-latest-btn">Load Latest</button>
-        </div>
-      </div>
-
-      <!-- History -->
-      <div class="card">
-        <div class="card-header"><span class="card-title">Report Archive</span></div>
-        <div id="report-history" style="display:flex;flex-direction:column;gap:0"></div>
-      </div>
-
-    </div>
-
-    <!-- RIGHT: Report workspace -->
-    <div style="display:flex;flex-direction:column;gap:0;min-height:600px">
-      <!-- Toolbar -->
-      <div class="report-toolbar" id="report-toolbar" style="display:none">
-        <span id="report-toolbar-title" style="font-family:var(--f-display);font-size:11px;font-weight:700;color:var(--text-primary)"></span>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-ghost btn-sm" id="btn-toolbar-pdf">PDF</button>
-          <button class="btn btn-ghost btn-sm" id="btn-toolbar-csv">CSV</button>
-          <button class="btn btn-ghost btn-sm" id="btn-toolbar-json">JSON</button>
-        </div>
-      </div>
-
-      <!-- Report body -->
-      <div class="results-panel" style="flex:1;border-top-left-radius:${0}px">
-        <div class="results-panel__body" id="report-body" style="padding:0">
-          <div class="empty-state">
-            <div class="empty-state__icon">📋</div>
-            <div class="empty-state__title">No report loaded</div>
-            <div class="empty-state__text">Generate a new report or click an archive entry to load.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-  </div>`;
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
 }
 
-/* ── Events ── */
-function bindEvents(container) {
-  container.querySelector('#generate-btn').addEventListener('click', () => generateReport(container));
-  container.querySelector('#load-latest-btn').addEventListener('click',  () => loadLatest(container));
-  container.querySelector('#btn-schedule').addEventListener('click', () => toast.info('Scheduling', 'Report scheduler coming soon'));
-  container.querySelector('#btn-download').addEventListener('click', () => toast.info('Download', 'Select a report first'));
-  container.querySelector('#btn-toolbar-pdf')?.addEventListener('click', () => toast.info('PDF Export', 'Generating PDF…'));
-  container.querySelector('#btn-toolbar-csv')?.addEventListener('click', () => toast.info('CSV Export', 'Downloading CSV…'));
-  container.querySelector('#btn-toolbar-json')?.addEventListener('click', () => toast.info('JSON Export', 'Downloading JSON…'));
-
-  // Report type selection
-  container.querySelector('#rtype-list').addEventListener('click', e => {
-    const card = e.target.closest('.rtype-card');
-    if (!card) return;
-    container.querySelectorAll('.rtype-card').forEach(c => c.classList.toggle('active', c === card));
-    container.querySelector('#report-type').value = card.dataset.rtype;
-  });
-
-  // Section chips
-  container.querySelector('#section-chips').addEventListener('click', e => {
-    const chip = e.target.closest('.filter-chip');
-    if (!chip) return;
-    chip.classList.toggle('active');
+function formatTimestamp(value) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString(getLocale(), {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
-function renderHistory(container) {
-  container.querySelector('#report-history').innerHTML = HISTORY.map(r => `
-    <div class="report-hist-item" data-rid="${r.id}">
-      <div style="display:flex;align-items:center;gap:8px;flex:1">
-        <span class="badge badge-${r.type==='daily'?'filled':r.type==='weekly'?'pending':'neutral'}" style="font-size:8px">${r.type.toUpperCase()}</span>
-        <div>
-          <div style="font-size:11px;color:var(--text-primary)">${r.title}</div>
-          <div style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">${r.id} · ${r.size}</div>
-        </div>
-      </div>
-      <span style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">${r.ts}</span>
-    </div>`).join('');
-
-  container.querySelector('#report-history').addEventListener('click', e => {
-    const item = e.target.closest('.report-hist-item');
-    if (!item) return;
-    container.querySelectorAll('.report-hist-item').forEach(el => el.classList.toggle('active', el === item));
-    const rec = HISTORY.find(r => r.id === item.dataset.rid);
-    if (rec) renderReport(container, mockReport(rec.type, ['Tesla', 'Microsoft'], rec.id, rec.title));
-  });
+function companies() {
+  if (!_container) return [];
+  return splitTokens(_container.querySelector('#report-companies')?.value || '', { delimiters: /[,\n]+/ });
 }
 
-/* ── API ── */
-async function generateReport(container) {
-  const btn = container.querySelector('#generate-btn');
-  btn.disabled = true; btn.textContent = '● Generating…';
-  const type = container.querySelector('#report-type').value;
-  const companies = container.querySelector('#report-companies').value.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
-  try {
-    const response = await api.reports.generate({ report_type: type, companies, async: false });
-    renderReport(container, response?.report || response || {});
-    toast.success('Report generated');
-  } catch(err) {
-    renderReport(container, mockReport(type, companies));
-    toast.error('API error', err.message + ' — showing mock report');
-  } finally {
-    btn.disabled = false; btn.textContent = '▶ Generate';
-  }
-}
-
-async function loadLatest(container) {
-  const type = container.querySelector('#report-type').value;
-  try {
-    const response = await api.reports.latest(type);
-    if (!response) { toast.info('No report found'); return; }
-    renderReport(container, response);
-  } catch(err) {
-    renderReport(container, mockReport(type, ['Tesla', 'Microsoft']));
-    toast.error('API error', err.message + ' — showing mock');
-  }
-}
-
-/* ── Mock ── */
-function mockReport(type, companies, id, title) {
-  const now = new Date().toLocaleString(getLocale());
-  const analyses = companies.map((c, i) => ({
-    company_name: c, ticker: ['TSLA','MSFT','AAPL','NVDA'][i] || 'N/A',
-    esg_score: [72.4, 81.2, 78.6, 76.1][i] || 70,
-    environment: [68, 79, 75, 72][i] || 68,
-    social: [75, 83, 80, 76][i] || 74,
-    governance: [74, 81, 79, 80][i] || 73,
-    alpha_signal: ['+2.14σ','+1.87σ','+1.62σ','+1.94σ'][i] || '+1.5σ',
-    recommendation: ['BUY','BUY','HOLD','BUY'][i] || 'HOLD',
-    change_3m: ['+3.2','+1.8','+0.9','+2.4'][i] || '+1.0',
-  }));
+function normalizeReport(payload) {
+  const report = payload?.report || payload || {};
   return {
-    report_id: id || 'RPT-' + Date.now(),
-    title: title || `${type.charAt(0).toUpperCase()+type.slice(1)} ESG Report`,
-    report_type: type, generated_at: now,
-    company_analyses: analyses,
-    summary: 'Portfolio continues to outperform the ESG benchmark. Technology sector leads on governance and social dimensions. Momentum remains positive across top holdings.',
-    top_signals: ['NVDA: Governance improvement +4pts', 'MSFT: Carbon neutrality milestone achieved', 'TSLA: Social score dip — supply chain concern flagged'],
-    risk_alerts: ['Rising VIX may pressure high-beta ESG growth stocks', 'Geopolitical risk elevated for TSLA Taiwan supply chain'],
-    market_context: { regime: 'Bull Market', spy_ytd: '+18.4%', vix: '14.2', esg_premium: '+280bps' },
+    ...report,
+    report_id: report.report_id || payload?.report_id || report.id,
+    report_type: report.report_type || payload?.report_type || _activeType,
+    generated_at: report.generated_at || payload?.generated_at,
   };
 }
 
-/* ── Render Report ── */
-function renderReport(container, report) {
-  const analyses = report.company_analyses || report.data?.company_analyses || [];
-  const evidenceSummary = report.evidence_summary || report.data?.evidence_summary || null;
-  const toolbar = container.querySelector('#report-toolbar');
-  toolbar.style.display = 'flex';
-  container.querySelector('#report-toolbar-title').textContent = report.title || 'Report';
+function buildShell() {
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-header__title">${c('title')}</div>
+        <div class="page-header__sub">${c('subtitle')}</div>
+      </div>
+    </div>
 
-  const rows = analyses.map(a => `
-    <tr>
-      <td style="font-weight:600;color:var(--text-primary)">${a.company_name || a.company || '—'}</td>
-      <td style="font-family:var(--f-mono);font-size:11px">${a.ticker || '—'}</td>
-      <td class="cell-num" style="color:${scoreColor(a.esg_score)};font-weight:700">${a.esg_score != null ? Number(a.esg_score).toFixed(1) : '—'}</td>
-      <td class="cell-num" style="color:var(--green)">${metricValue(a, 'environment', 'e_score')}</td>
-      <td class="cell-num" style="color:var(--cyan)">${metricValue(a, 'social', 's_score')}</td>
-      <td class="cell-num" style="color:var(--purple)">${metricValue(a, 'governance', 'g_score')}</td>
-      <td class="cell-num ${(String(a.change_3m||'0')).startsWith('-')?'neg':'pos'}">${formatChange(a.change_3m)}</td>
-      <td><span class="badge badge-${signalTone(a)}" style="font-size:9px">${signalLabel(a)}</span></td>
-    </tr>`).join('');
+    <div class="grid-sidebar" style="align-items:start">
+      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+        <section class="run-panel">
+          <div class="run-panel__header">
+            <div class="run-panel__title">${c('generateTitle')}</div>
+            <div class="run-panel__sub">${c('generateSub')}</div>
+          </div>
+          <div class="run-panel__body">
+            <div class="form-group">
+              <label class="form-label">${c('type')}</label>
+              <div class="workbench-tabs" id="report-type-tabs">
+                ${REPORT_TYPES.map((type) => `
+                  <button class="workbench-tab${type === _activeType ? ' active' : ''}" data-report-type="${type}" type="button">${esc(type)}</button>
+                `).join('')}
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">${c('companies')}</label>
+              <textarea class="form-textarea" id="report-companies" rows="4" placeholder="${c('companiesPlaceholder')}">Tesla, Microsoft</textarea>
+            </div>
+          </div>
+          <div class="run-panel__foot workbench-action-grid">
+            <button class="btn btn-primary btn-lg workbench-action-btn" id="generate-btn">${c('generate')}</button>
+            <button class="btn btn-ghost btn-lg workbench-action-btn" id="load-latest-btn">${c('loadLatest')}</button>
+          </div>
+        </section>
 
-  container.querySelector('#report-body').innerHTML = `
-    <div style="padding:20px;display:flex;flex-direction:column;gap:20px">
-
-      <!-- Report header -->
-      <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div>
-          <div style="font-family:var(--f-display);font-size:16px;font-weight:800;color:var(--text-primary);margin-bottom:4px">${report.title || 'ESG Report'}</div>
-          <div style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${report.report_id || ''} · Generated: ${report.generated_at || 'N/A'}</div>
-        </div>
-        <div style="text-align:right">
-          <span class="badge badge-filled">${(report.report_type||'').toUpperCase()}</span>
-        </div>
+        <section class="card">
+          <div class="card-header">
+            <span class="card-title">${c('archive')}</span>
+            <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${c('archiveSub')}</span>
+          </div>
+          <div class="card-body" id="report-history">
+            ${emptyState('Loading reports...')}
+          </div>
+        </section>
       </div>
 
-      <!-- Market Context -->
-      ${report.market_context ? `
-      <div style="display:flex;gap:0;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;overflow:hidden">
-        ${Object.entries(report.market_context).map(([k,v]) => `
-          <div style="flex:1;padding:10px 14px;border-right:1px solid var(--border-subtle);text-align:center">
-            <div style="font-size:12px;font-family:var(--f-mono);font-weight:700;color:var(--green)">${v}</div>
-            <div style="font-size:9px;color:var(--text-dim);margin-top:3px;text-transform:uppercase;letter-spacing:0.06em">${k.replace(/_/g,' ')}</div>
-          </div>`).join('')}
-      </div>` : ''}
-
-      <!-- Summary -->
-      ${(report.executive_summary || report.summary) ? `
-      <div style="background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:8px;padding:14px 16px">
-        <div style="font-size:9px;color:var(--green);font-family:var(--f-mono);letter-spacing:0.1em;margin-bottom:6px">EXECUTIVE SUMMARY</div>
-        <div style="font-size:12px;color:var(--text-secondary);line-height:1.65">${report.executive_summary || report.summary}</div>
-      </div>` : ''}
-
-      ${evidenceSummary ? `
-      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
-        ${[
-          ['Grounded', evidenceSummary.grounded_companies ?? '—', 'company analyses with strong citation coverage'],
-          ['Coverage', evidenceSummary.total_companies ?? analyses.length ?? '—', 'companies assessed in this report'],
-          ['Citations', evidenceSummary.citation_count ?? '—', 'ranked supporting excerpts'],
-          ['Verifier', formatRatio(evidenceSummary.average_grounding_confidence), evidenceSummary.verification_mode || 'deterministic citation overlap'],
-        ].map(([label, value, hint]) => `
-          <div style="background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px">
-            <div style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono);letter-spacing:0.1em;text-transform:uppercase">${label}</div>
-            <div style="font-size:16px;color:var(--text-primary);font-family:var(--f-display);margin-top:6px">${value}</div>
-            <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.45">${hint}</div>
-          </div>`).join('')}
-      </div>` : ''}
-
-      <!-- Company Analysis Table -->
-      ${rows ? `
-      <div>
-        <div style="font-size:9px;color:var(--text-dim);letter-spacing:0.12em;font-family:var(--f-display);font-weight:700;margin-bottom:8px">COMPANY ESG SCORECARD</div>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>Company</th><th>Ticker</th><th>Overall</th><th>E</th><th>S</th><th>G</th><th>3M Δ</th><th>Signal</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table></div>
-      </div>` : ''}
-
-      ${renderGrounding(analyses)}
-
-      <!-- Top Signals -->
-      ${report.top_signals?.length ? `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div>
-          <div style="font-size:9px;color:var(--green);font-family:var(--f-mono);letter-spacing:0.1em;margin-bottom:8px">TOP SIGNALS</div>
-          ${report.top_signals.map(s => `
-            <div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
-              <span style="color:var(--green);font-size:12px">●</span>
-              <span style="font-size:11px;color:var(--text-secondary)">${s}</span>
-            </div>`).join('')}
-        </div>
-        ${report.risk_alerts?.length ? `
-        <div>
-          <div style="font-size:9px;color:var(--amber);font-family:var(--f-mono);letter-spacing:0.1em;margin-bottom:8px">RISK ALERTS</div>
-          ${report.risk_alerts.map(s => `
-            <div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
-              <span style="color:var(--amber);font-size:12px">⚠</span>
-              <span style="font-size:11px;color:var(--text-secondary)">${s}</span>
-            </div>`).join('')}
-        </div>` : ''}
-      </div>` : ''}
-
+      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+        <section class="card">
+          <div class="card-header">
+            <span class="card-title">${c('bodyTitle')}</span>
+            <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${c('bodySub')}</span>
+          </div>
+          <div class="card-body" id="report-body">
+            ${emptyState(c('noReport'), c('noReportHint'))}
+          </div>
+        </section>
+      </div>
     </div>`;
 }
 
-function scoreColor(v) {
-  return v >= 70 ? 'var(--green)' : v >= 50 ? 'var(--amber)' : 'var(--red)';
+export async function render(container) {
+  _container = container;
+  _container.innerHTML = buildShell();
+  bindEvents();
+  _langCleanup?.();
+  _langCleanup = onLangChange(() => {
+    if (!isMounted()) return;
+    const rawCompanies = _container.querySelector('#report-companies')?.value || '';
+    _container.innerHTML = buildShell();
+    bindEvents();
+    _container.querySelector('#report-companies').value = rawCompanies;
+    renderArchive();
+    renderReport();
+  });
+  await refreshArchive();
 }
 
-function metricValue(row, directKey, metricKey) {
-  const raw = row?.[directKey] ?? row?.key_metrics?.[metricKey];
-  return raw == null ? '—' : Number(raw).toFixed(1);
+export function destroy() {
+  _container = null;
+  _langCleanup?.();
+  _langCleanup = null;
 }
 
-function formatChange(value) {
-  if (value == null || value === '') return '—';
-  const text = String(value);
-  if (text === '0') return '0.0 pts';
-  const signed = text.startsWith('+') || text.startsWith('-') ? text : `+${text}`;
-  return `${signed} pts`;
+function bindEvents() {
+  if (!_container) return;
+  _container.querySelector('#generate-btn')?.addEventListener('click', () => generateReport());
+  _container.querySelector('#load-latest-btn')?.addEventListener('click', () => loadLatest());
+  _container.querySelector('#report-type-tabs')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-report-type]');
+    if (!target) return;
+    _activeType = target.dataset.reportType || 'daily';
+    _container.querySelectorAll('[data-report-type]').forEach((node) => node.classList.toggle('active', node === target));
+  });
+  _container.querySelector('#report-history')?.addEventListener('click', async (event) => {
+    const target = event.target.closest('[data-load-report]');
+    if (!target) return;
+    const reportId = target.dataset.loadReport;
+    if (!reportId) return;
+    try {
+      const payload = await api.reports.get(reportId);
+      _currentReport = normalizeReport(payload);
+      renderReport();
+      toast.success(c('latestLoaded'), reportId);
+    } catch (error) {
+      toast.error(c('requestFailed'), error.message || c('requestFailed'));
+    }
+  });
 }
 
-function signalLabel(row) {
-  return row?.recommendation || row?.grounding_status?.toUpperCase() || 'HOLD';
+async function refreshArchive() {
+  if (!isMounted()) return;
+  const target = _container.querySelector('#report-history');
+  setLoading(target, 'Loading reports...');
+  const results = await Promise.allSettled(REPORT_TYPES.map((type) => api.reports.latest(type)));
+  if (!isMounted()) return;
+  _history = results
+    .map((result, index) => (result.status === 'fulfilled' && result.value ? normalizeReport(result.value) : null))
+    .filter(Boolean)
+    .map((report, index) => ({ ...report, report_type: report.report_type || REPORT_TYPES[index] }));
+  renderArchive();
 }
 
-function signalTone(row) {
-  const label = String(signalLabel(row)).toUpperCase();
-  if (label === 'BUY' || label === 'GROUNDED') return 'filled';
-  if (label === 'SELL' || label === 'WEAK') return 'failed';
-  return 'neutral';
-}
-
-function formatRatio(value) {
-  if (value == null || value === '') return '—';
-  return `${(Number(value) * 100).toFixed(0)}%`;
-}
-
-function renderGrounding(analyses) {
-  const grounded = (analyses || []).filter(a => (a.citations || []).length);
-  if (!grounded.length) return '';
-  return `
-    <div>
-      <div style="font-size:9px;color:var(--cyan);letter-spacing:0.12em;font-family:var(--f-display);font-weight:700;margin-bottom:8px">GROUNDING & CITATIONS</div>
-      <div style="display:flex;flex-direction:column;gap:12px">
-        ${grounded.map(analysis => `
-          <div style="background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;padding:14px 16px">
-            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
-              <div>
-                <div style="font-size:13px;color:var(--text-primary);font-weight:700">${analysis.company_name}${analysis.ticker ? ` · ${analysis.ticker}` : ''}</div>
-                <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.55">${analysis.verified_summary || analysis.summary || ''}</div>
-              </div>
-              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
-                <span class="badge badge-${signalTone(analysis)}">${(analysis.grounding_status || 'partial').toUpperCase()}</span>
-                <span class="badge badge-neutral">${formatRatio(analysis.grounding_confidence)}</span>
-              </div>
-            </div>
-            ${analysis.verification_notes?.length ? `
-              <div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(255,179,0,0.06);border:1px solid rgba(255,179,0,0.14);font-size:10px;color:var(--text-dim);line-height:1.5">
-                ${analysis.verification_notes.join(' · ')}
-              </div>` : ''}
-            <div style="margin-top:12px;display:grid;gap:8px">
-              ${(analysis.citations || []).map((citation, idx) => `
-                <div style="padding:10px 12px;border-radius:7px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05)">
-                  <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
-                    <div style="font-size:10px;color:var(--text-primary);font-weight:600">${idx + 1}. ${citation.source || citation.label || 'Source'}</div>
-                    <div style="font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">${citation.source_type || 'evidence'} · ${citation.relevance != null ? citation.relevance.toFixed(2) : 'n/a'}</div>
-                  </div>
-                  <div style="margin-top:6px;font-size:10px;color:var(--text-dim);line-height:1.6">${citation.snippet || ''}</div>
-                  ${(citation.url || citation.filed_at) ? `
-                    <div style="margin-top:6px;font-size:9px;color:var(--text-dim);font-family:var(--f-mono)">
-                      ${citation.filed_at ? `date: ${citation.filed_at}` : ''}
-                      ${citation.url ? `${citation.filed_at ? ' · ' : ''}<a href="${citation.url}" target="_blank" rel="noreferrer" style="color:var(--cyan)">source</a>` : ''}
-                    </div>` : ''}
-                </div>`).join('')}
-            </div>
-          </div>`).join('')}
+function renderArchive() {
+  if (!_container) return;
+  const target = _container.querySelector('#report-history');
+  if (!_history.length) {
+    target.innerHTML = emptyState(c('emptyArchive'));
+    return;
+  }
+  target.innerHTML = _history.map((report) => `
+    <button class="workbench-item" data-load-report="${esc(report.report_id || '')}" style="text-align:left">
+      <div class="workbench-item__head">
+        <strong>${esc(report.title || report.report_type || '-')}</strong>
+        ${statusBadge('ready')}
       </div>
+      <div class="workbench-item__summary">${esc(report.report_id || '-')}</div>
+      <div class="workbench-mini-grid">
+        <div class="workbench-mini-metric"><span>${c('reportType')}</span><strong>${esc(report.report_type || '-')}</strong></div>
+        <div class="workbench-mini-metric"><span>${c('generatedAt')}</span><strong>${esc(formatTimestamp(report.generated_at))}</strong></div>
+      </div>
+    </button>
+  `).join('');
+}
+
+async function generateReport() {
+  if (!isMounted()) return;
+  const btn = _container.querySelector('#generate-btn');
+  const payload = {
+    report_type: _activeType,
+    companies: companies(),
+    async: false,
+  };
+  btn.disabled = true;
+  btn.textContent = c('generating');
+  try {
+    const response = await api.reports.generate(payload);
+    _currentReport = normalizeReport(response);
+    renderReport();
+    await refreshArchive();
+    toast.success(c('generated'), _currentReport.report_id || _activeType);
+  } catch (error) {
+    const target = _container.querySelector('#report-body');
+    renderError(target, error);
+    toast.error(c('requestFailed'), error.message || c('requestFailed'));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = c('generate');
+  }
+}
+
+async function loadLatest() {
+  if (!isMounted()) return;
+  try {
+    const response = await api.reports.latest(_activeType);
+    if (!response) {
+      toast.info(c('loadLatest'), c('latestMissing'));
+      return;
+    }
+    _currentReport = normalizeReport(response);
+    renderReport();
+    toast.success(c('latestLoaded'), _currentReport.report_id || _activeType);
+  } catch (error) {
+    toast.error(c('requestFailed'), error.message || c('requestFailed'));
+  }
+}
+
+function renderReport() {
+  if (!_container) return;
+  const target = _container.querySelector('#report-body');
+  if (!_currentReport) {
+    target.innerHTML = emptyState(c('noReport'), c('noReportHint'));
+    return;
+  }
+
+  const report = _currentReport;
+  const analyses = Array.isArray(report.company_analyses) ? report.company_analyses : [];
+  const evidenceSummary = report.evidence_summary || {};
+  const findings = Array.isArray(report.key_findings) ? report.key_findings : [];
+  const alerts = Array.isArray(report.risk_alerts) ? report.risk_alerts : [];
+
+  target.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:18px">
+      <div>
+        <div style="font-family:var(--f-display);font-size:16px;font-weight:700;color:var(--text-primary)">${esc(report.title || report.report_type || 'Report')}</div>
+        <div style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono);margin-top:4px">${esc(report.report_id || '-')} / ${c('generatedAt')}: ${esc(formatTimestamp(report.generated_at))}</div>
+      </div>
+
+      <div class="workbench-metric-grid">
+        ${metric(c('reportType'), report.report_type || '-', 'positive')}
+        ${metric(c('grounded'), evidenceSummary.grounded_companies ?? 0, evidenceSummary.grounded_companies ? 'positive' : '')}
+        ${metric(c('citations'), evidenceSummary.citation_count ?? 0, evidenceSummary.citation_count ? 'positive' : '')}
+        ${metric(c('confidence'), evidenceSummary.average_grounding_confidence ?? report.confidence_score ?? '-', (evidenceSummary.average_grounding_confidence ?? report.confidence_score) ? 'positive' : '')}
+      </div>
+
+      ${(report.executive_summary || report.summary) ? `
+        <section class="functional-empty" style="padding:14px 16px">
+          <div class="functional-empty__eyebrow">${c('summary')}</div>
+          <div style="font-size:12px;line-height:1.7;color:var(--text-secondary)">${esc(report.executive_summary || report.summary)}</div>
+        </section>
+      ` : ''}
+
+      <section class="workbench-kv-list">
+        <div class="workbench-kv-row"><span>${c('reportType')}</span><strong>${esc(report.report_type || '-')}</strong></div>
+        <div class="workbench-kv-row"><span>${c('generatedAt')}</span><strong>${esc(formatTimestamp(report.generated_at))}</strong></div>
+        <div class="workbench-kv-row"><span>${c('totalCompanies')}</span><strong>${esc(String(analyses.length))}</strong></div>
+        <div class="workbench-kv-row"><span>${c('confidence')}</span><strong>${esc(String(report.confidence_score ?? evidenceSummary.average_grounding_confidence ?? '-'))}</strong></div>
+      </section>
+
+      <section>
+        <div class="workbench-section__title">${c('findings')}</div>
+        ${findings.length ? findings.map((item) => `<div class="workbench-item"><div class="workbench-item__summary">${esc(String(item))}</div></div>`).join('') : emptyState(c('findings'), '-')}
+      </section>
+
+      <section>
+        <div class="workbench-section__title">${c('alerts')}</div>
+        ${alerts.length ? alerts.map((item) => `<div class="workbench-item"><div class="workbench-item__summary">${esc(String(item))}</div></div>`).join('') : emptyState(c('alerts'), '-')}
+      </section>
+
+      <section>
+        <div class="workbench-section__title">${c('analyses')}</div>
+        ${analyses.length ? `
+          <div class="tbl-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>${c('company')}</th>
+                  <th>${c('ticker')}</th>
+                  <th>${c('overall')}</th>
+                  <th>${c('environment')}</th>
+                  <th>${c('social')}</th>
+                  <th>${c('governance')}</th>
+                  <th>${c('recommendation')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${analyses.map((row) => `
+                  <tr>
+                    <td>${esc(row.company_name || row.company || '-')}</td>
+                    <td>${esc(row.ticker || '-')}</td>
+                    <td>${esc(String(row.esg_score ?? row.overall_score ?? '-'))}</td>
+                    <td>${esc(String(row.environment ?? row.e_score ?? '-'))}</td>
+                    <td>${esc(String(row.social ?? row.s_score ?? '-'))}</td>
+                    <td>${esc(String(row.governance ?? row.g_score ?? '-'))}</td>
+                    <td>${esc(String(row.recommendation || '-'))}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : emptyState(c('noAnalyses'))}
+      </section>
     </div>`;
 }

@@ -17,7 +17,6 @@ const frontendDir = join(projectRoot, 'frontend');
 const distDir = join(projectRoot, 'dist');
 const distAppDir = join(distDir, 'app');
 const landingEntryPath = resolveLandingEntry();
-const DEFAULT_LOCAL_API_BASE_URL = 'http://127.0.0.1:8000';
 const TEXT_AUDIT_PATTERNS = [
   { token: '鈥', reason: 'broken quote/dash mojibake' },
   { token: '鈽', reason: 'broken icon mojibake' },
@@ -32,7 +31,7 @@ const TEXT_AUDIT_PATTERNS = [
 ];
 
 const rawApiBaseUrl = String(process.env.ESG_API_BASE_URL || '').trim();
-const apiBaseUrl = (rawApiBaseUrl || DEFAULT_LOCAL_API_BASE_URL).replace(/\/+$/, '');
+const apiBaseUrl = rawApiBaseUrl ? rawApiBaseUrl.replace(/\/+$/, '') : '';
 
 rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distAppDir, { recursive: true });
@@ -40,7 +39,9 @@ copyDirectory(frontendDir, distAppDir);
 
 writeFileSync(
   join(distAppDir, 'app-config.js'),
-  `window.__ESG_API_BASE_URL__ = ${JSON.stringify(apiBaseUrl)};\n`,
+  apiBaseUrl
+    ? `window.__ESG_API_BASE_URL__ = window.__ESG_API_BASE_URL__ || ${JSON.stringify(apiBaseUrl)};\n`
+    : `window.__ESG_API_BASE_URL__ = window.__ESG_API_BASE_URL__ || window.location.origin;\n`,
   'utf8',
 );
 
@@ -59,7 +60,7 @@ auditRuntimeText(frontendDir, 'frontend');
 auditRuntimeText(distAppDir, 'dist/app');
 
 console.log(`Static frontend bundle generated in ${distDir}`);
-console.log(`ESG_API_BASE_URL=${apiBaseUrl}`);
+console.log(`ESG_API_BASE_URL=${apiBaseUrl || '(same-origin default)'}`);
 console.log(`Landing page source=${landingEntryPath}`);
 
 function copyDirectory(sourceDir, targetDir) {
@@ -86,8 +87,14 @@ function readText(path) {
 
 function validateAppConfig(path, expectedBaseUrl) {
   const content = readText(path);
-  if (!content.includes(expectedBaseUrl)) {
-    throw new Error(`Invalid dist app config at ${path}. Expected API base ${expectedBaseUrl}, got: ${content.trim()}`);
+  if (expectedBaseUrl) {
+    if (!content.includes(expectedBaseUrl)) {
+      throw new Error(`Invalid dist app config at ${path}. Expected API base ${expectedBaseUrl}, got: ${content.trim()}`);
+    }
+    return;
+  }
+  if (!content.includes('window.location.origin')) {
+    throw new Error(`Invalid dist app config at ${path}. Expected same-origin fallback, got: ${content.trim()}`);
   }
 }
 

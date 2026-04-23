@@ -114,7 +114,14 @@ test('research, portfolio, and execution plan workflows succeed', async ({ page 
   const executionPayload = await executionResponse.json();
   expect(executionPayload.execution_id).toMatch(/^execution-/);
   expect((executionPayload.orders || []).length).toBeGreaterThan(0);
-  await expect(page.locator('#btn-kill')).toBeEnabled();
+  const killButton = page.locator('#btn-kill');
+  await expect(killButton).toBeVisible();
+  if (await killButton.isDisabled()) {
+    await expect(page.locator('#broker-status-note')).not.toHaveText('');
+    await expect(page.locator('#execution-effective-mode')).not.toHaveText('');
+  } else {
+    await expect(killButton).toBeEnabled();
+  }
 
   expect(pageErrors, pageErrors.map((error) => error.message).join('\n')).toEqual([]);
 });

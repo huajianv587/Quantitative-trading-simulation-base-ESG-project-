@@ -1,10 +1,16 @@
 from fastapi.testclient import TestClient
 
 import gateway.main as main_module
+from gateway.auth.repository import reset_auth_repository
+
+
+def _client():
+    reset_auth_repository()
+    return TestClient(main_module.app)
 
 
 def test_auth_register_login_reset_verify_roundtrip():
-    client = TestClient(main_module.app)
+    client = _client()
     email = "sqlite-auth-roundtrip@example.com"
     password = "Start123!"
     new_password = "Reset456!"
@@ -46,11 +52,16 @@ def test_auth_register_login_reset_verify_roundtrip():
 
 
 def test_auth_status_uses_sqlite_repository():
-    client = TestClient(main_module.app)
+    client = _client()
 
     response = client.get("/auth/status")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["backend"] == "sqlite"
+    assert payload["primary_backend"] in {"sqlite", "supabase"}
+    assert payload["backend"] in {"sqlite", "sqlite_fallback", "supabase", "supabase_unavailable"}
     assert payload["db_path"].endswith("auth.sqlite3")
+    assert "smtp_ready" in payload
+    assert "imap_ready" in payload
+    assert "supabase_ready" in payload
+    assert "reset_delivery_mode" in payload

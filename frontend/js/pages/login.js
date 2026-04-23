@@ -85,10 +85,6 @@ function buildShell() {
           <a href="#/register" class="auth-link">${t('auth.sign_up')}</a>
         </div>
 
-        <div style="margin-top:24px;padding:12px 14px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:8px;font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">
-          <div style="color:var(--green);margin-bottom:4px">${t('auth.demo_title')}</div>
-          ${t('auth.demo_text')}
-        </div>
       </div>
     </div>
   </div>`;

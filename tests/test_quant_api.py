@@ -63,6 +63,24 @@ def test_quant_dashboard_chart_contract_is_available():
         assert data["prediction_disabled_reason"] in {"synthetic_market_data", "prediction_mode_unavailable"}
 
 
+def test_quant_research_context_contract_is_available():
+    client = TestClient(main_module.app)
+
+    response = client.get("/api/v1/quant/research/context?symbol=NVDA&provider=auto&limit=4")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["symbol"] == "NVDA"
+    assert payload["provider"] == "auto"
+    assert "quote_strip" in payload
+    assert "feed" in payload
+    assert "provider_status" in payload
+    assert "source_chain" in payload
+    assert "next_actions" in payload
+    assert isinstance(payload["quote_strip"], list)
+    assert isinstance(payload["feed"], list)
+
+
 def test_platform_overview_watchlist_projection_respects_signed_decision(monkeypatch):
     service = QuantSystemService()
     signals = [

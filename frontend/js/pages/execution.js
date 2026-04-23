@@ -1,19 +1,134 @@
 import { api, openExecutionWS } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
-import { getLocale, onLangChange } from '../i18n.js?v=8';
+import { getLang, getLocale, onLangChange } from '../i18n.js?v=8';
 
 let _ws = null;
 let _orders = [];
 let _currentContainer = null;
 let _langCleanup = null;
 let _killArmed = false;
+let _policy = null;
 
-function currentMode(container = _currentContainer) {
-  return container?.querySelector('#ex-mode')?.value || 'paper';
+const COPY = {
+  en: {
+    title: 'Execution Monitor',
+    subtitle: 'Real broker account sync with a single mode source controlled by Autopilot Policy.',
+    planTitle: 'Submit Execution Plan',
+    planHint: 'Paper remains the active route. Change the mode in Autopilot Policy when you want to prepare for Live.',
+    universe: 'Universe',
+    capital: 'Capital Base ($)',
+    broker: 'Broker',
+    mode: 'Mode',
+    modeManaged: 'Mode is managed in Autopilot Policy',
+    submitOrders: 'Submit to broker',
+    brokerStatus: 'Broker Status',
+    account: 'Account',
+    clock: 'Clock',
+    warnings: 'Warnings',
+    note: 'Mode is mirrored from Autopilot Policy.',
+    runPlan: 'Run Execution Plan',
+    refresh: 'Refresh',
+    accountCapital: 'Account Capital',
+    positions: 'Live Positions',
+    orderFeed: 'Order Feed',
+    feedWaiting: 'Waiting for broker events...',
+    noOrders: 'No orders yet',
+    noPositions: 'No positions yet',
+    killSwitch: 'Emergency Control',
+    killHint: 'Kill switch cancels pending broker orders immediately and blocks new submissions.',
+    killEnable: 'Enable Kill Switch',
+    killConfirm: 'Confirm halt for the current execution chain',
+    killCancel: 'Cancel',
+    killDo: 'Confirm Halt',
+    killActive: 'KILL SWITCH ACTIVATED',
+    killActiveHint: 'All pending orders cancelled and no new orders can be submitted.',
+    liveConfirmTitle: 'Confirm Live Submission',
+    liveConfirm: 'Confirm Submit to Live',
+    requestedMode: 'Requested Mode',
+    effectiveMode: 'Effective Mode',
+    paperMode: 'Paper (Simulated)',
+    liveMode: 'Live (Real)',
+    paperReady: 'Paper Ready',
+    liveReady: 'Live Ready',
+    liveAvailable: 'Live Available',
+    blockReason: 'Block Reason',
+    nextActions: 'Next Actions',
+    blockedTitle: 'Live is selected but still gated',
+    blockedHint: 'Switch back to Paper or finish live readiness before attempting execution.',
+    accountOnline: 'ACCOUNT ONLINE',
+    accountOffline: 'BROKER OFFLINE',
+    marketOpen: 'Market Open',
+    marketClosed: 'Market Closed',
+    unknown: 'Not set',
+  },
+  zh: {
+    title: '执行监控',
+    subtitle: '真实 broker 账户同步，但模式来源统一由自动驾驶策略控制。',
+    planTitle: '提交执行计划',
+    planHint: '当前主路径仍是 Paper。需要准备 Live 时，请去 Autopilot Policy 修改模式。',
+    universe: '股票池',
+    capital: '资金规模 ($)',
+    broker: '券商',
+    mode: '模式',
+    modeManaged: '模式由自动驾驶策略统一管理',
+    submitOrders: '提交到券商',
+    brokerStatus: 'Broker 状态',
+    account: '账户',
+    clock: '时钟',
+    warnings: '警告',
+    note: '这里显示的是 Autopilot Policy 当前镜像模式。',
+    runPlan: '运行执行计划',
+    refresh: '刷新',
+    accountCapital: '账户资金',
+    positions: '实时持仓',
+    orderFeed: '订单流',
+    feedWaiting: '等待 broker 事件...',
+    noOrders: '当前没有订单',
+    noPositions: '当前没有持仓',
+    killSwitch: '紧急控制',
+    killHint: 'Kill switch 会立即取消当前挂单，并阻止新的券商提交。',
+    killEnable: '启用熔断开关',
+    killConfirm: '确认暂停当前执行链路',
+    killCancel: '取消',
+    killDo: '确认熔断',
+    killActive: 'KILL SWITCH 已激活',
+    killActiveHint: '所有待成交订单都会被取消，新的订单也会被阻断。',
+    liveConfirmTitle: '确认 Live 提交',
+    liveConfirm: '确认提交到 Live',
+    requestedMode: '当前选择模式',
+    effectiveMode: '当前生效模式',
+    paperMode: 'Paper（模拟）',
+    liveMode: 'Live（实盘）',
+    paperReady: 'Paper 就绪',
+    liveReady: 'Live 就绪',
+    liveAvailable: 'Live 可用',
+    blockReason: '阻断原因',
+    nextActions: '下一步动作',
+    blockedTitle: '当前已选择 Live，但执行仍然受限',
+    blockedHint: '先切回 Paper 继续验证，或先完成 Live 凭证、账户与 readiness。',
+    accountOnline: '账户在线',
+    accountOffline: 'BROKER 离线',
+    marketOpen: '市场开盘',
+    marketClosed: '市场休市',
+    unknown: '未设置',
+  },
+};
+
+function c(key) {
+  const lang = getLang() === 'zh' ? 'zh' : 'en';
+  return COPY[lang][key] || COPY.en[key] || key;
+}
+
+function currentMode() {
+  return String(_policy?.requested_mode || _policy?.execution_mode || 'paper').toLowerCase() === 'live' ? 'live' : 'paper';
 }
 
 function currentBroker(container = _currentContainer) {
   return container?.querySelector('#ex-broker')?.value || 'alpaca';
+}
+
+function isMounted(container = _currentContainer) {
+  return Boolean(container && container.isConnected);
 }
 
 function fmtMoney(value) {
@@ -51,6 +166,46 @@ function statusClass(status) {
   return 'pending';
 }
 
+function humanMode(value) {
+  return String(value || '').trim().toLowerCase() === 'live' ? c('liveMode') : c('paperMode');
+}
+
+function yesNo(value) {
+  return value ? 'Yes' : 'No';
+}
+
+function humanReason(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const isZh = getLang() === 'zh';
+  const map = {
+    live_credentials_missing: isZh ? '尚未配置 Live 专属 Alpaca 凭证。' : 'Live-specific Alpaca credentials are missing.',
+    live_trading_disabled: isZh ? '服务端仍关闭了 Live 提交。' : 'Live routing is still disabled in server settings.',
+    live_account_unavailable: isZh ? 'Live 账户尚未接通，或当前密钥没有实盘权限。' : 'Live account is unavailable or current keys do not have live permission.',
+    live_not_ready: isZh ? '实盘门禁还没有全部通过。' : 'Live readiness has not passed yet.',
+    paper_credentials_missing: isZh ? 'Paper 凭证未配置。' : 'Paper credentials are missing.',
+    live_confirmation_required: isZh ? 'Live 提交需要明确的人工确认。' : 'Live submission requires explicit operator confirmation.',
+  };
+  return map[normalized] || (value ? String(value) : c('unknown'));
+}
+
+function humanNextAction(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const isZh = getLang() === 'zh';
+  const map = {
+    add_live_alpaca_keys: isZh ? '补充 ALPACA_LIVE_API_KEY / ALPACA_LIVE_API_SECRET。' : 'Add ALPACA_LIVE_API_KEY / ALPACA_LIVE_API_SECRET.',
+    keep_using_paper_mode: isZh ? '继续使用 Paper 路径完成验证。' : 'Keep validating on the Paper path.',
+    enable_live_trading_after_paper_stabilizes: isZh ? '等 Paper 路径稳定后，再打开 Live 提交。' : 'Enable live trading only after the paper path stabilizes.',
+    enable_live_trading_when_ready: isZh ? '准备完成后再开启 Live 提交。' : 'Enable live trading only after readiness passes.',
+    verify_live_account_and_permissions: isZh ? '确认 Live account 已开通，且密钥具备实盘权限。' : 'Verify the live account and confirm the keys have live permission.',
+    verify_live_account_permissions: isZh ? '确认 Live 账户和密钥权限都已打通。' : 'Verify live account and key permissions.',
+    verify_live_broker_readiness: isZh ? '检查 broker readiness、预算门禁与风控门禁。' : 'Verify broker readiness and execution gates.',
+    configure_paper_credentials: isZh ? '补充 Paper 凭证，恢复主执行路径。' : 'Configure paper credentials to restore the primary route.',
+    switch_to_paper_mode: isZh ? '切回 Paper 继续验证。' : 'Switch back to Paper and keep validating.',
+    confirm_live_submit_or_switch_to_paper: isZh ? '确认 Live 提交，或切回 Paper。' : 'Confirm live submit or switch back to Paper.',
+  };
+  return map[normalized] || (value ? String(value) : c('unknown'));
+}
+
 function applyPrefill(container) {
   try {
     const raw = window.sessionStorage.getItem('qt.execution.prefill');
@@ -69,17 +224,17 @@ function buildShell() {
   return `
     <div class="execution-monitor">
       <div class="execution-monitor__title-wrap">
-        <div class="execution-monitor__title">执行监控</div>
-        <div class="execution-monitor__sub" id="execution-monitor-sub">Real broker account sync</div>
+        <div class="execution-monitor__title">${c('title')}</div>
+        <div class="execution-monitor__sub" id="execution-monitor-sub">${c('subtitle')}</div>
       </div>
       <div class="execution-monitor__stats">
-        <span id="ws-pill" class="live-pill live-pill--off">SYNCING</span>
+        <span id="ws-pill" class="live-pill live-pill--off">${c('accountOffline')}</span>
         <span id="monitor-mode" class="badge badge-neutral">PAPER</span>
         <span id="session-pnl" class="execution-monitor__value">$0.00</span>
       </div>
       <div class="execution-monitor__meta">
         <span id="execution-clock">--</span>
-        <span id="execution-broker-meta">Alpaca · paper</span>
+        <span id="execution-broker-meta">Alpaca / paper</span>
       </div>
     </div>
 
@@ -87,22 +242,22 @@ function buildShell() {
       <div class="execution-left">
         <div class="run-panel">
           <div class="run-panel__header">
-            <div class="run-panel__title">提交执行计划</div>
-            <div class="run-panel__sub">统一走服务器已配置的 Alpaca 凭证</div>
+            <div class="run-panel__title">${c('planTitle')}</div>
+            <div class="run-panel__sub">${c('planHint')}</div>
           </div>
           <div class="run-panel__body">
             <div class="form-group">
-              <label class="form-label">股票池</label>
-              <input class="form-input" id="ex-universe" placeholder="AAPL, MSFT, NVDA, GOOGL（留空则用默认池）">
+              <label class="form-label">${c('universe')}</label>
+              <input class="form-input" id="ex-universe" placeholder="AAPL, MSFT, NVDA, SPY">
             </div>
 
             <div class="form-row">
               <div class="form-group">
-                <label class="form-label">资金规模 ($)</label>
+                <label class="form-label">${c('capital')}</label>
                 <input class="form-input" id="ex-capital" type="number" value="1000000">
               </div>
               <div class="form-group">
-                <label class="form-label">券商</label>
+                <label class="form-label">${c('broker')}</label>
                 <select class="form-select" id="ex-broker">
                   <option value="alpaca">Alpaca</option>
                 </select>
@@ -111,14 +266,14 @@ function buildShell() {
 
             <div class="form-row">
               <div class="form-group">
-                <label class="form-label">模式</label>
-                <select class="form-select" id="ex-mode">
-                  <option value="paper">Paper</option>
-                  <option value="live">Live</option>
+                <label class="form-label">${c('mode')}</label>
+                <select class="form-select" id="ex-mode" disabled>
+                  <option value="paper">${c('paperMode')}</option>
+                  <option value="live">${c('liveMode')}</option>
                 </select>
               </div>
               <div class="form-group">
-                <label class="form-label">提交到券商</label>
+                <label class="form-label">${c('submitOrders')}</label>
                 <label class="toggle execution-toggle">
                   <input type="checkbox" id="ex-submit" checked>
                   <span class="toggle-track"></span>
@@ -127,24 +282,26 @@ function buildShell() {
             </div>
 
             <div class="broker-status-card" id="broker-status-card">
-              <div class="broker-status-card__title">Broker Status</div>
+              <div class="broker-status-card__title">${c('brokerStatus')}</div>
               <div class="broker-status-card__body">
-                <div><span class="text-muted">Account:</span> <span id="account-id">--</span></div>
-                <div><span class="text-muted">Clock:</span> <span id="account-clock">--</span></div>
-                <div><span class="text-muted">Warnings:</span> <span id="account-warning-count">0</span></div>
+                <div><span class="text-muted">${c('requestedMode')}:</span> <span id="execution-requested-mode">--</span></div>
+                <div><span class="text-muted">${c('effectiveMode')}:</span> <span id="execution-effective-mode">--</span></div>
+                <div><span class="text-muted">${c('paperReady')}:</span> <span id="execution-paper-ready">--</span></div>
+                <div><span class="text-muted">${c('liveReady')}:</span> <span id="execution-live-ready">--</span></div>
+                <div><span class="text-muted">${c('blockReason')}:</span> <span id="execution-block-reason">--</span></div>
               </div>
-              <div class="broker-status-card__note" id="broker-status-note">Server-side broker credentials active.</div>
+              <div class="broker-status-card__note" id="broker-status-note">${c('note')}</div>
             </div>
           </div>
           <div class="run-panel__foot">
-            <button class="btn btn-primary btn-lg" id="btn-run-exec" style="flex:1">运行执行计划</button>
+            <button class="btn workbench-action-btn workbench-action-btn--primary btn-lg" id="btn-run-exec" style="flex:1">${c('runPlan')}</button>
           </div>
         </div>
 
         <div class="card">
           <div class="card-header">
-            <span class="card-title">账户资金</span>
-            <button class="btn btn-ghost btn-sm" id="btn-refresh-account">刷新</button>
+            <span class="card-title">${c('accountCapital')}</span>
+            <button class="btn btn-ghost btn-sm" id="btn-refresh-account">${c('refresh')}</button>
           </div>
           <div class="card-body">
             <div class="execution-account-grid">
@@ -158,29 +315,29 @@ function buildShell() {
 
         <div class="card" style="border-color:rgba(255,64,96,0.22)">
           <div class="card-header" style="background:rgba(255,61,87,0.05)">
-            <span class="card-title" style="color:var(--red)">紧急控制</span>
+            <span class="card-title" style="color:var(--red)">${c('killSwitch')}</span>
           </div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
-            <div class="text-muted text-sm">Kill switch 会立即取消当前挂单，并阻止新的券商提交。</div>
-            <button class="kill-switch" id="btn-kill" style="width:100%;padding:10px" disabled>启用熔断开关</button>
+            <div class="text-muted text-sm">${c('killHint')}</div>
+            <button class="kill-switch" id="btn-kill" style="width:100%;padding:10px" disabled>${c('killEnable')}</button>
             <div id="kill-confirm" style="display:none;flex-direction:column;gap:8px">
-              <div style="font-family:var(--f-mono);font-size:11px;color:var(--red);text-align:center;padding:4px 0">确认暂停当前执行链路</div>
+              <div style="font-family:var(--f-mono);font-size:11px;color:var(--red);text-align:center;padding:4px 0">${c('killConfirm')}</div>
               <div style="display:flex;gap:8px">
-                <button class="btn btn-ghost btn-sm" id="btn-kill-cancel" style="flex:1">取消</button>
-                <button class="btn btn-sm" id="btn-kill-confirm" style="flex:1;background:var(--red);color:#fff;border:none">确认熔断</button>
+                <button class="btn btn-ghost btn-sm" id="btn-kill-cancel" style="flex:1">${c('killCancel')}</button>
+                <button class="btn btn-sm" id="btn-kill-confirm" style="flex:1;background:var(--red);color:#fff;border:none">${c('killDo')}</button>
               </div>
             </div>
             <div id="kill-activated" style="display:none;padding:12px;border-radius:8px;background:rgba(255,61,87,0.12);border:1px solid rgba(255,61,87,0.4);text-align:center">
-              <div style="font-family:var(--f-display);font-size:11px;font-weight:700;color:var(--red)">KILL SWITCH ACTIVATED</div>
-              <div style="font-family:var(--f-mono);font-size:10px;color:var(--red);opacity:0.7;margin-top:4px">All pending orders cancelled · No new orders</div>
+              <div style="font-family:var(--f-display);font-size:11px;font-weight:700;color:var(--red)">${c('killActive')}</div>
+              <div style="font-family:var(--f-mono);font-size:10px;color:var(--red);opacity:0.7;margin-top:4px">${c('killActiveHint')}</div>
             </div>
           </div>
         </div>
 
         <div class="card">
           <div class="card-header">
-            <span class="card-title">实时持仓</span>
-            <button class="btn btn-ghost btn-sm" id="btn-refresh-pos">刷新</button>
+            <span class="card-title">${c('positions')}</span>
+            <button class="btn btn-ghost btn-sm" id="btn-refresh-pos">${c('refresh')}</button>
           </div>
           <div id="positions-body" class="card-body">
             <div class="text-muted text-sm">Loading...</div>
@@ -191,7 +348,7 @@ function buildShell() {
       <div class="execution-right">
         <div class="results-panel">
           <div class="results-panel__header">
-            <span class="card-title">订单流</span>
+            <span class="card-title">${c('orderFeed')}</span>
             <div style="display:flex;gap:10px;align-items:center">
               <span id="order-count" class="text-xs text-muted font-mono">0 orders</span>
               <select class="form-select" id="filter-status" style="padding:3px 8px;font-size:11px;height:auto;width:auto">
@@ -202,7 +359,7 @@ function buildShell() {
                 <option value="cancelled">Cancelled</option>
                 <option value="canceled">Canceled</option>
               </select>
-              <button class="btn btn-ghost btn-sm" id="btn-refresh-orders">刷新</button>
+              <button class="btn btn-ghost btn-sm" id="btn-refresh-orders">${c('refresh')}</button>
             </div>
           </div>
           <div class="results-panel__body" id="orders-body">
@@ -212,11 +369,11 @@ function buildShell() {
 
         <div class="card">
           <div class="card-header">
-            <span class="card-title">实时流</span>
+            <span class="card-title">${c('orderFeed')}</span>
             <span id="feed-status" class="text-xs text-muted font-mono">connecting...</span>
           </div>
           <div id="feed-log" style="padding:12px 16px;height:220px;overflow-y:auto;display:flex;flex-direction:column-reverse;gap:0">
-            <div class="text-muted text-sm">Waiting for broker events...</div>
+            <div class="text-muted text-sm">${c('feedWaiting')}</div>
           </div>
         </div>
       </div>
@@ -225,11 +382,11 @@ function buildShell() {
     <div class="live-confirm-modal" id="live-confirm-modal" hidden>
       <div class="live-confirm-modal__backdrop" data-live-close></div>
       <div class="live-confirm-modal__panel">
-        <div class="live-confirm-modal__title">确认 Live 下单</div>
+        <div class="live-confirm-modal__title">${c('liveConfirmTitle')}</div>
         <div class="live-confirm-modal__body" id="live-confirm-body"></div>
         <div class="live-confirm-modal__actions">
-          <button class="btn btn-ghost" id="btn-live-cancel">取消</button>
-          <button class="btn btn-primary" id="btn-live-confirm">确认提交 Live</button>
+          <button class="btn btn-ghost" id="btn-live-cancel">${c('killCancel')}</button>
+          <button class="btn workbench-action-btn workbench-action-btn--primary" id="btn-live-confirm">${c('liveConfirm')}</button>
         </div>
       </div>
     </div>
@@ -257,6 +414,7 @@ export function destroy() {
   _orders = [];
   _killArmed = false;
   _currentContainer = null;
+  _policy = null;
   _langCleanup?.();
   _langCleanup = null;
 }
@@ -267,31 +425,27 @@ function bindEvents(container) {
   container.querySelector('#btn-refresh-pos')?.addEventListener('click', () => loadPositions(container));
   container.querySelector('#btn-refresh-account')?.addEventListener('click', () => loadAccount(container));
   container.querySelector('#filter-status')?.addEventListener('change', () => renderOrders(container));
-  container.querySelector('#ex-mode')?.addEventListener('change', async () => {
-    updateModeBadge(container);
-    await loadRuntime(container);
-  });
 
   const killButton = container.querySelector('#btn-kill');
   killButton?.addEventListener('click', () => {
     _killArmed = !_killArmed;
     container.querySelector('#kill-confirm').style.display = _killArmed ? 'flex' : 'none';
-    killButton.textContent = _killArmed ? '等待确认...' : '启用熔断开关';
+    killButton.textContent = _killArmed ? '...' : c('killEnable');
   });
   container.querySelector('#btn-kill-cancel')?.addEventListener('click', () => {
     _killArmed = false;
     container.querySelector('#kill-confirm').style.display = 'none';
-    killButton.textContent = '启用熔断开关';
+    killButton.textContent = c('killEnable');
   });
   container.querySelector('#btn-kill-confirm')?.addEventListener('click', async () => {
     try {
       await api.execution.killSwitch(true, 'Manual operator trigger');
-      toast.warning('Kill switch activated', 'All pending broker orders were halted.');
+      toast.warning(c('killSwitch'), c('killActiveHint'));
       container.querySelector('#kill-confirm').style.display = 'none';
       container.querySelector('#kill-activated').style.display = '';
-      killButton.textContent = '熔断已激活';
+      killButton.textContent = c('killActive');
     } catch (error) {
-      toast.error('Kill switch failed', error.message || 'Unknown error');
+      toast.error(c('killSwitch'), error.message || 'Unknown error');
     }
   });
 
@@ -306,6 +460,11 @@ function bindEvents(container) {
 }
 
 async function loadRuntime(container) {
+  try {
+    _policy = await api.trading.autopilotPolicy();
+  } catch {
+    _policy = null;
+  }
   updateModeBadge(container);
   connectWS(container);
   await Promise.allSettled([
@@ -316,28 +475,33 @@ async function loadRuntime(container) {
 }
 
 function updateModeBadge(container) {
-  const mode = currentMode(container);
+  const requestedMode = currentMode();
+  const effectiveMode = _policy?.effective_mode || requestedMode;
   const modeBadge = container.querySelector('#monitor-mode');
   const brokerMeta = container.querySelector('#execution-broker-meta');
+  const modeField = container.querySelector('#ex-mode');
+  if (modeField) modeField.value = requestedMode;
   if (modeBadge) {
-    modeBadge.textContent = mode.toUpperCase();
-    modeBadge.className = `badge ${mode === 'live' ? 'badge-failed' : 'badge-neutral'}`;
+    modeBadge.textContent = effectiveMode.toUpperCase();
+    modeBadge.className = `badge ${effectiveMode === 'live' ? 'badge-failed' : 'badge-neutral'}`;
   }
-  if (brokerMeta) brokerMeta.textContent = `Alpaca · ${mode}`;
+  if (brokerMeta) {
+    brokerMeta.textContent = `Alpaca / ${requestedMode} -> ${effectiveMode}`;
+  }
 }
 
 function updateAccountPill(container, connected, mode) {
   const pill = container.querySelector('#ws-pill');
   if (!pill) return;
-  pill.textContent = connected ? 'ACCOUNT ONLINE' : 'BROKER OFFLINE';
+  pill.textContent = connected ? c('accountOnline') : c('accountOffline');
   pill.className = connected ? 'live-pill' : 'live-pill live-pill--off';
   container.querySelector('#execution-monitor-sub').textContent = connected
-    ? `Real broker account sync · ${mode}`
-    : `Broker unavailable · ${mode}`;
+    ? `${c('subtitle')} / ${humanMode(mode)}`
+    : `${c('subtitle')} / ${c('accountOffline')}`;
 }
 
 function renderAccountFallback(container, reason) {
-  updateAccountPill(container, false, currentMode(container));
+  updateAccountPill(container, false, currentMode());
   container.querySelector('#account-id').textContent = '--';
   container.querySelector('#account-clock').textContent = '--';
   container.querySelector('#account-warning-count').textContent = '1';
@@ -346,44 +510,83 @@ function renderAccountFallback(container, reason) {
   container.querySelector('#account-buying-power').textContent = '--';
   container.querySelector('#account-cash').textContent = '--';
   container.querySelector('#account-daily-change').textContent = '--';
-  container.querySelector('#execution-clock').textContent = 'Broker unavailable';
+  container.querySelector('#execution-clock').textContent = c('accountOffline');
   container.querySelector('#session-pnl').textContent = '--';
   container.querySelector('#session-pnl').style.color = 'var(--text-dim)';
   container.querySelector('#btn-kill').disabled = true;
 }
 
+function syncModeFields(payload) {
+  const requestedMode = payload?.requested_mode || _policy?.requested_mode || _policy?.execution_mode || 'paper';
+  const effectiveMode = payload?.effective_mode || _policy?.effective_mode || requestedMode;
+  const modeField = _currentContainer?.querySelector('#ex-mode');
+  if (modeField) modeField.value = requestedMode;
+  const requestedHost = _currentContainer?.querySelector('#execution-requested-mode');
+  const effectiveHost = _currentContainer?.querySelector('#execution-effective-mode');
+  const paperReadyHost = _currentContainer?.querySelector('#execution-paper-ready');
+  const liveReadyHost = _currentContainer?.querySelector('#execution-live-ready');
+  const blockReasonHost = _currentContainer?.querySelector('#execution-block-reason');
+  if (requestedHost) requestedHost.textContent = humanMode(requestedMode);
+  if (effectiveHost) effectiveHost.textContent = humanMode(effectiveMode);
+  if (paperReadyHost) paperReadyHost.textContent = yesNo(payload?.paper_ready);
+  if (liveReadyHost) liveReadyHost.textContent = yesNo(payload?.live_ready);
+  if (blockReasonHost) blockReasonHost.textContent = humanReason(payload?.block_reason || _policy?.block_reason);
+  updateModeBadge(_currentContainer);
+}
+
+function liveBlockedState() {
+  const requestedMode = currentMode();
+  if (requestedMode !== 'live') return null;
+  const blockReason = _policy?.block_reason;
+  if (!blockReason) return null;
+  return {
+    requestedMode,
+    effectiveMode: _policy?.effective_mode || 'paper',
+    blockReason,
+    nextActions: Array.isArray(_policy?.next_actions) ? _policy.next_actions : [],
+  };
+}
+
 async function loadAccount(container) {
   const broker = currentBroker(container);
-  const mode = currentMode(container);
+  const mode = currentMode();
   try {
     const payload = await api.execution.account(broker, mode);
     const account = payload.account || {};
     const warnings = payload.warnings || [];
     const clock = payload.market_clock || {};
 
+    syncModeFields(payload);
     container.querySelector('#account-id').textContent = account.account_id || '--';
     container.querySelector('#account-clock').textContent = clock.is_open
-      ? 'MARKET OPEN'
-      : (clock.next_open ? `Closed · next ${shortTime(clock.next_open)}` : 'Closed');
+      ? c('marketOpen')
+      : (clock.next_open ? `${c('marketClosed')} / next ${shortTime(clock.next_open)}` : c('marketClosed'));
     container.querySelector('#account-warning-count').textContent = String(warnings.length);
-    container.querySelector('#broker-status-note').textContent = warnings[0] || 'Server-side broker credentials active.';
+    container.querySelector('#broker-status-note').textContent = payload.block_reason
+      ? `${humanReason(payload.block_reason)} ${(payload.next_actions || []).map(humanNextAction).join(' / ')}`
+      : (warnings[0] || c('note'));
     container.querySelector('#account-equity').textContent = fmtMoney(account.equity);
     container.querySelector('#account-buying-power').textContent = fmtMoney(account.buying_power);
     container.querySelector('#account-cash').textContent = fmtMoney(account.cash);
-    container.querySelector('#account-daily-change').textContent = `${fmtSignedMoney(account.daily_change)} · ${fmtPct(account.daily_change_pct)}`;
-    container.querySelector('#execution-clock').textContent = clock.is_open ? 'Market Open' : 'Market Closed';
+    container.querySelector('#account-daily-change').textContent = `${fmtSignedMoney(account.daily_change)} / ${fmtPct(account.daily_change_pct)}`;
+    container.querySelector('#execution-clock').textContent = clock.is_open ? c('marketOpen') : c('marketClosed');
     container.querySelector('#session-pnl').textContent = fmtSignedMoney(account.daily_change);
     container.querySelector('#session-pnl').style.color = Number(account.daily_change || 0) >= 0 ? 'var(--green)' : 'var(--red)';
     container.querySelector('#btn-kill').disabled = !payload.connected;
-    updateAccountPill(container, Boolean(payload.connected), payload.mode || mode);
+    updateAccountPill(container, Boolean(payload.connected), payload.effective_mode || payload.mode || mode);
   } catch (error) {
     renderAccountFallback(container, error.message || 'Could not load broker account.');
-    toast.error('Account sync failed', error.message || 'Unknown error');
+    toast.error(c('brokerStatus'), error.message || 'Unknown error');
   }
 }
 
 async function requestExecution(container) {
-  const mode = currentMode(container);
+  const blocked = liveBlockedState();
+  if (blocked) {
+    toast.error(c('blockedTitle'), `${humanReason(blocked.blockReason)} ${blocked.nextActions.map(humanNextAction).join(' / ') || c('blockedHint')}`);
+    return;
+  }
+  const mode = currentMode();
   const submitOrders = container.querySelector('#ex-submit').checked;
   if (mode === 'live' && submitOrders) {
     openLiveConfirm(container);
@@ -398,12 +601,12 @@ function openLiveConfirm(container) {
   const universe = container.querySelector('#ex-universe').value.trim() || 'default universe';
   const body = container.querySelector('#live-confirm-body');
   body.innerHTML = `
-    <div>Mode: <strong>LIVE</strong></div>
-    <div>Broker: <strong>${currentBroker(container)}</strong></div>
-    <div>Universe: <strong>${universe}</strong></div>
-    <div>Capital Base: <strong>${fmtMoney(capital)}</strong></div>
-    <div>Guardrail: <strong>Medium gate</strong></div>
-    <div style="color:var(--amber)">This submission will require server-side live routing permission and will be fully audited.</div>
+    <div>${c('requestedMode')}: <strong>${humanMode(currentMode())}</strong></div>
+    <div>${c('broker')}: <strong>${currentBroker(container)}</strong></div>
+    <div>${c('universe')}: <strong>${universe}</strong></div>
+    <div>${c('capital')}: <strong>${fmtMoney(capital)}</strong></div>
+    <div>${c('blockReason')}: <strong>${humanReason(_policy?.block_reason)}</strong></div>
+    <div style="color:var(--amber)">${c('liveConfirmTitle')}</div>
   `;
   modal.hidden = false;
 }
@@ -413,6 +616,12 @@ function hideLiveConfirm() {
 }
 
 async function submitExecution(container, liveConfirmed) {
+  const blocked = liveBlockedState();
+  if (blocked && !liveConfirmed) {
+    toast.error(c('blockedTitle'), humanReason(blocked.blockReason));
+    return;
+  }
+
   const button = container.querySelector('#btn-run-exec');
   button.disabled = true;
   button.textContent = 'Submitting...';
@@ -422,7 +631,7 @@ async function submitExecution(container, liveConfirmed) {
     universe: universeInput ? universeInput.split(/[,\s]+/).filter(Boolean).map((value) => value.toUpperCase()) : [],
     capital_base: Number(container.querySelector('#ex-capital').value || 1000000),
     broker: currentBroker(container),
-    mode: currentMode(container),
+    mode: currentMode(),
     submit_orders: container.querySelector('#ex-submit').checked,
     allow_duplicates: true,
     live_confirmed: !!liveConfirmed,
@@ -431,31 +640,34 @@ async function submitExecution(container, liveConfirmed) {
 
   try {
     const response = await api.execution.paper(payload);
-    toast.success('Execution plan submitted', `${response.orders?.length || 0} orders staged`);
-    if (response.mode === 'live' && !response.submitted && response.broker_status === 'awaiting_live_confirmation') {
-      toast.warning('Live routing still gated', (response.warnings || [])[0] || 'Confirmation required.');
+    syncModeFields(response);
+    if (response.block_reason) {
+      toast.error(c('blockedTitle'), `${humanReason(response.block_reason)} ${(response.next_actions || []).map(humanNextAction).join(' / ')}`);
+    } else {
+      toast.success(c('runPlan'), `${response.orders?.length || 0} orders staged`);
     }
     await loadRuntime(container);
     connectWS(container, response.execution_id);
   } catch (error) {
-    toast.error('Execution failed', error.message || 'Unknown error');
+    toast.error(c('runPlan'), error.message || 'Unknown error');
   } finally {
     button.disabled = false;
-    button.textContent = '运行执行计划';
+    button.textContent = c('runPlan');
   }
 }
 
 async function loadOrders(container) {
   const broker = currentBroker(container);
-  const mode = currentMode(container);
+  const mode = currentMode();
   try {
     const data = await api.execution.orders(broker, 'all', 100, mode);
     _orders = data.orders || [];
+    syncModeFields(data);
     renderOrders(container);
   } catch (error) {
     container.querySelector('#orders-body').innerHTML = `
       <div class="empty-state" style="min-height:120px">
-        <div class="empty-state__title">无法加载订单</div>
+        <div class="empty-state__title">${c('orderFeed')}</div>
         <div class="empty-state__text">${error.message || 'Unknown error'}</div>
       </div>
     `;
@@ -471,8 +683,8 @@ function renderOrders(container) {
   if (!filtered.length) {
     body.innerHTML = `
       <div class="empty-state" style="min-height:120px">
-        <div class="empty-state__title">当前没有订单</div>
-        <div class="empty-state__text">订单为空时展示空状态，不再显示 File not found。</div>
+        <div class="empty-state__title">${c('noOrders')}</div>
+        <div class="empty-state__text">${c('modeManaged')}</div>
       </div>
     `;
     return;
@@ -503,16 +715,17 @@ function renderOrders(container) {
 
 async function loadPositions(container) {
   const broker = currentBroker(container);
-  const mode = currentMode(container);
+  const mode = currentMode();
   const target = container.querySelector('#positions-body');
   try {
     const payload = await api.execution.positions(broker, mode);
     const positions = payload.positions || [];
+    syncModeFields(payload);
     if (!positions.length) {
       target.innerHTML = `
         <div class="empty-state" style="min-height:100px">
-          <div class="empty-state__title">当前无持仓</div>
-          <div class="empty-state__text">空仓时展示空状态。</div>
+          <div class="empty-state__title">${c('noPositions')}</div>
+          <div class="empty-state__text">${c('modeManaged')}</div>
         </div>
       `;
       return;
@@ -539,7 +752,7 @@ async function loadPositions(container) {
   } catch (error) {
     target.innerHTML = `
       <div class="empty-state" style="min-height:100px">
-        <div class="empty-state__title">持仓读取失败</div>
+        <div class="empty-state__title">${c('positions')}</div>
         <div class="empty-state__text">${error.message || 'Unknown error'}</div>
       </div>
     `;
@@ -548,7 +761,7 @@ async function loadPositions(container) {
 
 function connectWS(container, executionId = null) {
   const broker = currentBroker(container);
-  const mode = currentMode(container);
+  const mode = currentMode();
   const feedLog = container.querySelector('#feed-log');
   const status = container.querySelector('#feed-status');
   _ws?.close();

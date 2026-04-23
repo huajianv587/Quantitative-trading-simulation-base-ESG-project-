@@ -125,8 +125,8 @@ for (const viewport of VIEWPORTS) {
       await page.goto('/app/#/agent-lab', { waitUntil: 'domcontentloaded' });
       await expect(page.locator('#btn-agent-workflow')).toBeVisible();
       await page.locator('#btn-agent-workflow').click();
-      await expect(page.locator('#agent-timeline')).toContainText(/Simulation|Outcome|Live scan/);
-      await expect(page.locator('#agent-report')).toContainText(/Evidence|Loss Prob/);
+      await expect(page.locator('#agent-timeline')).toContainText(/Simulation|Outcome|Live scan|情景模拟|结果影子日志|实时扫描/);
+      await expect(page.locator('#agent-report')).toContainText(/Evidence|Loss Prob|证据|亏损概率/);
       await assertNoOverflow(page, ['.workbench-item', '.workbench-metric-card', '.workbench-action-btn']);
       await page.screenshot({ path: screenshotPath('agent-lab', viewport.name, mode.lang, mode.theme, 'after-actions'), fullPage: true });
 

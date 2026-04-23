@@ -54,3 +54,10 @@ training/cloud_assets/
 training/full_training_run_manifest.json
 .pytest_cache/
 model-serving/checkpoint/*/
+
+# Local full-suite bundles and generated paper artifacts are too large for normal Git pushes.
+full_suite_checkpoints_*/
+full_suite_source_bundle_*/
+scipaper/
+tmp_e2e_server.*
+test_report.json

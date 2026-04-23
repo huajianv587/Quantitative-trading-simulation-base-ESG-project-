@@ -17,6 +17,7 @@ from gateway.api.quant_schemas import (
     QuantP2DecisionRequest,
     QuantPortfolioRequest,
     QuantResearchRequest,
+    ResearchContextResponse,
     QuantSimulationScenarioRequest,
     QuantValidationRequest,
 )
@@ -93,6 +94,11 @@ def run_research_pipeline(req: QuantResearchRequest):
         capital_base=req.capital_base,
         horizon_days=req.horizon_days,
     )
+
+
+@router.get("/research/context", response_model=ResearchContextResponse)
+def get_research_context(symbol: str | None = None, provider: str = "auto", limit: int = 6):
+    return _quant_service().build_research_context(symbol=symbol, provider=provider, limit=limit)
 
 
 @router.post("/portfolio/optimize")

@@ -10,11 +10,20 @@ from gateway.quant.signals import MovingAverageCrossSignalEngine
 
 
 class _FakeAlpaca:
-    def connection_status(self):
+    def connection_status(self, mode=None):
+        runtime_mode = "live" if str(mode or "").lower() == "live" else "paper"
         return {
-            "configured": True,
-            "broker": "alpaca-paper",
-            "base_url": "https://paper-api.alpaca.markets",
+            "configured": runtime_mode == "paper",
+            "broker": "alpaca",
+            "mode": runtime_mode,
+            "requested_mode": runtime_mode,
+            "effective_mode": "paper",
+            "base_url": "https://paper-api.alpaca.markets" if runtime_mode == "paper" else "https://api.alpaca.markets",
+            "paper_base_url": "https://paper-api.alpaca.markets",
+            "live_base_url": "https://api.alpaca.markets",
+            "paper_configured": True,
+            "live_configured": False,
+            "live_available": False,
         }
 
     def get_account(self):
@@ -202,10 +211,31 @@ def test_quant_execution_broker_views_expose_account_orders_and_positions(tmp_pa
     positions = service.list_execution_positions()
 
     assert account["connected"] is True
+    assert account["requested_mode"] == "paper"
+    assert account["effective_mode"] == "paper"
+    assert account["paper_ready"] is True
+    assert account["live_available"] is False
     assert account["account"]["status"] == "ACTIVE"
     assert orders["orders"][0]["symbol"] == "AAPL"
+    assert orders["requested_mode"] == "paper"
     assert positions["positions"][0]["symbol"] == "AAPL"
+    assert positions["effective_mode"] == "paper"
     assert any("Market is currently closed" in warning for warning in account["warnings"])
+
+
+def test_quant_execution_account_marks_live_mode_as_blocked_until_ready(tmp_path):
+    service = QuantSystemService()
+    _configure_test_storage(service, tmp_path)
+    service.alpaca = _FakeAlpaca()
+
+    account = service.get_execution_account(mode="live")
+
+    assert account["connected"] is False
+    assert account["requested_mode"] == "live"
+    assert account["effective_mode"] == "paper"
+    assert account["live_ready"] is False
+    assert account["live_available"] is False
+    assert account["block_reason"] == "live_credentials_missing"
 
 
 def test_quant_execution_plan_blocks_when_buying_power_is_below_requested_notional(monkeypatch, tmp_path):
@@ -361,3 +391,30 @@ def test_quant_execution_duplicate_guard_suppresses_second_batch(monkeypatch, tm
     assert second["broker_status"] == "suppressed"
     assert second["orders"][0]["status"] == "suppressed_duplicate"
     assert second["state_machine"]["state"] == "suppressed"
+
+
+def test_quant_execution_plan_blocks_live_submit_without_live_credentials(monkeypatch, tmp_path):
+    monkeypatch.setattr("gateway.quant.service.settings.ALPACA_MAX_TEST_ORDERS", 2)
+    monkeypatch.setattr("gateway.quant.service.settings.ALPACA_DEFAULT_TEST_NOTIONAL", 1.0)
+    monkeypatch.setattr("gateway.quant.service.settings.ALPACA_MAX_ORDER_NOTIONAL", 10.0)
+
+    service = QuantSystemService()
+    _configure_test_storage(service, tmp_path)
+    service.alpaca = _FakeAlpaca()
+    _configure_bullish_market_data(service)
+
+    payload = service.create_execution_plan(
+        universe_symbols=["AAPL"],
+        mode="live",
+        submit_orders=True,
+        max_orders=1,
+        per_order_notional=1.25,
+    )
+
+    assert payload["submitted"] is False
+    assert payload["requested_mode"] == "live"
+    assert payload["effective_mode"] == "paper"
+    assert payload["live_ready"] is False
+    assert payload["live_available"] is False
+    assert payload["block_reason"] == "live_credentials_missing"
+    assert "Live mode was selected" in " ".join(payload["warnings"])

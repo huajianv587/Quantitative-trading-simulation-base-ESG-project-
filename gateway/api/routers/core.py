@@ -54,102 +54,86 @@ def _load_recent_signals(generated_at: datetime) -> tuple[list[dict[str, Any]], 
             )
 
             for item in response.data or []:
-                description = (
-                    item.get("description")
-                    or item.get("raw_content")
-                    or "最新 ESG 动态已进入监控队列。"
-                )
+                title = str(item.get("title") or "").strip() or "?? ESG ??"
+                description = item.get("description") or item.get("raw_content") or "?? ESG ??????????"
+                lowered = f"{title} {description}".lower()
+                tone = "neutral"
+                if any(keyword in lowered for keyword in ("violation", "investigation", "restatement", "compliance", "governance")):
+                    tone = "alert"
+                elif any(keyword in lowered for keyword in ("emission", "renewable", "sustainability", "climate", "water")):
+                    tone = "positive"
+
                 recent_signals.append({
                     "id": item.get("id"),
-                    "company": item.get("company") or "市场观察",
-                    "title": item.get("title") or "新的 ESG 事件",
+                    "company": item.get("company") or "????",
+                    "title": title,
                     "description": description,
                     "event_type": item.get("event_type") or "update",
                     "source": item.get("source") or "database",
                     "source_url": item.get("source_url"),
                     "detected_at": item.get("detected_at") or item.get("created_at"),
-                    "tone": "alert" if "rule" in str(item.get("title", "")).lower() else "positive",
+                    "tone": tone,
                 })
         except Exception as exc:
-            signal_source = "scanner_fallback"
+            signal_source = "scanner_state"
             logger.warning(f"[Dashboard] Failed to load recent signals from database: {exc}")
     else:
-        signal_source = "scanner_fallback"
+        signal_source = "scanner_state"
 
     if recent_signals:
         return recent_signals, signal_source
 
-    signal_source = "scanner_fallback"
+    signal_source = "scanner_state"
     try:
         from gateway.scheduler.scanner import get_scanner
 
         scanner = get_scanner()
-        sample_events = []
-        sample_events.extend(scanner.scan_news_feeds()[0])
-        sample_events.extend(scanner.scan_esg_reports()[0])
-        sample_events.extend(scanner.scan_compliance_updates()[0])
+        last_summary = scanner.get_last_run_summary() or {}
+        blocked_reason = last_summary.get("blocked_reason") or "scanner_no_real_events"
+        next_actions = last_summary.get("next_actions") or [
+            "?? NewsAPI / Finnhub / SEC-EDGAR ???????",
+            "???????????",
+            "??????????????",
+        ]
+        source_summary = last_summary.get("source_summary") or {}
+        source_hint = ", ".join(
+            lane
+            for lane, payload in source_summary.items()
+            if isinstance(payload, dict) and payload.get("status") != "completed"
+        )
+        description = "?????????? ESG ?????"
+        if source_hint:
+            description = f"{description} ??????????{source_hint}?"
 
-        tone_map = {
-            "EMISSION_REDUCTION": "positive",
-            "RENEWABLE_ENERGY": "positive",
-            "GOVERNANCE_CHANGE": "alert",
-        }
-
-        for idx, event in enumerate(sample_events[:6]):
-            event_type = str(event.event_type).split(".")[-1] if event.event_type else "UPDATE"
-            recent_signals.append({
-                "id": f"sample-{idx}",
-                "company": event.company or "市场观察",
-                "title": event.title,
-                "description": event.description,
-                "event_type": event_type,
-                "source": event.source,
-                "source_url": event.source_url,
-                "detected_at": event.detected_at.isoformat(),
-                "tone": tone_map.get(event_type, "neutral"),
-            })
+        return [
+            {
+                "id": "scanner-blocked",
+                "company": "???",
+                "title": "?????????? ESG ????",
+                "description": f"{description} ???{blocked_reason}?????{'?'.join(next_actions)}?",
+                "event_type": "OTHER",
+                "source": "blocked",
+                "source_url": None,
+                "detected_at": generated_at.isoformat(),
+                "tone": "neutral",
+            }
+        ], signal_source
     except Exception as exc:
-        logger.warning(f"[Dashboard] Scanner fallback unavailable: {exc}")
-
-    if recent_signals:
-        return recent_signals, signal_source
+        logger.warning(f"[Dashboard] Scanner state unavailable: {exc}")
 
     return [
         {
-            "id": "fallback-1",
-            "company": "Tesla",
-            "title": "Tesla 更新碳减排目标",
-            "description": "环境目标被重新量化，市场关注其供应链执行速度。",
-            "event_type": "EMISSION_REDUCTION",
-            "source": "fallback",
+            "id": "scanner-unavailable",
+            "company": "???",
+            "title": "????????",
+            "description": "?????????????????????????????????????????????",
+            "event_type": "OTHER",
+            "source": "blocked",
             "source_url": None,
             "detected_at": generated_at.isoformat(),
-            "tone": "positive",
-        },
-        {
-            "id": "fallback-2",
-            "company": "Microsoft",
-            "title": "Microsoft 发布最新 ESG 报告",
-            "description": "报告强调可再生能源与治理透明度提升。",
-            "event_type": "RENEWABLE_ENERGY",
-            "source": "fallback",
-            "source_url": None,
-            "detected_at": generated_at.isoformat(),
-            "tone": "positive",
-        },
-        {
-            "id": "fallback-3",
-            "company": "SEC",
-            "title": "新的 ESG 披露规则进入市场视野",
-            "description": "治理与合规要求进一步趋严，企业披露压力抬升。",
-            "event_type": "GOVERNANCE_CHANGE",
-            "source": "fallback",
-            "source_url": None,
-            "detected_at": generated_at.isoformat(),
-            "tone": "alert",
-        },
-    ], "static_fallback"
-
+            "tone": "neutral",
+        }
+    ], signal_source
 
 def _build_score_snapshot(spotlight_company: str) -> dict[str, Any]:
     score_profiles = {
@@ -337,7 +321,7 @@ def dashboard_overview(request: Request):
     active_modules = sum(1 for ready in health_modules.values() if ready)
 
     spotlight = recent_signals[0]
-    spotlight_company = spotlight.get("company") or "Tesla"
+    spotlight_company = spotlight.get("company") or "当前市场"
     score_snapshot = _build_score_snapshot(spotlight_company)
     event_monitor = _build_event_monitor(recent_signals, generated_at)
 

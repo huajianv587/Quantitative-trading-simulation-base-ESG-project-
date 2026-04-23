@@ -87,6 +87,12 @@ class Settings:
             "SUPABASE_KEY",
         )
         self.SUPABASE_PASSWORD = _first_env("SUPABASE_PASSWORD")
+        self.AUTH_PRIMARY_BACKEND = _env_choice(
+            "AUTH_PRIMARY_BACKEND",
+            default="sqlite",
+            allowed={"sqlite", "supabase"},
+        )
+        self.AUTH_ALLOW_SQLITE_FALLBACK = _env_bool("AUTH_ALLOW_SQLITE_FALLBACK", default=True)
         self.SUPABASE_STORAGE_BUCKET = _first_env("SUPABASE_STORAGE_BUCKET", default="quant-artifacts")
         self.SUPABASE_STORAGE_PUBLIC = _env_bool("SUPABASE_STORAGE_PUBLIC", default=True)
         self.SUPABASE_STORAGE_PATH_PREFIX = _first_env("SUPABASE_STORAGE_PATH_PREFIX", default="quant")
@@ -100,6 +106,12 @@ class Settings:
             "MAIL_FROM_ADDRESS",
             default="noreply@esg-system.com",
         )
+        self.IMAP_HOST = _first_env("IMAP_HOST")
+        self.IMAP_PORT = _env_int("IMAP_PORT", default=993)
+        self.IMAP_USER = _first_env("IMAP_USER")
+        self.IMAP_PASSWORD = _first_env("IMAP_PASSWORD")
+        self.IMAP_FOLDER = _first_env("IMAP_FOLDER", default="INBOX")
+        self.IMAP_USE_SSL = _env_bool("IMAP_USE_SSL", default=True)
 
         self.SCAN_INTERVAL_MINUTES = _env_int(
             "SCAN_INTERVAL_MINUTES",
@@ -158,6 +170,18 @@ class Settings:
             "ALPACA_SECRET",
             "APCA_API_SECRET",
             "APCA_API_SECRET_KEY",
+        )
+        self.ALPACA_LIVE_API_KEY = _first_env(
+            "ALPACA_LIVE_API_KEY",
+            "ALPACA_LIVE_KEY_ID",
+            "APCA_LIVE_API_KEY",
+            "APCA_LIVE_API_KEY_ID",
+        )
+        self.ALPACA_LIVE_API_SECRET = _first_env(
+            "ALPACA_LIVE_API_SECRET",
+            "ALPACA_LIVE_SECRET_KEY",
+            "APCA_LIVE_API_SECRET",
+            "APCA_LIVE_API_SECRET_KEY",
         )
         self.ALPACA_PAPER_BASE_URL = _first_env(
             "ALPACA_PAPER_BASE_URL",

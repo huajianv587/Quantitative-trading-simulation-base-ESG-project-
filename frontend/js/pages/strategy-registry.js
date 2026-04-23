@@ -80,6 +80,10 @@ function c(key) {
   return COPY[lang][key] || COPY.en[key] || key;
 }
 
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
+}
+
 export async function render(container) {
   _container = container;
   renderShell();
@@ -106,6 +110,7 @@ export function destroy() {
 }
 
 function renderShell() {
+  if (!_container) return;
   _container.innerHTML = `
     <div class="workbench-page strategy-registry-page" data-no-autotranslate="true">
       <section class="run-panel">
@@ -135,6 +140,7 @@ function renderShell() {
 }
 
 function wire() {
+  if (!_container) return;
   if (_container && _clickHandler) {
     _container.removeEventListener('click', _clickHandler);
   }
@@ -144,25 +150,32 @@ function wire() {
 }
 
 async function refreshRegistry() {
-  setLoading(_container.querySelector('#strategy-kpis'), c('loading'));
-  setLoading(_container.querySelector('#strategy-registry-list'), c('loading'));
+  if (!isMounted()) return;
+  const kpiHost = _container?.querySelector('#strategy-kpis');
+  const listHost = _container?.querySelector('#strategy-registry-list');
+  if (kpiHost) setLoading(kpiHost, c('loading'));
+  if (listHost) setLoading(listHost, c('loading'));
   try {
     const [strategyPayload, policy] = await Promise.all([
       api.trading.strategies(),
       api.trading.autopilotPolicy().catch(() => null),
     ]);
+    if (!isMounted()) return;
     _strategies = Array.isArray(strategyPayload?.strategies) ? strategyPayload.strategies : [];
     _policy = policy;
     renderRegistry();
   } catch (error) {
-    renderError(_container.querySelector('#strategy-kpis'), error);
-    renderError(_container.querySelector('#strategy-registry-list'), error);
+    if (!isMounted()) return;
+    if (kpiHost) renderError(kpiHost, error);
+    if (listHost) renderError(listHost, error);
   }
 }
 
 function renderRegistry() {
+  if (!isMounted()) return;
   renderKpis();
-  const host = _container.querySelector('#strategy-registry-list');
+  const host = _container?.querySelector('#strategy-registry-list');
+  if (!host) return;
   if (!_strategies.length) {
     host.innerHTML = emptyState(c('noStrategies'), c('noStrategiesHint'));
     return;
@@ -175,6 +188,8 @@ function renderRegistry() {
 }
 
 function renderKpis() {
+  const host = _container?.querySelector('#strategy-kpis');
+  if (!host) return;
   const activeStrategies = _strategies.filter((row) => String(row.status || '').toLowerCase() === 'active');
   const activeAllocation = _strategies.reduce((sum, row) => {
     const allocation = row.allocation?.capital_allocation ?? row.capital_allocation ?? 0;
@@ -182,7 +197,7 @@ function renderKpis() {
   }, 0);
   const allowlist = Array.isArray(_policy?.allowed_strategies) ? _policy.allowed_strategies : [];
   const paperReady = _strategies.filter((row) => row.paper_ready).length;
-  _container.querySelector('#strategy-kpis').innerHTML = `
+  host.innerHTML = `
     ${metric(c('activeCount'), activeStrategies.length, activeStrategies.length ? 'positive' : 'risk')}
     ${metric(c('allocation'), pct(activeAllocation))}
     ${metric(c('allowed'), allowlist.length, allowlist.length ? 'positive' : 'risk')}

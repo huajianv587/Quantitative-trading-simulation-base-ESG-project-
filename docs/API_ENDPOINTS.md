@@ -607,7 +607,7 @@ curl -X DELETE http://localhost:8000/admin/push-rules/rule_1 \
 
 ### POST /admin/push-rules/{rule_id}/test
 
-**测试推送规则（发送测试通知）**
+**测试推送规则（基于真实已落库报告）**
 
 **请求**:
 ```bash
@@ -615,13 +615,17 @@ curl -X POST http://localhost:8000/admin/push-rules/rule_1/test \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{
-    "test_user_id": "user_123",
-    "mock_report": {
-      "overall_score": 35,
-      "low_performer_count": 2,
-      "high_performer_count": 0
-    }
+    "test_user_id": "user_123"
   }'
+```
+
+默认行为会自动加载 `esg_reports` 中最近一份真实报告。也可以额外传入 `report_id`，只针对某一份真实报告测试：
+
+```json
+{
+  "test_user_id": "user_123",
+  "report_id": "report_20260423_001"
+}
 ```
 
 **响应**:
@@ -630,10 +634,36 @@ curl -X POST http://localhost:8000/admin/push-rules/rule_1/test \
   "test_id": "test_123",
   "rule_id": "rule_1",
   "status": "success",
-  "channels_tested": ["email", "in_app"],
+  "report_id": "report_20260423_001",
+  "report_type": "daily",
+  "generated_at": "2026-04-23T08:12:00Z",
   "results": {
-    "email": "发送成功到 user@example.com",
-    "in_app": "应用内通知已保存"
+    "test_user_id": "user_123",
+    "matched": true,
+    "channels_tested": ["email", "in_app"]
+  }
+}
+```
+
+**无真实报告时的阻断响应**:
+```json
+{
+  "test_id": "test_124",
+  "rule_id": "rule_1",
+  "status": "blocked",
+  "report_id": null,
+  "report_type": null,
+  "generated_at": null,
+  "block_reason": "real_report_required",
+  "next_actions": [
+    "Generate a real report",
+    "Refresh reports",
+    "Retry push-rule test"
+  ],
+  "results": {
+    "test_user_id": "user_123",
+    "matched": false,
+    "channels_tested": ["email", "in_app"]
   }
 }
 ```

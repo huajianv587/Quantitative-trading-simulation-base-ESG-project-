@@ -28,7 +28,7 @@ const COPY = {
     realized: 'Realized Return',
     benchmark: 'Benchmark Return',
     refresh: 'Refresh Outcomes',
-    record: 'Record Demo Outcome',
+    record: 'Record Outcome',
     refreshBusy: 'Refreshing...',
     recordBusy: 'Recording...',
     loading: 'Loading outcome tracking...',
@@ -38,7 +38,7 @@ const COPY = {
     stateHint: 'Action State',
     stateReady: 'Ready to evaluate the next shadow row',
     stateRefresh: 'Refreshing calibration snapshot and latest daily review',
-    stateRecord: 'Recording a demo outcome and immediately updating the right-side latest row',
+    stateRecord: 'Recording a manual shadow outcome and immediately updating the right-side latest row',
     stateDegraded: 'Running in degraded persistence mode, but the outcome flow remains reproducible',
     summary: 'Calibration Summary',
     records: 'Latest Outcome Row',
@@ -61,11 +61,11 @@ const COPY = {
     trades: 'Trades',
     approvedBlocked: 'Approved / Blocked',
     noSummary: 'No outcome summary yet',
-    noSummaryHint: 'Refresh Outcomes pulls the latest calibration snapshot. Record Demo Outcome appends a new shadow row immediately.',
+    noSummaryHint: 'Refresh Outcomes pulls the latest calibration snapshot. Record Outcome appends a new shadow row immediately.',
     noRecordTitle: 'No shadow outcomes yet',
     noRecordText: 'An outcome row stores symbol, decision ID, realized return, benchmark return, excess return, direction hit, and notes.',
     sourceLabel: 'Where data comes from',
-    sourceText: 'Decision IDs come from the workbench; realized and benchmark returns come from manual demo entry or later market-data jobs.',
+    sourceText: 'Decision IDs come from the workbench; realized and benchmark returns come from manual entry or later market-data jobs.',
     valueLabel: 'Why it helps shadow trading',
     valueText: 'This closes the loop between decision quality, regret analysis, and future label curation without sending any broker order.',
     latestRecordTitle: 'Latest recorded row',
@@ -93,7 +93,7 @@ const COPY = {
     realized: '真实收益',
     benchmark: '基准收益',
     refresh: '刷新结果',
-    record: '记录演示结果',
+    record: '记录结果',
     refreshBusy: '正在刷新...',
     recordBusy: '正在记录...',
     loading: '正在加载结果追踪...',
@@ -103,7 +103,7 @@ const COPY = {
     stateHint: '当前动作',
     stateReady: '已准备好评估下一条影子结果',
     stateRefresh: '正在刷新校准快照与最新日终复盘',
-    stateRecord: '正在记录一条演示 outcome，并立即更新右侧最新记录',
+    stateRecord: '正在记录一条手动影子结果，并立即更新右侧最新记录',
     stateDegraded: '当前处于降级持久化模式，但结果链路仍然可复现',
     summary: '校准摘要',
     records: '最新结果行',
@@ -126,7 +126,7 @@ const COPY = {
     trades: '交易数',
     approvedBlocked: '批准 / 阻断',
     noSummary: '暂无结果摘要',
-    noSummaryHint: '“刷新结果”会拉取最新校准快照；“记录演示结果”会立即追加新的影子结果行。',
+    noSummaryHint: '“刷新结果”会拉取最新校准快照；“记录结果”会立即追加新的影子结果行。',
     noRecordTitle: '暂无影子结果记录',
     noRecordText: '一条结果记录会保存股票、决策 ID、真实收益、基准收益、超额收益、方向命中与备注。',
     sourceLabel: '数据从哪里来',
@@ -316,7 +316,7 @@ async function recordOutcome() {
   setLoading(_container?.querySelector('#outcome-records'), c('recordBusy'));
   try {
     const symbol = symbolValue();
-    const decisionId = String(_container?.querySelector('#outcome-decision')?.value || '').trim() || 'demo-decision';
+    const decisionId = String(_container?.querySelector('#outcome-decision')?.value || '').trim() || `manual-${symbol.toLowerCase()}-${Date.now()}`;
     const realizedReturn = Number(_container?.querySelector('#outcome-realized')?.value || 0);
     const benchmarkReturn = Number(_container?.querySelector('#outcome-benchmark')?.value || 0);
     const payload = await api.outcomes.evaluate({
@@ -326,8 +326,8 @@ async function recordOutcome() {
       benchmark_return: benchmarkReturn,
       drawdown: -0.02,
       notes: getLang() === 'zh'
-        ? '界面演示用影子结果，不会触发任何券商执行。'
-        : 'UI demo shadow outcome; no broker execution is triggered.',
+        ? '界面手动录入的影子结果，不会触发任何券商执行。'
+        : 'Manual shadow outcome entry; no broker execution is triggered.',
     });
     if (!isMounted()) return;
     _summary = payload.summary || payload;
@@ -338,7 +338,7 @@ async function recordOutcome() {
       benchmark_return: benchmarkReturn,
       excess_return: realizedReturn - benchmarkReturn,
       direction_hit: realizedReturn >= benchmarkReturn,
-      notes: getLang() === 'zh' ? '最新演示写入的影子结果。' : 'Latest demo shadow outcome.',
+      notes: getLang() === 'zh' ? '最新手动写入的影子结果。' : 'Latest manually recorded shadow outcome.',
     };
     _latestReview = (await api.trading.latestReview().catch(() => ({ review: null })))?.review || null;
     setState(_summary?.degraded ? 'warning' : 'success', _summary?.degraded ? c('stateDegraded') : c('recorded'));

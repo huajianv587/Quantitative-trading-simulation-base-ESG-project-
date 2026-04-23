@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 CLICK_TARGETS = {
@@ -129,9 +130,18 @@ def test_router_declares_current_workbench_routes():
         assert route in router_source
 
 
+def test_router_declares_all_31_routes():
+    router_source = Path("frontend/js/router.js").read_text(encoding="utf-8")
+    routes = re.findall(r"'((?:/)[^']*)':\s*\{", router_source)
+    assert len(routes) == 31
+
+
 def test_trading_api_client_declares_public_runtime_methods():
     api_source = Path("frontend/js/qtapi.js").read_text(encoding="utf-8")
     for route in [
+        "/session",
+        "/history/",
+        "/research/context",
         "/intelligence/scan",
         "/intelligence/evidence",
         "/factors/discover",
@@ -168,6 +178,62 @@ def test_trading_api_client_declares_public_runtime_methods():
         "/api/v1/trading/fusion/status",
     ]:
         assert route in api_source
+
+
+def test_real_only_pages_no_longer_reference_mock_or_demo_fallbacks():
+    expectations = {
+        "frontend/js/pages/chat.js": [
+            "mockAgentResponse",
+            "showing mock response",
+        ],
+        "frontend/js/pages/research.js": [
+            "mockPrice",
+            "mockChg",
+            "mockNews",
+            "genCandles",
+        ],
+        "frontend/js/pages/dashboard.js": [
+            "mockOverview",
+        ],
+        "frontend/js/pages/score-dashboard.js": [
+            "mockEsgResult",
+            "showing mock data",
+        ],
+        "frontend/js/pages/validation.js": [
+            "mockValidationResult",
+        ],
+        "frontend/js/pages/login.js": [
+            "demo_title",
+            "demo_text",
+        ],
+        "frontend/js/pages/data-management.js": [
+            "simulateMockSync",
+            "running mock sync",
+        ],
+        "frontend/js/pages/push-rules.js": [
+            "mock_report",
+        ],
+        "frontend/js/pages/outcome-center.js": [
+            "Record Demo Outcome",
+            "demo shadow outcome",
+            "记录演示结果",
+            "演示 outcome",
+        ],
+        "frontend/js/pages/reports.js": [
+            "mockReport",
+            "showing mock report",
+            "showing mock",
+        ],
+        "frontend/js/pages/rl-lab.js": [
+            "#rl-build-demo",
+            "Generate Demo Dataset",
+            "use_demo_if_missing",
+        ],
+    }
+    for relative_path, forbidden in expectations.items():
+        content = Path(relative_path).read_text(encoding="utf-8")
+        for fragment in forbidden:
+            assert fragment not in content, f"{fragment!r} unexpectedly found in {relative_path}"
 
 
 def test_workbench_layout_css_exposes_dense_product_patterns():
@@ -208,11 +274,17 @@ def test_critical_shell_and_workbench_files_do_not_contain_known_mojibake_fragme
         "frontend/js/pages/autopilot-policy.js",
         "frontend/js/pages/dashboard.js",
         "frontend/js/pages/backtest.js",
+        "frontend/js/pages/rl-lab.js",
     ]
     for relative_path in targets:
         content = Path(relative_path).read_text(encoding="utf-8")
         for fragment in SUSPICIOUS_FRAGMENTS:
             assert fragment not in content, f"{fragment!r} unexpectedly found in {relative_path}"
+
+
+def test_public_schemas_no_longer_accept_mock_report_inputs():
+    content = Path("gateway/api/schemas.py").read_text(encoding="utf-8")
+    assert "mock_report" not in content
 
 
 def test_i18n_declares_clean_chinese_shell_labels():

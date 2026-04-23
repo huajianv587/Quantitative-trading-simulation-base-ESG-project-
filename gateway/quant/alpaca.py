@@ -12,8 +12,10 @@ logger = get_logger(__name__)
 
 class AlpacaPaperClient:
     def __init__(self) -> None:
-        self.key_id = getattr(settings, "ALPACA_API_KEY", "")
-        self.secret_key = getattr(settings, "ALPACA_API_SECRET", "")
+        self.paper_key_id = getattr(settings, "ALPACA_API_KEY", "")
+        self.paper_secret_key = getattr(settings, "ALPACA_API_SECRET", "")
+        self.live_key_id = getattr(settings, "ALPACA_LIVE_API_KEY", "")
+        self.live_secret_key = getattr(settings, "ALPACA_LIVE_API_SECRET", "")
         self.paper_base_url = (
             getattr(settings, "ALPACA_PAPER_BASE_URL", "")
             or "https://paper-api.alpaca.markets"
@@ -25,27 +27,45 @@ class AlpacaPaperClient:
         self.timeout = int(getattr(settings, "ALPACA_API_TIMEOUT", 20) or 20)
         self.runtime_mode = "paper"
 
-    def configured(self) -> bool:
-        return bool(self.key_id and self.secret_key and self.paper_base_url)
+    def _normalize_mode(self, mode: str | None = None) -> str:
+        return "live" if str(mode or self.runtime_mode or "").strip().lower() == "live" else "paper"
+
+    def _credentials_for_mode(self, mode: str | None = None) -> tuple[str, str]:
+        normalized = self._normalize_mode(mode)
+        if normalized == "live":
+            return self.live_key_id, self.live_secret_key
+        return self.paper_key_id, self.paper_secret_key
+
+    def configured(self, mode: str | None = None) -> bool:
+        key_id, secret_key = self._credentials_for_mode(mode)
+        base_url = self._base_url_for_mode(mode)
+        return bool(key_id and secret_key and base_url)
 
     def set_runtime_mode(self, mode: str | None) -> str:
-        normalized = "live" if str(mode or "").strip().lower() == "live" else "paper"
+        normalized = self._normalize_mode(mode)
         self.runtime_mode = normalized
         return self.runtime_mode
 
     def _base_url_for_mode(self, mode: str | None = None) -> str:
-        normalized = "live" if str(mode or self.runtime_mode or "").strip().lower() == "live" else "paper"
+        normalized = self._normalize_mode(mode)
         return self.live_base_url if normalized == "live" else self.paper_base_url
 
     def connection_status(self, mode: str | None = None) -> dict[str, Any]:
-        normalized = "live" if str(mode or self.runtime_mode or "").strip().lower() == "live" else "paper"
+        normalized = self._normalize_mode(mode)
+        paper_configured = self.configured("paper")
+        live_configured = self.configured("live")
         return {
-            "configured": self.configured(),
+            "configured": self.configured(normalized),
             "broker": "alpaca",
             "mode": normalized,
+            "requested_mode": normalized,
+            "effective_mode": normalized if normalized == "paper" or live_configured else "paper",
             "base_url": self._base_url_for_mode(normalized),
             "paper_base_url": self.paper_base_url,
             "live_base_url": self.live_base_url,
+            "paper_configured": paper_configured,
+            "live_configured": live_configured,
+            "live_available": live_configured,
         }
 
     def get_account(self) -> dict[str, Any]:
@@ -95,16 +115,20 @@ class AlpacaPaperClient:
         json: dict[str, Any] | None = None,
         mode: str | None = None,
     ) -> Any:
-        if not self.configured():
-            raise RuntimeError("Alpaca paper trading credentials are not configured")
+        normalized = self._normalize_mode(mode)
+        if not self.configured(normalized):
+            scope = "live" if normalized == "live" else "paper"
+            raise RuntimeError(f"Alpaca {scope} trading credentials are not configured")
 
-        url = f"{self._base_url_for_mode(mode)}{path}"
+        key_id, secret_key = self._credentials_for_mode(normalized)
+
+        url = f"{self._base_url_for_mode(normalized)}{path}"
         response = requests.request(
             method=method.upper(),
             url=url,
             headers={
-                "APCA-API-KEY-ID": self.key_id,
-                "APCA-API-SECRET-KEY": self.secret_key,
+                "APCA-API-KEY-ID": key_id,
+                "APCA-API-SECRET-KEY": secret_key,
                 "accept": "application/json",
                 "content-type": "application/json",
             },

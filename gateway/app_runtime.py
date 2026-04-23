@@ -302,6 +302,7 @@ class RuntimeContext:
             "total_scans": stats.get("total_scans", stats.get("scan_count", 0)),
             "success_rate": stats.get("success_rate", 0),
             "last_sync_time": stats.get("last_sync_time"),
+            "lane_statistics": stats.get("lane_statistics", {}),
             "statistics": stats,
         }
 

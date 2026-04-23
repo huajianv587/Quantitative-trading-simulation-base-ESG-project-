@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -159,3 +161,70 @@ class ModelReleaseRequest(BaseModel):
     action: str = "promote"
     notes: str = ""
     canary_percent: float | None = None
+
+
+class ProviderStatus(BaseModel):
+    available: bool = False
+    provider: str = "unavailable"
+    selected_provider: str = "auto"
+    cache_hit: bool | None = None
+    lookback_limit: int | None = None
+    error: str | None = None
+
+
+class FallbackPreview(BaseModel):
+    symbol: str = ""
+    source: str = "unavailable"
+    source_chain: list[str] = Field(default_factory=list)
+    last_snapshot: dict[str, Any] | None = None
+    reason: list[str] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+
+
+class ActionableWarning(BaseModel):
+    code: str
+    message: str
+    severity: str = "warning"
+    next_actions: list[str] = Field(default_factory=list)
+
+
+class ResearchContextQuote(BaseModel):
+    symbol: str
+    company_name: str = ""
+    price: float | None = None
+    change_pct: float | None = None
+    source: str = "unavailable"
+    provider_status: ProviderStatus = Field(default_factory=ProviderStatus)
+    warning: str | None = None
+
+
+class ResearchContextFeedItem(BaseModel):
+    item_id: str
+    item_type: str
+    symbol: str = ""
+    title: str
+    summary: str = ""
+    source: str = ""
+    provider: str = ""
+    published_at: str | None = None
+    freshness_score: float | None = None
+    confidence: float | None = None
+    quality_score: float | None = None
+    sentiment: str = "neutral"
+    url: str | None = None
+
+
+class ResearchContextResponse(BaseModel):
+    generated_at: str
+    symbol: str
+    provider: str = "auto"
+    quote_strip: list[ResearchContextQuote] = Field(default_factory=list)
+    momentum_leaders: list[dict[str, Any]] = Field(default_factory=list)
+    feed: list[ResearchContextFeedItem] = Field(default_factory=list)
+    provider_status: ProviderStatus = Field(default_factory=ProviderStatus)
+    source_chain: list[str] = Field(default_factory=list)
+    freshness: dict[str, Any] = Field(default_factory=dict)
+    degraded: bool = False
+    fallback_preview: FallbackPreview = Field(default_factory=FallbackPreview)
+    warning: ActionableWarning | None = None
+    next_actions: list[str] = Field(default_factory=list)

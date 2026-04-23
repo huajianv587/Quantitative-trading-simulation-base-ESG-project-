@@ -42,7 +42,7 @@ def get_scan_status():
     status = orchestrator.get_scan_status()
 
     if status:
-        return {"status": "completed", "data": status}
+        return {"status": status.get("status", "completed"), "data": status}
     return {"status": "no_scan_found"}
 
 

@@ -13,6 +13,67 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+def _latest_report_row_for_push_test() -> dict[str, Any] | None:
+    if runtime.get_client is not None:
+        try:
+            response = (
+                runtime.get_client()
+                .table("esg_reports")
+                .select("id, report_type, title, period_start, period_end, data, generated_at")
+                .order("generated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if response.data:
+                return response.data[0]
+        except Exception as exc:
+            logger.warning(f"Failed to fetch latest report for push-rule test: {exc}")
+
+    memory_rows: list[dict[str, Any]] = []
+    for job_id, job in runtime.report_jobs.items():
+        payload = job.get("report") or {}
+        if not payload:
+            continue
+        memory_rows.append(
+            {
+                "id": payload.get("report_id") or payload.get("id") or job_id,
+                "report_type": payload.get("report_type"),
+                "title": payload.get("title"),
+                "period_start": payload.get("period_start"),
+                "period_end": payload.get("period_end"),
+                "data": payload,
+                "generated_at": payload.get("generated_at"),
+            }
+        )
+    if not memory_rows:
+        return None
+    memory_rows.sort(key=lambda row: row.get("generated_at") or "", reverse=True)
+    return memory_rows[0]
+
+
+def _resolve_report_row_for_push_test(report_id: str | None) -> dict[str, Any] | None:
+    if report_id:
+        return runtime.fetch_report_row(report_id)
+    return _latest_report_row_for_push_test()
+
+
+def _build_push_rule_context(report_payload: dict[str, Any]) -> dict[str, Any]:
+    report_statistics = report_payload.get("report_statistics") or {}
+    company_analyses = report_payload.get("company_analyses") or []
+    risk_alerts = report_payload.get("risk_alerts") or []
+    return {
+        "report_type": report_payload.get("report_type"),
+        "overall_score": report_statistics.get(
+            "portfolio_average_score",
+            report_statistics.get("average_score", report_payload.get("overall_score", 0)),
+        ),
+        "company_count": len(company_analyses),
+        "risk_alert_count": len(risk_alerts),
+        "high_performer_count": len([item for item in company_analyses if float(item.get("esg_score") or 0) >= 80]),
+        "low_performer_count": len([item for item in company_analyses if float(item.get("esg_score") or 0) < 40]),
+    }
+
+
 @router.post("/admin/data-sources/sync")
 def sync_data_sources(req: DataSyncRequest, background_tasks: BackgroundTasks):
     runtime.ensure_optional_services()
@@ -164,21 +225,59 @@ def delete_push_rule(rule_id: str):
 
 @router.post("/admin/push-rules/{rule_id}/test")
 def test_push_rule(rule_id: str, req: PushRuleTestRequest):
-    channels = ["email", "in_app"]
-    matched = False
+    runtime.ensure_optional_services(start_scheduler=True)
+    if not runtime.report_scheduler:
+        raise HTTPException(status_code=503, detail="Report Scheduler not ready")
 
-    if runtime.report_scheduler and rule_id in runtime.report_scheduler.push_rules_cache:
-        rule = runtime.report_scheduler.push_rules_cache[rule_id]
-        channels = rule.push_channels
-        try:
-            matched = bool(eval(rule.condition, {"__builtins__": {}}, req.mock_report))
-        except Exception as exc:
-            logger.warning(f"Push rule test failed for {rule_id}: {exc}")
+    rule = runtime.report_scheduler.push_rules_cache.get(rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Push rule not found")
 
-    return {
+    report_row = _resolve_report_row_for_push_test(req.report_id)
+    channels = list(rule.push_channels or ["email", "in_app"])
+    base_payload = {
         "test_id": f"test_{datetime.now().timestamp()}",
         "rule_id": rule_id,
+        "results": {
+            "test_user_id": req.test_user_id,
+            "matched": False,
+            "channels_tested": channels,
+        },
+    }
+
+    if report_row is None:
+        return {
+            **base_payload,
+            "status": "blocked",
+            "report_id": None,
+            "report_type": None,
+            "generated_at": None,
+            "block_reason": "real_report_required",
+            "next_actions": ["Generate a real report", "Refresh reports", "Retry push-rule test"],
+        }
+
+    report_payload = runtime.flatten_report_row(report_row)
+    try:
+        matched = bool(eval(rule.condition, {"__builtins__": {}}, _build_push_rule_context(report_payload)))
+    except Exception as exc:
+        logger.warning(f"Push rule test failed for {rule_id}: {exc}")
+        return {
+            **base_payload,
+            "status": "error",
+            "report_id": report_payload.get("report_id"),
+            "report_type": report_payload.get("report_type"),
+            "generated_at": report_payload.get("generated_at"),
+            "block_reason": "rule_evaluation_failed",
+            "next_actions": ["Review rule condition", "Retry with a valid report"],
+            "warning": str(exc),
+        }
+
+    return {
+        **base_payload,
         "status": "success",
+        "report_id": report_payload.get("report_id"),
+        "report_type": report_payload.get("report_type"),
+        "generated_at": report_payload.get("generated_at"),
         "results": {
             "test_user_id": req.test_user_id,
             "matched": matched,

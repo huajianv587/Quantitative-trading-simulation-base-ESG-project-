@@ -120,6 +120,60 @@ class TradingAgentService:
         normalized["metadata"] = metadata
         return normalized
 
+    def _mode_runtime_state(self, requested_mode: Any) -> dict[str, Any]:
+        requested = _normalize_execution_mode(requested_mode)
+        paper_connection = dict(self.quant_system.alpaca.connection_status("paper"))
+        live_connection = dict(self.quant_system.alpaca.connection_status("live"))
+        paper_ready = bool(paper_connection.get("paper_configured", paper_connection.get("configured")))
+        live_available = bool(
+            live_connection.get("live_available")
+            or live_connection.get("live_configured")
+        )
+        live_enabled = bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False))
+        live_ready = bool(live_available and live_enabled)
+        effective_mode = "live" if requested == "live" and live_ready else "paper"
+        block_reason = None
+        next_actions: list[str] = []
+        if requested == "live" and not live_ready:
+            if not live_available:
+                block_reason = "live_credentials_missing"
+                next_actions = ["add_live_alpaca_keys", "keep_using_paper_mode"]
+            elif not live_enabled:
+                block_reason = "live_trading_disabled"
+                next_actions = ["enable_live_trading_after_paper_stabilizes", "keep_using_paper_mode"]
+            else:
+                block_reason = "live_account_unavailable"
+                next_actions = ["verify_live_account_and_permissions", "keep_using_paper_mode"]
+        elif requested == "paper" and not paper_ready:
+            block_reason = "paper_credentials_missing"
+            next_actions = ["configure_paper_credentials"]
+        return {
+            "requested_mode": requested,
+            "effective_mode": effective_mode,
+            "paper_ready": paper_ready,
+            "live_ready": live_ready,
+            "live_available": live_available,
+            "block_reason": block_reason,
+            "next_actions": next_actions,
+            "paper_connection": paper_connection,
+            "live_connection": live_connection,
+        }
+
+    def _with_policy_runtime(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = self._normalize_autopilot_payload(payload)
+        mode_state = self._mode_runtime_state(normalized.get("execution_mode"))
+        enriched = dict(normalized)
+        enriched["requested_mode"] = mode_state["requested_mode"]
+        enriched["effective_mode"] = mode_state["effective_mode"]
+        enriched["paper_ready"] = mode_state["paper_ready"]
+        enriched["live_ready"] = mode_state["live_ready"]
+        enriched["live_available"] = mode_state["live_available"]
+        enriched["block_reason"] = mode_state["block_reason"]
+        enriched["next_actions"] = list(mode_state["next_actions"])
+        warnings = list(dict.fromkeys([*(enriched.get("warnings") or []), *self._autopilot_warnings(enriched)]))
+        enriched["warnings"] = warnings
+        return enriched
+
     def debate_runs(self, *, symbol: str | None = None, limit: int = 20) -> dict[str, Any]:
         rows = self.store.list_debate_runs(limit=limit, symbol=symbol)
         return {
@@ -172,7 +226,7 @@ class TradingAgentService:
         }
 
     def get_autopilot_policy(self) -> dict[str, Any]:
-        return self._normalize_autopilot_payload(self.store.get_autopilot_policy())
+        return self._with_policy_runtime(self.store.get_autopilot_policy())
 
     def save_autopilot_policy(self, payload: dict[str, Any]) -> dict[str, Any]:
         current = self.get_autopilot_policy()
@@ -180,6 +234,8 @@ class TradingAgentService:
         policy = AutopilotPolicy.model_validate(
             {
                 **merged,
+                "requested_mode": _normalize_execution_mode(merged.get("execution_mode")),
+                "effective_mode": _normalize_execution_mode(merged.get("execution_mode")),
                 "policy_id": current.get("policy_id") or "autopilot-default",
                 "generated_at": utc_now(),
                 "warnings": self._autopilot_warnings(merged),
@@ -190,22 +246,38 @@ class TradingAgentService:
                 },
             }
         )
-        return self.store.save_autopilot_policy(policy)
+        saved = self.store.save_autopilot_policy(policy)
+        return self._with_policy_runtime(saved)
 
     def arm_autopilot(self, *, armed: bool) -> dict[str, Any]:
         current = self.get_autopilot_policy()
-        current["armed"] = bool(armed)
+        mode_state = self._mode_runtime_state(current.get("execution_mode"))
+        live_blocked = bool(armed) and mode_state["requested_mode"] == "live" and not mode_state["live_ready"]
+        current["armed"] = bool(armed) and not live_blocked
         current["generated_at"] = utc_now()
         current["warnings"] = self._autopilot_warnings(current)
-        saved = self.store.save_autopilot_policy(AutopilotPolicy.model_validate(self._normalize_autopilot_payload(current)))
+        saved = self.store.save_autopilot_policy(
+            AutopilotPolicy.model_validate(
+                {
+                    **self._normalize_autopilot_payload(current),
+                    "requested_mode": mode_state["requested_mode"],
+                    "effective_mode": mode_state["effective_mode"],
+                    "paper_ready": mode_state["paper_ready"],
+                    "live_ready": mode_state["live_ready"],
+                    "live_available": mode_state["live_available"],
+                    "block_reason": mode_state["block_reason"] if live_blocked else None,
+                    "next_actions": list(mode_state["next_actions"]) if live_blocked else [],
+                }
+            )
+        )
         path = self._build_execution_path_status(
             policy=saved,
-            current_stage="armed" if armed else "disarmed",
+            current_stage="blocked" if live_blocked else ("armed" if armed else "disarmed"),
             judge_passed=False,
             risk_passed=False,
         )
         self.store.save_execution_path_status(path)
-        return saved
+        return self._with_policy_runtime(saved)
 
     def list_strategies(self) -> dict[str, Any]:
         rows = self.store.list_strategies()
@@ -253,7 +325,12 @@ class TradingAgentService:
     def execution_path_status(self) -> dict[str, Any]:
         latest = self.store.latest_execution_path_status()
         if latest:
-            return latest
+            return self._build_execution_path_status(
+                policy=self.get_autopilot_policy(),
+                current_stage=latest.get("current_stage", "idle"),
+                judge_passed=bool(latest.get("judge_passed")),
+                risk_passed=bool(latest.get("risk_passed")),
+            ).model_dump(mode="json")
         seeded = self._build_execution_path_status(
             policy=self.store.get_autopilot_policy(),
             current_stage="idle",
@@ -701,6 +778,44 @@ class TradingAgentService:
         trigger_event: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         policy = self.get_autopilot_policy()
+        mode_state = self._mode_runtime_state(policy.get("execution_mode"))
+        if mode_state["requested_mode"] == "live" and mode_state["block_reason"]:
+            execution_result = ExecutionResult(
+                execution_id=f"trade-{str(symbol or '').upper()}-{uuid.uuid4().hex[:10]}",
+                generated_at=utc_now(),
+                symbol=str(symbol or "").upper(),
+                status="blocked",
+                venue="alpaca_paper",
+                execution_mode="paper",
+                submitted=False,
+                auto_submit=False,
+                requested_action="block",
+                approved_action="block",
+                verdict="halt",
+                warnings=[mode_state["block_reason"]],
+                policy_gate_warnings=[mode_state["block_reason"]],
+                next_action=mode_state["next_actions"][0] if mode_state["next_actions"] else "keep_using_paper_mode",
+                trigger_event=trigger_event or {},
+                metadata={"requested_mode": "live", "effective_mode": mode_state["effective_mode"]},
+            )
+            execution_path = self._build_execution_path_status(
+                policy=policy,
+                current_stage="blocked",
+                judge_passed=False,
+                risk_passed=False,
+            )
+            execution_path_payload = self.store.save_execution_path_status(execution_path)
+            return {
+                "bundle_id": f"bundle-{uuid.uuid4().hex[:12]}",
+                "symbol": str(symbol or "").upper(),
+                "execution": execution_result.model_dump(mode="json"),
+                "execution_intent": None,
+                "execution_result": execution_result.model_dump(mode="json"),
+                "autopilot_policy": policy,
+                "execution_path": execution_path_payload,
+                "policy_gate_warnings": [mode_state["block_reason"]],
+                "next_actions": list(mode_state["next_actions"]),
+            }
         strategy_snapshot = self.list_strategies()
         strategy_rows = strategy_snapshot.get("strategies", [])
         enabled_strategies = [
@@ -1100,6 +1215,7 @@ class TradingAgentService:
     ) -> ExecutionResult:
         execution_id = f"trade-{symbol.upper()}-{uuid.uuid4().hex[:10]}"
         execution_mode = _normalize_execution_mode(policy.get("execution_mode"))
+        mode_state = self._mode_runtime_state(execution_mode)
         payload = ExecutionResult(
             execution_id=execution_id,
             generated_at=utc_now(),
@@ -1120,6 +1236,18 @@ class TradingAgentService:
             trigger_event=trigger_event or {},
             metadata={"intent_id": execution_intent.intent_id},
         )
+        if execution_mode == "live" and mode_state["block_reason"]:
+            payload.status = "blocked"
+            payload.execution_mode = mode_state["effective_mode"]
+            payload.venue = f"alpaca_{mode_state['effective_mode']}"
+            payload.warnings.append(mode_state["block_reason"])
+            payload.policy_gate_warnings.append(mode_state["block_reason"])
+            payload.next_action = mode_state["next_actions"][0] if mode_state["next_actions"] else "keep_using_paper_mode"
+            payload.metadata.update({
+                "requested_mode": mode_state["requested_mode"],
+                "effective_mode": mode_state["effective_mode"],
+            })
+            return payload
         if not auto_submit:
             return payload
         if approval.verdict not in {"approve", "reduce"} or approval.approved_action not in {"long", "short"}:
@@ -1256,6 +1384,7 @@ class TradingAgentService:
 
     def _autopilot_warnings(self, payload: dict[str, Any]) -> list[str]:
         warnings: list[str] = []
+        mode_state = self._mode_runtime_state(payload.get("execution_mode"))
         if not self._policy_auto_submit_enabled(payload):
             warnings.append("auto_submit_disabled")
         if not payload.get("armed"):
@@ -1266,14 +1395,20 @@ class TradingAgentService:
             warnings.append("daily_budget_not_set")
         if not payload.get("allowed_strategies"):
             warnings.append("no_strategy_allowlist")
+        if mode_state["requested_mode"] == "live":
+            warnings.append("live_mode_selected")
+            if mode_state["block_reason"]:
+                warnings.append(mode_state["block_reason"])
         return warnings
 
     def _autopilot_ready(self, policy: dict[str, Any]) -> bool:
+        mode_state = self._mode_runtime_state(policy.get("execution_mode"))
         return (
             _normalize_execution_permission(policy.get("execution_permission")) == "auto_submit"
             and self._policy_auto_submit_enabled(policy)
             and bool(policy.get("armed"))
             and not bool(policy.get("kill_switch"))
+            and not bool(mode_state["block_reason"])
         )
 
     def _build_execution_path_status(
@@ -1284,20 +1419,30 @@ class TradingAgentService:
         judge_passed: bool,
         risk_passed: bool,
     ) -> ExecutionPathStatus:
+        mode_state = self._mode_runtime_state(policy.get("execution_mode"))
+        submit_ready = bool(risk_passed and self._autopilot_ready(policy))
+        monitor_ready = bool(self._autopilot_ready(policy))
         stages = [
             {"stage": "scan", "status": "ready"},
             {"stage": "factors", "status": "ready"},
             {"stage": "debate", "status": "ready"},
             {"stage": "judge", "status": "passed" if judge_passed else "pending"},
             {"stage": "risk", "status": "passed" if risk_passed else "pending"},
-            {"stage": "submit", "status": "ready" if risk_passed and self._autopilot_ready(policy) else "blocked"},
-            {"stage": "monitor", "status": "ready" if self._autopilot_ready(policy) else "standby"},
+            {"stage": "submit", "status": "ready" if submit_ready else "blocked"},
+            {"stage": "monitor", "status": "ready" if monitor_ready else "standby"},
             {"stage": "review", "status": "ready"},
         ]
         budget = float(policy.get("daily_budget_cap") or 0.0)
         return ExecutionPathStatus(
             generated_at=utc_now(),
-            mode=_normalize_execution_mode(policy.get("execution_mode")),
+            mode=mode_state["effective_mode"],
+            requested_mode=mode_state["requested_mode"],
+            effective_mode=mode_state["effective_mode"],
+            paper_ready=mode_state["paper_ready"],
+            live_ready=mode_state["live_ready"],
+            live_available=mode_state["live_available"],
+            block_reason=mode_state["block_reason"],
+            next_actions=list(mode_state["next_actions"]),
             armed=bool(policy.get("armed")),
             daily_budget_cap=budget,
             budget_remaining=budget,

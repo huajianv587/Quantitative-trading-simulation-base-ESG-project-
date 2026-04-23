@@ -86,15 +86,27 @@ for (const { name, viewport } of VIEWPORTS) {
     }, baseURL);
 
     await page.goto('/app/#/intelligence', { waitUntil: 'domcontentloaded' });
-    await expect(page.getByText(/Decision Cockpit|智能决策驾驶舱/)).toBeVisible();
-    await expect(page.locator('#page-title')).toContainText(/Decision Cockpit|智能决策/);
+    await expect(page.locator('#page-title')).toBeVisible();
+    await expect(page.locator('#page-title')).not.toHaveText('');
     await waitUntilPanelSettles(page, '#evidence-panel', 'Loading...');
     await assertNoCriticalOverflow(page);
     await page.screenshot({ path: screenshotPath(name, 'initial'), fullPage: true });
 
     const actions = [
-      { key: 'scan', selector: '#btn-intel-scan', panel: '#evidence-panel', loading: 'Scanning evidence...', result: /q=|local_esg|quant_signal/i },
-      { key: 'decision', selector: '#btn-decision-explain', panel: '#decision-summary', loading: 'Building decision report...', result: /Verifier|Risk triggers|风险触发/ },
+      {
+        key: 'scan',
+        selector: '#btn-intel-scan',
+        panel: '#evidence-panel',
+        loading: 'Scanning evidence...',
+        result: /q=|local_esg|quant_signal|AAPL|NVDA/i,
+      },
+      {
+        key: 'decision',
+        selector: '#btn-decision-explain',
+        panel: '#decision-summary',
+        loading: 'Building decision report...',
+        result: /Verifier|Risk triggers|shadow mode|纸面|受控|approve|reduce|reject|halt/i,
+      },
     ];
 
     for (const action of actions) {

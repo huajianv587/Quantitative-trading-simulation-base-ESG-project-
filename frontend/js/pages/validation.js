@@ -129,42 +129,26 @@ async function runValidation(container) {
   const windows   = Number(container.querySelector('#v-windows').value) || 5;
   const capital   = Number(container.querySelector('#v-capital').value) || 1000000;
 
-  try {
-    const res = await api.validation.run({ strategy_name: strategy, universe, in_sample_days: isSample, out_of_sample_days: oosSample, walk_forward_windows: windows, capital_base: capital });
-    showValidationResults(container, res);
-    toast.success('Validation complete', `Verdict: ${res.recommendation || 'See results'}`);
-  } catch (e) {
-    showValidationResults(container, mockValidationResult(strategy));
-    toast.error('Validation API error', e.message + ' — showing mock results');
-  } finally {
-    btn.disabled = false; btn.textContent = '▶ Run Validation';
+    try {
+      const res = await api.validation.run({ strategy_name: strategy, universe, in_sample_days: isSample, out_of_sample_days: oosSample, walk_forward_windows: windows, capital_base: capital });
+      showValidationResults(container, res);
+      toast.success('Validation complete', `Verdict: ${res.recommendation || 'See results'}`);
+    } catch (e) {
+      showValidationError(container, strategy, e.message || 'Validation failed');
+      toast.error('Validation API error', e.message || 'Validation failed');
+    } finally {
+      btn.disabled = false; btn.textContent = '▶ Run Validation';
+    }
   }
-}
 
-function mockValidationResult(strategy) {
-  return {
-    strategy_name: strategy,
-    recommendation: 'GO',
-    summary: 'Strategy demonstrates robustness across walk-forward windows. OOS Sharpe remains above 1.0.',
-    out_of_sample_sharpe: 1.24,
-    in_sample_sharpe: 1.87,
-    overfit_score: 0.18,
-    fill_probability: 0.91,
-    cost_drag_bps: 4.2,
-    windows: [
-      { window: 1, in_sample_sharpe: 1.95, out_of_sample_sharpe: 1.31 },
-      { window: 2, in_sample_sharpe: 1.82, out_of_sample_sharpe: 1.18 },
-      { window: 3, in_sample_sharpe: 1.91, out_of_sample_sharpe: 1.28 },
-      { window: 4, in_sample_sharpe: 1.75, out_of_sample_sharpe: 1.09 },
-      { window: 5, in_sample_sharpe: 1.88, out_of_sample_sharpe: 1.34 },
-    ],
-    regime_performance: [
-      { regime: 'Bull Market', periods: 6, return: '24.2%', sharpe: '1.82', max_dd: '-8.1%' },
-      { regime: 'Bear Market', periods: 2, return: '-3.4%', sharpe: '-0.41', max_dd: '-14.2%' },
-      { regime: 'Sideways', periods: 4, return: '8.1%', sharpe: '0.92', max_dd: '-6.3%' },
-      { regime: 'High Vol', periods: 3, return: '12.4%', sharpe: '0.78', max_dd: '-11.8%' },
-    ],
-  };
+function showValidationError(container, strategy, detail) {
+  _lastValidation = null;
+  container.querySelector('#val-results').innerHTML = `
+    <div class="empty-state">
+      <div class="empty-state__icon">⚠</div>
+      <div class="empty-state__title">Validation failed for ${strategy || 'strategy'}</div>
+      <div class="empty-state__text">${detail || 'The backend validation run did not complete successfully.'}</div>
+    </div>`;
 }
 
 function showValidationResults(container, res) {

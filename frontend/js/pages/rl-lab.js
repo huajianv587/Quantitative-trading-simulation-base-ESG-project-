@@ -11,12 +11,16 @@ let _langCleanup = null;
 const RL_COPY = {
   en: {
     title: 'RL Agent Lab',
-    subtitle: 'Recipe datasets / quick search / full train / backtest artifacts / AutoDL handoff',
+    subtitle: 'Real dataset build / quick search / full train / backtest artifacts / execution handoff',
     openExecution: 'Open Execution',
     refresh: 'Refresh Lab',
     badge: 'SCI Experiment Track',
     heroTitle: 'Turn recipe layers into a repeatable RL training loop.',
-    heroText: 'Build datasets from the live market stack, search local best hyper-parameters, launch a full run, archive metrics, and hand the validated policy back into the execution layer.',
+    heroText: 'Build real datasets from stored market data, search local best hyper-parameters, launch a full run, archive metrics, and hand the validated policy back into the execution layer.',
+    datasetBuilderTitle: 'Real Dataset Builder',
+    datasetBuilderSub: 'Build recipe and market datasets from stored market data only.',
+    trainBacktestTitle: 'Training / Backtest Pipeline',
+    trainBacktestSub: 'Train and validate only against real datasets and archived checkpoints.',
     trackedRuns: 'Tracked Runs',
     trackedDetail: 'SQLite + Supabase mirrored metadata',
     recipeCatalog: 'Recipe Catalog',
@@ -26,26 +30,30 @@ const RL_COPY = {
     metrics: 'Metrics Files',
     metricsDetail: 'Per-run metrics.json archived',
     latestDataset: 'Latest Dataset',
-    latestDatasetReady: 'Latest recipe/market dataset located',
-    latestDatasetPending: 'No ready dataset found yet',
+    latestDatasetReady: 'Latest real recipe/market dataset located',
+    latestDatasetPending: 'No ready real dataset found yet',
     latestCheckpoint: 'Latest Checkpoint',
     latestCheckpointReady: 'Checkpoint ready for reload',
     latestCheckpointPending: 'Training artifact not synced yet',
     latestReport: 'Latest Report',
     latestReportReady: 'Backtest/report artifact available',
     latestReportPending: 'Report artifact pending',
-    paperExecution: 'Paper Execution',
+    paperExecution: 'Execution Bridge',
     paperExecutionDetail: 'Validated models hand off into the main execution stack',
     awaiting: 'Awaiting remote artifact',
   },
   zh: {
     title: 'RL 智能体实验室',
-    subtitle: '配方数据集 / 快速搜索 / 正式训练 / 回测产物 / AutoDL 交接',
+    subtitle: '真实数据集构建 / 快速搜索 / 正式训练 / 回测产物 / 执行层交接',
     openExecution: '打开执行层',
     refresh: '刷新实验室',
     badge: 'SCI 实验轨道',
     heroTitle: '把配方层变成可复现的 RL 训练闭环。',
-    heroText: '从市场栈构建数据集，搜索本地最优超参数，启动完整训练，归档指标，并把验证后的策略交回执行层。',
+    heroText: '从已落库的市场数据构建真实数据集，搜索本地最优超参数，启动完整训练，归档指标，并把验证后的策略交回执行层。',
+    datasetBuilderTitle: '真实数据集构建',
+    datasetBuilderSub: '只从已落库的市场数据构建 recipe / market dataset。',
+    trainBacktestTitle: '训练 / 回测流水线',
+    trainBacktestSub: '训练和回测只接受真实数据集与已归档 checkpoint。',
     trackedRuns: '跟踪运行',
     trackedDetail: 'SQLite + Supabase 镜像元数据',
     recipeCatalog: '配方目录',
@@ -55,16 +63,16 @@ const RL_COPY = {
     metrics: '指标文件',
     metricsDetail: '逐运行归档 metrics.json',
     latestDataset: '最新数据集',
-    latestDatasetReady: '已定位最新配方/市场数据集',
-    latestDatasetPending: '暂未找到可用数据集',
+    latestDatasetReady: '已定位最新真实配方/市场数据集',
+    latestDatasetPending: '暂未找到可用真实数据集',
     latestCheckpoint: '最新检查点',
     latestCheckpointReady: '检查点可重新加载',
     latestCheckpointPending: '训练产物尚未同步',
     latestReport: '最新报告',
     latestReportReady: '回测/报告产物可用',
     latestReportPending: '报告产物待生成',
-    paperExecution: '论文执行入口',
-    paperExecutionDetail: '验证模型交接到主执行栈',
+    paperExecution: '执行层入口',
+    paperExecutionDetail: '验证后的模型将交接到主执行栈',
     awaiting: '等待远端产物',
   },
 };
@@ -194,7 +202,10 @@ function buildShell() {
     <div class="grid-2 rl-lab-main-grid">
       <section class="card">
         <div class="card-header">
-          <span class="card-title">Dataset Builder</span>
+          <div>
+            <span class="card-title">${c('datasetBuilderTitle')}</span>
+            <div class="run-panel__sub">${c('datasetBuilderSub')}</div>
+          </div>
         </div>
         <div class="card-body rl-lab-form">
           <div class="form-row">
@@ -244,7 +255,6 @@ function buildShell() {
           </div>
 
           <div class="rl-lab-actions">
-            <button class="btn btn-ghost" id="rl-build-demo">Generate Demo Dataset</button>
             <button class="btn btn-ghost" id="rl-build-market">Build Market Dataset</button>
             <button class="btn btn-ghost" id="rl-build-recipe">Build Recipe Dataset</button>
             <button class="btn btn-primary" id="rl-search-recipe">Search Best Params</button>
@@ -256,7 +266,10 @@ function buildShell() {
 
       <section class="card">
         <div class="card-header">
-          <span class="card-title">Training + Backtest</span>
+          <div>
+            <span class="card-title">${c('trainBacktestTitle')}</span>
+            <div class="run-panel__sub">${c('trainBacktestSub')}</div>
+          </div>
         </div>
         <div class="card-body rl-lab-form">
           <div class="form-group">
@@ -411,7 +424,6 @@ function bindEvents() {
     recordUiAuditEvent('rl_open_execution', '#rl-open-execution', { route: '/rl-lab' }, { route: '/execution' });
     await router.navigate('/execution');
   });
-  query('#rl-build-demo')?.addEventListener('click', () => handleBuildDemo());
   query('#rl-build-market')?.addEventListener('click', () => handleBuildMarket());
   query('#rl-build-recipe')?.addEventListener('click', () => handleBuildRecipe());
   query('#rl-search-recipe')?.addEventListener('click', () => handleSearchRecipe());
@@ -730,26 +742,6 @@ function renderRuns(runs) {
   }).join('');
 }
 
-async function handleBuildDemo() {
-  const targetPath = query('#rl-dataset-path')?.value || 'storage/quant/generated/demo/market.csv';
-  const before = { dataset_path: targetPath };
-  try {
-    const payload = await api.quantRL.buildDemoDataset({ target_path: targetPath, seed: 42, length: 1500 });
-    _state.lastDataset = payload;
-    _state.lastPayload = payload;
-    query('#rl-dataset-path').value = payload.dataset_path || targetPath;
-    renderActionOutput('#rl-dataset-output', payload);
-    renderRecipeState();
-    renderLatestPayload();
-    updateAuditState();
-    toast.success('Demo dataset ready', payload.dataset_path || '');
-    recordUiAuditEvent('rl_demo_build', '#rl-build-demo', before, payload);
-    await loadOverview(false);
-  } catch (error) {
-    toast.error('Demo dataset failed', error.message || 'Unknown error');
-  }
-}
-
 async function handleBuildMarket() {
   const payload = {
     symbols: readSymbols(query('#rl-symbols')?.value),
@@ -866,7 +858,6 @@ async function handleTrain() {
     action_type: query('#rl-action-type')?.value || 'continuous',
     episodes: Number(query('#rl-episodes')?.value || 30),
     total_steps: Number(query('#rl-total-steps')?.value || 100),
-    use_demo_if_missing: false,
     experiment_group: query('#rl-group')?.value || null,
     seed: parseMaybeNumber(query('#rl-seed')?.value),
     notes: query('#rl-notes')?.value || null,

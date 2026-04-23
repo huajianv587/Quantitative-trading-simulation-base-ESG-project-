@@ -150,6 +150,41 @@ async function mockWorkbenchApiRoutes(page) {
       { title: 'Risk-off replay with high quality tech', event_type: 'regime_stress', symbol: 'AAPL', reason: 'Similar volatility and factor profile.', quality_score: 0.78 },
     ],
   };
+  const researchContext = {
+    generated_at: new Date().toISOString(),
+    symbol: 'AAPL',
+    provider: 'auto',
+    quote_strip: [
+      { symbol: 'AAPL', company_name: 'Apple Inc.', last_price: 189.4, change_pct: 0.012, source: 'alpaca' },
+      { symbol: 'MSFT', company_name: 'Microsoft Corp.', last_price: 421.2, change_pct: 0.016, source: 'alpaca' },
+      { symbol: 'NEE', company_name: 'NextEra Energy', last_price: 69.8, change_pct: -0.004, source: 'yfinance' },
+    ],
+    momentum_leaders: [
+      { symbol: 'AAPL', action: 'long', confidence: 0.74, expected_return: 0.035, thesis: 'Momentum and disclosure quality remain supportive.' },
+      { symbol: 'MSFT', action: 'long', confidence: 0.71, expected_return: 0.028, thesis: 'Quality and governance stability support the rank.' },
+      { symbol: 'NEE', action: 'neutral', confidence: 0.58, expected_return: 0.006, thesis: 'Strong ESG profile is offset by regime pressure.' },
+    ],
+    feed: evidenceItems.map((item, index) => ({
+      item_id: item.item_id || `feed-${index}`,
+      title: item.title,
+      summary: item.summary,
+      item_type: item.item_type,
+      provider: item.provider,
+      quality_score: item.quality_score,
+      published_at: new Date().toISOString(),
+    })),
+    provider_status: {
+      provider: 'alpaca',
+      availability: 'ready',
+      degraded_from: null,
+    },
+    source_chain: ['alpaca', 'yfinance', 'sec_edgar', 'cache', 'local_esg'],
+    freshness: { quote_strip: 'live', feed: 'recent' },
+    degraded: false,
+    fallback_preview: null,
+    warning: null,
+    next_actions: ['Run research', 'Open market radar'],
+  };
   await page.route('**/api/v1/quant/intelligence/evidence**', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -198,6 +233,11 @@ async function mockWorkbenchApiRoutes(page) {
         { symbol: 'NEE', company_name: 'NextEra Energy', action: 'neutral', confidence: 0.58, expected_return: 0.006, overall_score: 64.9, e_score: 81.0, g_score: 62.5, sector: 'Utilities', thesis: 'Strong ESG profile is offset by regime pressure.' },
       ],
     }),
+  }));
+  await page.route('**/api/v1/quant/research/context?*', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(researchContext),
   }));
 }
 

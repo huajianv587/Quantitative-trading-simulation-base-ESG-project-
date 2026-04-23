@@ -28,7 +28,7 @@ const COPY = {
     rating: 'Rating',
     percentile: 'industry percentile',
     exportPending: 'PDF export is not connected yet',
-    apiError: 'API error, showing mock data',
+    apiError: 'API error',
     environment: 'Environment',
     social: 'Social',
     governance: 'Governance',
@@ -117,13 +117,13 @@ export function render(container) {
   bindEvents(container);
   _langCleanup ||= onLangChange(() => {
     if (_currentContainer?.isConnected) {
-      const response = _lastScoreResponse || mockEsgResult('Tesla', 'TSLA');
       _currentContainer.innerHTML = buildShell();
       bindEvents(_currentContainer);
-      renderScore(_currentContainer, response);
+      if (_lastScoreResponse) renderScore(_currentContainer, _lastScoreResponse);
+      else renderEmptyState(_currentContainer);
     }
   });
-  renderScore(container, mockEsgResult('Tesla', 'TSLA'));
+  renderEmptyState(container);
 }
 
 export function destroy() {
@@ -273,45 +273,56 @@ async function runScore(container) {
   const peersRaw = container.querySelector('#score-peers').value.trim();
   const peers = peersRaw ? peersRaw.split(/[,\s]+/).filter(Boolean) : null;
 
-  try {
-    const response = await api.agent.esgScore({ company, ticker, peers, include_visualization: false });
-    renderScore(container, response || {});
-    toast.success(c('run'), company);
-  } catch (err) {
-    renderScore(container, mockEsgResult(company, ticker));
-    toast.error(c('apiError'), err.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = c('run');
+    try {
+      const response = await api.agent.esgScore({ company, ticker, peers, include_visualization: false });
+      renderScore(container, response || {});
+      toast.success(c('run'), company);
+    } catch (err) {
+      _lastScoreResponse = null;
+      renderErrorState(container, company, ticker, err.message || c('apiError'));
+      toast.error(c('apiError'), err.message || c('apiError'));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = c('run');
+    }
   }
+
+function renderEmptyState(container) {
+  container.querySelector('#esg-company-name').textContent = '—';
+  container.querySelector('#esg-ticker-val').textContent = '—';
+  container.querySelector('#esg-verdict-tag').innerHTML = `
+    <div class="score-verdict-row">
+      <span class="score-rating-pill">—</span>
+      <span>${getLang() === 'zh' ? '运行 ESG 评分后这里会显示真实结果。' : 'Run ESG scoring to load a live result.'}</span>
+    </div>`;
+  container.querySelector('#quick-compare-list').innerHTML = `<div style="padding:14px 18px;color:var(--text-dim);font-size:11px">${getLang() === 'zh' ? '等待真实评分结果。' : 'Waiting for a real ESG score result.'}</div>`;
+  container.querySelector('#peer-table').innerHTML = `<div style="padding:14px 18px;color:var(--text-dim);font-size:11px">${getLang() === 'zh' ? '没有可比较的同行结果。' : 'No peer comparison is available yet.'}</div>`;
+  container.querySelector('#radar-legend').innerHTML = `<div style="padding:6px 0;color:var(--text-dim);font-size:11px">${getLang() === 'zh' ? '真实评分返回后会显示维度解释。' : 'Dimension notes will appear after a real score is returned.'}</div>`;
+  container.querySelector('#esg-dim-row').innerHTML = dimensions().map((item) => `
+    <div class="esg-dim-pill">
+      <span class="esg-dim-pill__icon" style="background:${item.color}22;color:${item.color}">${item.icon}</span>
+      <div class="esg-dim-pill__meta">
+        <div class="esg-dim-pill__label">${item.label}</div>
+        <div class="esg-dim-pill__value">—</div>
+      </div>
+    </div>`).join('');
+  container.querySelector('#esg-dim-cards').innerHTML = '';
+  window.setTimeout(() => {
+    drawRingGauge(container.querySelector('#esg-ring'), 0);
+    drawRadar(container, 0, 0, 0);
+    drawTrendLine(container.querySelector('#esg-trend-canvas'), []);
+  }, 40);
 }
 
-function mockEsgResult(company, ticker) {
-  return {
-    esg_report: {
-      company,
-      ticker,
-      overall_score: 72.4,
-      e_score: 68.1,
-      s_score: 74.8,
-      g_score: 74.2,
-      percentile: 78,
-      industry: 'Consumer Discretionary / EV',
-      rating: 'AA',
-      sub_scores: {
-        environment: [62, 84, 71, 68, 56],
-        social: [82, 79, 71, 68, 75],
-        governance: [88, 72, 74, 68, 69],
-      },
-      trend: [61.2, 63.4, 65.1, 67.2, 68.8, 70.1, 71.4, 72.0, 71.8, 72.4, 72.1, 72.4],
-      peers: [
-        { name: company, ticker, overall: 72.4, e: 68.1, s: 74.8, g: 74.2 },
-        { name: 'Ford Motor', ticker: 'F', overall: 61.2, e: 58.3, s: 66.1, g: 59.2 },
-        { name: 'GM', ticker: 'GM', overall: 63.8, e: 61.4, s: 67.2, g: 62.8 },
-        { name: 'NIO', ticker: 'NIO', overall: 55.1, e: 62.8, s: 51.4, g: 51.1 },
-      ],
-    },
-  };
+function renderErrorState(container, company, ticker, detail) {
+  renderEmptyState(container);
+  container.querySelector('#esg-company-name').textContent = company || '—';
+  container.querySelector('#esg-ticker-val').textContent = ticker || '—';
+  container.querySelector('#esg-verdict-tag').innerHTML = `
+    <div class="score-verdict-row">
+      <span class="score-rating-pill" style="background:rgba(255,95,95,0.18);color:var(--red)">ERR</span>
+      <span>${detail || c('apiError')}</span>
+    </div>`;
 }
 
 function renderScore(container, response) {

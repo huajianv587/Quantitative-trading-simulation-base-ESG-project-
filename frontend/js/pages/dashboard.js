@@ -372,6 +372,10 @@ function defaultDashboardState(overrides = {}) {
   };
 }
 
+function isMounted() {
+  return Boolean(_container && _container.isConnected);
+}
+
 function chartReady() {
   return Boolean(
     _activeSymbol
@@ -769,113 +773,6 @@ function unifiedWatchlist(data) {
   return Array.from(merged.values()).slice(0, 10);
 }
 
-function mockOverview() {
-  return {
-    platform_name: 'ESG Quant Intelligence System',
-    watchlist_signals: [
-      {
-        symbol: 'NVDA',
-        company_name: 'NVIDIA',
-        sector: 'Technology',
-        thesis: 'Model stack keeps NVIDIA in a risk-on leadership bucket with drawdown control.',
-        action: 'long',
-        confidence: 0.86,
-        decision_confidence: 0.88,
-        expected_return: 0.072,
-        predicted_return_5d: 0.058,
-        predicted_volatility_10d: 0.118,
-        predicted_drawdown_20d: 0.084,
-        overall_score: 87.4,
-        e_score: 82.0,
-        s_score: 79.0,
-        g_score: 84.0,
-        regime_label: 'risk_on',
-        market_data_source: 'yfinance',
-        prediction_mode: 'model',
-        projection_basis_return: 0.072,
-        projection_scenarios: {
-          upper: { label: 'Bull Case', expected_return: 0.134, confidence: 0.88, band_source: 'volatility_plus_atr_proxy' },
-          center: { label: 'Base Case', expected_return: 0.072, confidence: 0.88, band_source: 'signed_expected_return' },
-          lower: { label: 'Risk Floor', expected_return: -0.012, confidence: 0.74, band_source: 'drawdown_plus_atr_proxy' },
-        },
-        factor_scores: [
-          { name: 'momentum', value: 84, contribution: 0.32, description: 'Trend strength remains above peer median.' },
-          { name: 'quality', value: 78, contribution: 0.18, description: 'Quality and balance sheet keep the center line positive.' },
-          { name: 'regime_fit', value: 81, contribution: 0.15, description: 'Risk-on regime support remains active.' },
-        ],
-        catalysts: ['Demand cadence remains intact', 'Risk-on regime still supports high-beta leaders'],
-        data_lineage: ['L0: yfinance daily bars', 'L2: P1 suite', 'L3: P2 decision stack'],
-      },
-      {
-        symbol: 'NEE',
-        company_name: 'NextEra Energy',
-        sector: 'Utilities',
-        thesis: 'Short-term rebound exists but the final decision remains neutral-to-defensive.',
-        action: 'neutral',
-        confidence: 0.74,
-        decision_confidence: 0.76,
-        expected_return: -0.011,
-        predicted_return_5d: 0.031,
-        predicted_volatility_10d: 0.094,
-        predicted_drawdown_20d: 0.088,
-        overall_score: 76.3,
-        e_score: 83.0,
-        s_score: 75.0,
-        g_score: 79.0,
-        regime_label: 'risk_off',
-        market_data_source: 'yfinance',
-        prediction_mode: 'model',
-        projection_basis_return: -0.011,
-        projection_scenarios: {
-          upper: { label: 'Bull Case', expected_return: 0.041, confidence: 0.76, band_source: 'volatility_plus_atr_proxy' },
-          center: { label: 'Base Case', expected_return: -0.011, confidence: 0.76, band_source: 'signed_expected_return' },
-          lower: { label: 'Risk Floor', expected_return: -0.071, confidence: 0.81, band_source: 'drawdown_plus_atr_proxy' },
-        },
-        factor_scores: [
-          { name: 'drawdown', value: 63, contribution: 0.24, description: 'Drawdown risk keeps the center path muted.' },
-          { name: 'regime_fit', value: 58, contribution: 0.18, description: 'Risk-off regime caps upside.' },
-          { name: 'esg_delta', value: 80, contribution: 0.14, description: 'ESG strength supports resilience, not aggression.' },
-        ],
-        catalysts: ['Defensive sector support persists', 'Short-term rebound branch conflicts with final action'],
-        data_lineage: ['L0: yfinance daily bars', 'L2: P1 suite', 'L3: P2 decision stack'],
-      },
-      {
-        symbol: 'MSFT',
-        company_name: 'Microsoft',
-        sector: 'Technology',
-        thesis: 'Synthetic fallback should show real candles only and no projection.',
-        action: 'long',
-        confidence: 0.81,
-        expected_return: 0.035,
-        predicted_return_5d: 0.028,
-        predicted_volatility_10d: 0.09,
-        predicted_drawdown_20d: 0.07,
-        overall_score: 82.2,
-        e_score: 80.0,
-        s_score: 82.0,
-        g_score: 85.0,
-        regime_label: 'neutral',
-        market_data_source: 'synthetic',
-        prediction_mode: 'unavailable',
-        projection_basis_return: null,
-        projection_scenarios: {},
-        factor_scores: [{ name: 'quality', value: 82, contribution: 0.21, description: 'Quality remains strong.' }],
-        catalysts: ['Synthetic candle path should not enable projections'],
-        data_lineage: ['L0: synthetic fallback factor proxies'],
-      },
-    ],
-    top_signals: [],
-    portfolio_preview: { capital_base: null, expected_alpha: 0.084, positions: [] },
-    latest_backtest: { metrics: { sharpe: 1.84, max_drawdown: -0.092, annualized_return: 0.214, hit_rate: 0.581 } },
-    p1_signal_snapshot: { regime_counts: { risk_on: 1, neutral: 1, risk_off: 1 } },
-    universe: { size: 3, benchmark: 'SPY' },
-    sector_heatmap: [
-      { name: 'Technology', value: 182, score: 84.8, change: 0.053, symbols: ['NVDA', 'MSFT'], market_data_sources: ['yfinance', 'synthetic'] },
-      { name: 'Utilities', value: 74, score: 76.3, change: -0.011, symbols: ['NEE'], market_data_sources: ['yfinance'] },
-    ],
-  };
-}
-
 function mergeActiveSignal(nextSignal) {
   if (!nextSignal || !nextSignal.symbol) return;
   const normalized = normalizedWatchlist({ watchlist_signals: [nextSignal] })[0];
@@ -958,7 +855,7 @@ function formatCurrencyValue(value) {
 }
 
 function renderHealthBanner() {
-  const banner = _container.querySelector('#dashboard-health-banner');
+  const banner = _container?.querySelector('#dashboard-health-banner');
   if (!banner) return;
   const state = _dashboardState || defaultDashboardState({ phase: _chartLoading ? 'loading' : 'degraded' });
   const fallback = state.fallback_preview || {};
@@ -1038,7 +935,7 @@ function renderChartFallbackCard() {
 }
 
 function populateKPIs() {
-  const row = _container.querySelector('#kpi-row');
+  const row = _container?.querySelector('#kpi-row');
   if (!row) return;
   if (_overviewError) {
     row.innerHTML = [
@@ -1093,7 +990,7 @@ function populateKPIs() {
 }
 
 function populateSignalTable() {
-  const body = _container.querySelector('#signals-body');
+  const body = _container?.querySelector('#signals-body');
   if (!body) return;
   if (_overviewError) {
     body.innerHTML = `
@@ -1327,7 +1224,7 @@ function updateIndicators(candles) {
 }
 
 function renderChips() {
-  const chips = _container.querySelector('#symbol-chips');
+  const chips = _container?.querySelector('#symbol-chips');
   if (!chips) return;
   if (!_watchlist.length) {
     chips.innerHTML = `<div class="dashboard-empty-chip-row">${copy('noSignalsText')}</div>`;
@@ -1344,6 +1241,7 @@ function renderChips() {
 }
 
 function renderPerformancePanel() {
+  if (!isMounted()) return;
   const metrics = _overview?.latest_backtest?.metrics || {};
   drawSparkline(_container.querySelector('#equity-sparkline'), metrics);
   const grid = _container.querySelector('#perf-metrics-grid');
@@ -2017,6 +1915,7 @@ async function loadOverview() {
 
   const overviewPromise = api.platform.overview();
   const dashboardStateResult = await Promise.allSettled([api.trading.dashboardState(_selectedProvider)]).then((results) => results[0]);
+  if (!isMounted()) return;
 
   if (dashboardStateResult.status === 'fulfilled') {
     _dashboardState = defaultDashboardState(dashboardStateResult.value || {});
@@ -2037,6 +1936,7 @@ async function loadOverview() {
   const chartPrefetch = prefetchSymbol ? fetchCandles(prefetchSymbol, _activeTF).catch(() => null) : Promise.resolve(null);
 
   const overviewResult = await Promise.allSettled([overviewPromise]).then((results) => results[0]);
+  if (!isMounted()) return;
   if (overviewResult.status === 'fulfilled') {
     _overview = overviewResult.value;
     _overviewError = null;
@@ -2086,6 +1986,7 @@ async function loadOverview() {
   drawHeatmap();
   syncPageState();
   renderHealthBanner();
+  if (!isMounted()) return;
   await Promise.allSettled([
     chartPrefetch,
     loadActiveKline(),

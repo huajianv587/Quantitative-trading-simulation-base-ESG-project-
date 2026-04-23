@@ -187,7 +187,14 @@ async function mockTradingRoutes(page, options = {}) {
     ],
   };
   const policyState = {
-    execution_mode: 'live',
+    execution_mode: 'paper',
+    requested_mode: 'paper',
+    effective_mode: 'paper',
+    paper_ready: true,
+    live_ready: false,
+    live_available: false,
+    block_reason: null,
+    next_actions: [],
     execution_permission: 'auto_submit',
     auto_submit_enabled: true,
     paper_auto_submit_enabled: true,
@@ -208,7 +215,14 @@ async function mockTradingRoutes(page, options = {}) {
   };
   const executionPath = {
     current_stage: 'monitor',
-    mode: 'live',
+    mode: 'paper',
+    requested_mode: 'paper',
+    effective_mode: 'paper',
+    paper_ready: true,
+    live_ready: false,
+    live_available: false,
+    block_reason: null,
+    next_actions: [],
     judge_passed: true,
     lineage: ['scan', 'factors', 'debate', 'judge', 'risk', 'submit', 'monitor', 'review'],
     stages: [
@@ -463,6 +477,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator('#ops-schedule')).toContainText(/websocket|stream/);
       await expect(page.locator('#ops-schedule')).toContainText(/Execution Path|执行链路/);
       await expect(page.locator('#ops-schedule')).toContainText(/Autopilot Preview|Autopilot 预览/);
+      await expect(page.locator('#ops-schedule')).toContainText(/Requested Mode|当前选择模式/);
       await page.locator('#btn-run-premarket').click();
       await page.locator('#btn-trading-cycle').click();
       await expect(page.locator('#ops-alerts')).toContainText(/MSFT|volume_spike|Debate/);
@@ -480,7 +495,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator('#btn-autopilot-save')).toBeVisible();
       await page.locator('#btn-autopilot-refresh').click();
       await page.locator('#btn-autopilot-arm').click();
-      await expect(page.locator('#autopilot-protections')).toContainText(/Execution Mode|执行模式|Auto Submit|自动提交/);
+      await expect(page.locator('#autopilot-protections')).toContainText(/Requested Mode|当前选择模式|Auto Submit|自动提交/);
       await page.mouse.move(8, 8);
       const autopilotPrimaryVisual = await readButtonVisual(page, '#btn-autopilot-save');
       const autopilotSecondaryVisual = await readButtonVisual(page, '#btn-autopilot-refresh');
@@ -525,7 +540,14 @@ test('trading ops keeps cached snapshot visible while a slow refresh completes',
         risk: { approvals: [], latest_approval: null },
         notifier: { telegram_configured: false, mode: 'shadow_notify' },
         autopilot_policy: {
-          execution_mode: 'live',
+          execution_mode: 'paper',
+          requested_mode: 'paper',
+          effective_mode: 'paper',
+          paper_ready: true,
+          live_ready: false,
+          live_available: false,
+          block_reason: null,
+          next_actions: [],
           execution_permission: 'auto_submit',
           auto_submit_enabled: true,
           paper_auto_submit_enabled: true,
@@ -537,7 +559,14 @@ test('trading ops keeps cached snapshot visible while a slow refresh completes',
         },
         execution_path: {
           current_stage: 'monitor',
-          mode: 'live',
+          mode: 'paper',
+          requested_mode: 'paper',
+          effective_mode: 'paper',
+          paper_ready: true,
+          live_ready: false,
+          live_available: false,
+          block_reason: null,
+          next_actions: [],
           judge_passed: true,
           lineage: ['scan', 'factors', 'debate', 'judge', 'risk', 'submit', 'monitor', 'review'],
           stages: [{ stage: 'monitor', status: 'configured' }],

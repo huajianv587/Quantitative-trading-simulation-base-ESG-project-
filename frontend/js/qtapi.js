@@ -79,11 +79,26 @@ export var api = {
   },
 
   agent: {
+    newSession: function(sessionId, userId) {
+      var query = '?session_id=' + encodeURIComponent(sessionId || '');
+      if (userId) query += '&user_id=' + encodeURIComponent(userId);
+      return _post('/session' + query, undefined);
+    },
+    history: function(sessionId, limit) {
+      return _get('/history/' + encodeURIComponent(sessionId) + '?limit=' + encodeURIComponent(limit || 20));
+    },
     analyze: function(payload) { return _post('/agent/analyze', payload); },
     esgScore: function(payload) { return _post('/agent/esg-score', payload); },
   },
 
-  research: { run: function(payload) { return _post(Q + '/research/run', payload); } },
+  research: {
+    context: function(symbol, provider, limit) {
+      var query = '?provider=' + encodeURIComponent(provider || 'auto') + '&limit=' + encodeURIComponent(limit || 6);
+      if (symbol) query += '&symbol=' + encodeURIComponent(symbol);
+      return _get(Q + '/research/context' + query);
+    },
+    run: function(payload) { return _post(Q + '/research/run', payload); },
+  },
   portfolio: { optimize: function(payload) { return _post(Q + '/portfolio/optimize', payload); } },
 
   p1: {
