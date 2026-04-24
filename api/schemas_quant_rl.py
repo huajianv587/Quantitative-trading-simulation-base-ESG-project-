@@ -63,6 +63,12 @@ class QuantRLBacktestRequest(BaseModel):
     notes: str | None = None
 
 
+class QuantRLPromoteRequest(BaseModel):
+    run_id: str
+    strategy_id: str = "rl_timing_overlay"
+    required_data_tier: Literal["l1", "l2"] = "l2"
+
+
 class QuantRLResponse(BaseModel):
     run_id: str
     algorithm: str
@@ -78,3 +84,17 @@ class QuantRLBacktestResponse(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     artifacts: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class QuantRLPromoteResponse(BaseModel):
+    generated_at: str
+    run_id: str
+    strategy_id: str
+    dataset_id: str | None = None
+    protection_status: str = "review"
+    required_data_tier: str = "l2"
+    eligibility_status: str = "review"
+    blocking_reasons: list[str] = Field(default_factory=list)
+    latest_backtest_report: str | None = None
+    market_depth_status: dict[str, Any] = Field(default_factory=dict)
+    promotion_status: str = "research_only"

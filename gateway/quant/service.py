@@ -1,6 +1,8 @@
 from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import hashlib
+from itertools import product
 import math
 import random
 import sys
@@ -19,6 +21,7 @@ from gateway.quant.esg_house_score import compute_house_score
 from gateway.quant.alpha_ranker import AlphaRankerRuntime
 from gateway.quant.alpaca import AlpacaPaperClient
 from gateway.quant.brokers import BrokerRegistry
+from gateway.quant.intelligence_models import SweepRun, TearsheetReport
 from gateway.quant.market_data import MarketDataGateway
 from gateway.quant.models import (
     AlphaValidationReport,
@@ -91,8 +94,18 @@ class QuantSystemService:
         self.default_universe_name = getattr(settings, "QUANT_DEFAULT_UNIVERSE", "ESG_US_LARGE_CAP")
         self.default_broker = getattr(settings, "QUANT_BROKER_DEFAULT", "alpaca")
         self._overview_cache: dict[str, Any] | None = None
+        self._watchlist_snapshot_cache: dict[str, Any] | None = None
+        self._dashboard_watchlist_snapshot_cache: dict[str, dict[str, Any]] = {}
+        self._account_snapshot_cache: dict[str, dict[str, Any]] = {}
+        self._position_symbols_cache: dict[str, dict[str, Any]] = {}
         self._chart_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._dashboard_summary_cache: dict[str, dict[str, Any]] = {}
+        self._dashboard_secondary_cache: dict[str, dict[str, Any]] = {}
+        self._shared_market_bars_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         self._dashboard_cache_ttl_seconds = int(getattr(settings, "QUANT_DASHBOARD_CACHE_TTL_SECONDS", 15) or 15)
+        self._dashboard_market_workers = max(1, int(getattr(settings, "QUANT_DASHBOARD_MARKET_WORKERS", 6) or 6))
+        self._dashboard_live_timeout_seconds = max(1, int(getattr(settings, "QUANT_DASHBOARD_LIVE_TIMEOUT_SECONDS", 4) or 4))
+        self._last_dashboard_symbol = "AAPL"
 
     @staticmethod
     def _cache_is_fresh(entry: dict[str, Any] | None) -> bool:
@@ -107,6 +120,11 @@ class QuantSystemService:
             "payload": payload,
             "expires_at": datetime.now(timezone.utc) + timedelta(seconds=max(ttl, 1)),
         }
+
+    def _cached_payload(self, entry: dict[str, Any] | None) -> Any:
+        if self._cache_is_fresh(entry):
+            return entry["payload"]
+        return None
 
     @staticmethod
     def _normalize_broker_mode(mode: str | None) -> str:
@@ -260,7 +278,96 @@ class QuantSystemService:
                 symbols.append(symbol)
         return sorted(dict.fromkeys(symbols))
 
-    def _build_market_surface(self, watchlist_signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _get_position_symbols(self, mode: str = "paper", *, force_refresh: bool = False) -> list[str]:
+        normalized_mode = self._normalize_broker_mode(mode)
+        cached = self._position_symbols_cache.get(normalized_mode)
+        if not force_refresh:
+            payload = self._cached_payload(cached)
+            if payload is not None:
+                return list(payload)
+
+        payload = self._extract_position_symbols(mode=normalized_mode)
+        self._position_symbols_cache[normalized_mode] = self._cache_wrap(list(payload), ttl_seconds=15)
+        return list(payload)
+
+    def _get_live_account_snapshot(self, mode: str = "paper", *, force_refresh: bool = False) -> dict[str, Any] | None:
+        normalized_mode = self._normalize_broker_mode(mode)
+        cached = self._account_snapshot_cache.get(normalized_mode)
+        if not force_refresh:
+            payload = self._cached_payload(cached)
+            if payload is not None:
+                return payload
+        payload = self._safe_live_account_snapshot(mode=normalized_mode)
+        self._account_snapshot_cache[normalized_mode] = self._cache_wrap(payload, ttl_seconds=15)
+        return payload
+
+    def _prefetch_market_bars(
+        self,
+        symbols: list[str],
+        *,
+        limit: int,
+        provider_order_override: list[str] | None = None,
+        force_refresh: bool = False,
+        allow_stale_cache: bool = True,
+        timeout_override: int | None = None,
+        cache_tag: str = "dashboard",
+    ) -> dict[str, Any]:
+        normalized_symbols = [str(symbol or "").upper().strip() for symbol in symbols if str(symbol or "").strip()]
+        normalized_symbols = list(dict.fromkeys(normalized_symbols))
+        if not normalized_symbols:
+            return {}
+
+        provider_signature = tuple(provider_order_override or self.market_data.provider_order)
+        cache_key = (
+            cache_tag,
+            tuple(normalized_symbols),
+            int(limit),
+            bool(force_refresh),
+            provider_signature,
+            int(timeout_override or 0),
+        )
+        cached = self._cached_payload(self._shared_market_bars_cache.get(cache_key))
+        if cached is not None:
+            return cached
+
+        results: dict[str, Any] = {}
+        max_workers = min(len(normalized_symbols), self._dashboard_market_workers)
+
+        def _load_symbol(symbol: str):
+            return self.market_data.get_daily_bars(
+                symbol,
+                limit=limit,
+                force_refresh=force_refresh,
+                provider_order_override=provider_order_override,
+                allow_stale_cache=allow_stale_cache,
+                timeout_override=timeout_override,
+            )
+
+        if max_workers <= 1:
+            for symbol in normalized_symbols:
+                try:
+                    results[symbol] = _load_symbol(symbol)
+                except Exception as exc:
+                    logger.warning(f"[Dashboard] Failed to prefetch market bars for {symbol}: {exc}")
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {executor.submit(_load_symbol, symbol): symbol for symbol in normalized_symbols}
+                for future in as_completed(future_map):
+                    symbol = future_map[future]
+                    try:
+                        results[symbol] = future.result()
+                    except Exception as exc:
+                        logger.warning(f"[Dashboard] Failed to prefetch market bars for {symbol}: {exc}")
+
+        self._shared_market_bars_cache[cache_key] = self._cache_wrap(results, ttl_seconds=30)
+        return results
+
+    def _build_market_surface(
+        self,
+        watchlist_signals: list[dict[str, Any]],
+        *,
+        bars_map: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         signal_lookup = {str(item.get("symbol") or "").upper(): item for item in watchlist_signals}
         nodes: list[dict[str, Any]] = []
         for item in self._market_surface_catalog():
@@ -271,9 +378,11 @@ class QuantSystemService:
             confidence = float(signal.get("confidence") or 0.0) if signal else 0.45
             house_score = float(signal.get("house_score") or signal.get("overall_score") or 72.0) if signal else 72.0
             try:
-                bars = self.market_data.get_daily_bars(symbol, limit=12)
-                provider = bars.provider or provider or "unavailable"
-                frame = bars.bars
+                bars_result = (bars_map or {}).get(symbol)
+                if bars_result is None:
+                    bars_result = self.market_data.get_daily_bars(symbol, limit=12)
+                provider = bars_result.provider or provider or "unavailable"
+                frame = bars_result.bars
                 if len(frame.index) >= 2:
                     closes = frame["close"].astype(float).tolist()
                     prev_close = closes[-2]
@@ -430,7 +539,21 @@ class QuantSystemService:
         return house
 
     def _enrich_signal_house_score(self, signal: ResearchSignal) -> ResearchSignal:
-        return signal.model_copy(update=self._build_house_score_payload(signal))
+        updates = self._build_house_score_payload(signal)
+        updates.update(self._build_signal_research_contract(signal))
+        return signal.model_copy(update=updates)
+
+    def _build_signal_research_contract(self, signal: ResearchSignal) -> dict[str, Any]:
+        lineage = list(dict.fromkeys(list(signal.lineage or []) + list(signal.data_lineage or [])))
+        market_data_source = str(signal.market_data_source or "").lower()
+        protection_status = "review" if market_data_source in {"synthetic", ""} else "pass"
+        return {
+            "lineage": lineage,
+            "dataset_id": signal.dataset_id or f"dataset-us-daily-{signal.symbol.lower()}",
+            "protection_status": signal.protection_status if signal.protection_status != "review" else protection_status,
+            "frequency": signal.frequency or "daily",
+            "market": signal.market or "US",
+        }
 
     def _build_sector_heatmap(self, signals: list[ResearchSignal]) -> list[dict[str, Any]]:
         buckets: dict[str, list[ResearchSignal]] = {}
@@ -492,12 +615,67 @@ class QuantSystemService:
             )
         return selected
 
-    def _build_watchlist_snapshot(self) -> dict[str, Any]:
-        position_symbols = self._extract_position_symbols(mode="paper")
-        preferred_watchlist = ["AAPL", "MSFT", "NVDA", "GOOGL", "NEE", "PG", "TSLA", "AMZN"]
-        universe = self.get_default_universe(position_symbols + preferred_watchlist)
-        signals = self._build_signals(universe, "overview refresh", self.default_benchmark)
-        watchlist_signals = [self._serialize_watchlist_signal(signal) for signal in signals]
+    @staticmethod
+    def _preferred_watchlist(scope: str = "full") -> list[str]:
+        full_watchlist = ["AAPL", "MSFT", "NVDA", "GOOGL", "NEE", "PG", "TSLA", "AMZN"]
+        if str(scope or "").lower() == "summary":
+            return full_watchlist[:5]
+        return full_watchlist
+
+    @staticmethod
+    def _ordered_unique_symbols(symbols: list[str] | None) -> list[str]:
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for raw_symbol in symbols or []:
+            symbol = str(raw_symbol or "").upper().strip()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            ordered.append(symbol)
+        return ordered
+
+    @staticmethod
+    def _watchlist_signal_has_model_projection(signal: dict[str, Any] | None) -> bool:
+        if not isinstance(signal, dict):
+            return False
+        if str(signal.get("prediction_mode") or "").strip().lower() != "model":
+            return False
+        scenarios = signal.get("projection_scenarios") or {}
+        return all(scenarios.get(key) for key in ("upper", "center", "lower"))
+
+    @classmethod
+    def _dedupe_watchlist_signals(cls, watchlist_signals: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for signal in watchlist_signals or []:
+            symbol = str((signal or {}).get("symbol") or "").upper().strip()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            deduped.append(signal)
+        return deduped
+
+    def _compose_watchlist_snapshot(
+        self,
+        *,
+        preferred_watchlist: list[str],
+        provider_order_override: list[str] | None = None,
+        timeout_override: int | None = None,
+        cache_tag: str = "signal_bundle",
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        position_symbols = self._get_position_symbols(mode="paper", force_refresh=force_refresh)
+        dashboard_symbols = self._ordered_unique_symbols(position_symbols + preferred_watchlist)
+        universe = self.get_default_universe(dashboard_symbols)
+        signals, prefetched_bars = self._build_signal_bundle(
+            universe,
+            "overview refresh",
+            self.default_benchmark,
+            provider_order_override=provider_order_override,
+            timeout_override=timeout_override,
+            cache_tag=cache_tag,
+        )
+        watchlist_signals = self._dedupe_watchlist_signals([self._serialize_watchlist_signal(signal) for signal in signals])
         watchlist_signals.sort(
             key=lambda item: (
                 item.get("action") != "long",
@@ -510,31 +688,71 @@ class QuantSystemService:
             "universe": universe,
             "signals": signals,
             "watchlist_signals": watchlist_signals,
-            "live_account_snapshot": self._safe_live_account_snapshot(mode="paper"),
+            "_bars_map": prefetched_bars,
         }
+
+    def _build_watchlist_snapshot(self, *, force_refresh: bool = False) -> dict[str, Any]:
+        if not force_refresh:
+            cached = self._cached_payload(self._watchlist_snapshot_cache)
+            if cached is not None:
+                return cached
+        payload = self._compose_watchlist_snapshot(
+            preferred_watchlist=self._preferred_watchlist("full"),
+            cache_tag="signal_bundle",
+            force_refresh=force_refresh,
+        )
+        self._watchlist_snapshot_cache = self._cache_wrap(payload)
+        return payload
+
+    def _build_dashboard_watchlist_snapshot(self, *, provider: str = "auto", force_refresh: bool = False) -> dict[str, Any]:
+        provider_preference, provider_chain = self._dashboard_provider_chain(provider)
+        if not force_refresh:
+            cached = self._cached_payload(self._dashboard_watchlist_snapshot_cache.get(provider_preference))
+            if cached is not None:
+                return cached
+
+        payload = self._compose_watchlist_snapshot(
+            preferred_watchlist=self._preferred_watchlist("summary"),
+            provider_order_override=provider_chain,
+            timeout_override=self._dashboard_live_timeout_seconds,
+            cache_tag=f"dashboard_summary:{provider_preference}",
+            force_refresh=force_refresh,
+        )
+        self._dashboard_watchlist_snapshot_cache[provider_preference] = self._cache_wrap(payload)
+        return payload
+
+    def _resolve_dashboard_watchlist_snapshot(
+        self,
+        provider_preference: str,
+        *,
+        include_stale: bool = False,
+    ) -> dict[str, Any]:
+        entry = self._dashboard_watchlist_snapshot_cache.get(provider_preference)
+        payload = self._cached_payload(entry)
+        if payload is not None:
+            return payload
+        if include_stale and entry and entry.get("payload") is not None:
+            return entry["payload"]
+        return {}
 
     def build_platform_overview(self) -> dict[str, Any]:
         if self._cache_is_fresh(self._overview_cache):
             return self._overview_cache["payload"]
-        snapshot = self._build_watchlist_snapshot()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            snapshot_future = executor.submit(self._build_watchlist_snapshot)
+            account_future = executor.submit(self._get_live_account_snapshot, mode="paper")
+            snapshot = snapshot_future.result()
+            live_account_snapshot = account_future.result()
         position_symbols = snapshot["position_symbols"]
         universe = snapshot["universe"]
         signals = snapshot["signals"]
         watchlist_signals = snapshot["watchlist_signals"]
-        sector_heatmap = self._build_sector_heatmap(signals)
-        market_surface = self._build_market_surface(watchlist_signals)
-        portfolio = self._build_portfolio(signals, self.default_capital, self.default_benchmark)
-        backtests = self.storage.list_records("backtests")
+        secondary = self.build_dashboard_secondary()
+        sector_heatmap = secondary["sector_heatmap"]
+        market_surface = secondary["market_surface"]
+        portfolio = secondary["portfolio_preview"]
+        latest_backtest = secondary["latest_backtest"]
         experiments = self.storage.list_records("experiments")
-        live_account_snapshot = snapshot["live_account_snapshot"]
-        latest_backtest = backtests[0] if backtests else self._build_backtest(
-            strategy_name="ESG Multi-Factor Long-Only",
-            benchmark=self.default_benchmark,
-            capital_base=self.default_capital,
-            positions=portfolio.positions,
-            lookback_days=126,
-            persist=False,
-        ).model_dump()
 
         payload = {
             "generated_at": _iso_now(),
@@ -620,7 +838,7 @@ class QuantSystemService:
                     if (signal.graph_contagion_risk or 0.0) >= float(getattr(settings, "P2_GRAPH_CONTAGION_LIMIT", 0.62) or 0.62)
                 ],
             },
-            "portfolio_preview": portfolio.model_dump(),
+            "portfolio_preview": portfolio,
             "latest_backtest": latest_backtest,
             "experiments": experiments[:3],
             "training_plan": self._build_training_plan().model_dump(),
@@ -636,6 +854,282 @@ class QuantSystemService:
             "3M": 56,
             "1Y": 90,
         }.get(str(timeframe or "1D").upper(), 120)
+
+    def _resolve_cached_chart_payload(
+        self,
+        symbol: str | None,
+        timeframe: str = "1D",
+        provider_preference: str = "auto",
+        *,
+        include_stale: bool = False,
+    ) -> dict[str, Any] | None:
+        normalized_symbol = str(symbol or "").upper().strip()
+        normalized_timeframe = str(timeframe or "1D").upper()
+        candidate_keys = []
+        if normalized_symbol:
+            candidate_keys.append((normalized_symbol, normalized_timeframe, provider_preference))
+            if provider_preference != "auto":
+                candidate_keys.append((normalized_symbol, normalized_timeframe, "auto"))
+        else:
+            candidate_keys.extend(self._chart_cache.keys())
+
+        for key in candidate_keys:
+            entry = self._chart_cache.get(key)
+            payload = self._cached_payload(entry)
+            if payload is not None:
+                return payload
+            if include_stale and entry and entry.get("payload") is not None:
+                return entry["payload"]
+
+        if not include_stale:
+            return None
+
+        for (cached_symbol, cached_tf, _), entry in reversed(list(self._chart_cache.items())):
+            if normalized_symbol and cached_symbol != normalized_symbol:
+                continue
+            if cached_tf != normalized_timeframe or not entry.get("payload"):
+                continue
+            return entry["payload"]
+        return None
+
+    def _resolve_dashboard_symbol(
+        self,
+        *,
+        requested_symbol: str | None = None,
+        watchlist: list[dict[str, Any]] | None = None,
+        position_symbols: list[str] | None = None,
+        provider_preference: str = "auto",
+    ) -> str:
+        normalized_requested = str(requested_symbol or "").upper().strip()
+        if normalized_requested:
+            return normalized_requested
+
+        watchlist_by_symbol = {
+            str((item or {}).get("symbol") or "").upper().strip(): item
+            for item in (watchlist or [])
+            if str((item or {}).get("symbol") or "").upper().strip()
+        }
+        ordered_watchlist = [item for item in (watchlist or []) if str((item or {}).get("symbol") or "").upper().strip()]
+
+        for position_symbol in self._ordered_unique_symbols(position_symbols):
+            candidate = watchlist_by_symbol.get(position_symbol)
+            if self._watchlist_signal_has_model_projection(candidate):
+                return position_symbol
+
+        for candidate in ordered_watchlist:
+            if self._watchlist_signal_has_model_projection(candidate):
+                return str(candidate.get("symbol") or "").upper().strip()
+
+        cached_chart = self._resolve_cached_chart_payload(
+            self._last_dashboard_symbol,
+            provider_preference=provider_preference,
+            include_stale=True,
+        )
+        cached_symbol = str((cached_chart or {}).get("symbol") or "").upper().strip()
+        if cached_symbol:
+            return cached_symbol
+        if self._last_dashboard_symbol:
+            return str(self._last_dashboard_symbol).upper().strip() or "AAPL"
+        if ordered_watchlist:
+            candidate = str((ordered_watchlist[0] or {}).get("symbol") or "").upper().strip()
+            if candidate:
+                return candidate
+        return str(self._last_dashboard_symbol or "AAPL").upper().strip() or "AAPL"
+
+    def _build_dashboard_kpis(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        watchlist = list(snapshot.get("watchlist_signals") or [])
+        signals = list(snapshot.get("signals") or [])
+        account_snapshot = snapshot.get("live_account_snapshot") or {}
+        account = account_snapshot.get("account") if isinstance(account_snapshot, dict) else {}
+        latest_backtest = {}
+        backtests = self.storage.list_records("backtests")
+        if backtests:
+            latest_backtest = backtests[0] or {}
+
+        regime_counts = {
+            "risk_on": sum(1 for signal in signals if getattr(signal, "regime_label", None) == "risk_on"),
+            "neutral": sum(1 for signal in signals if getattr(signal, "regime_label", None) == "neutral"),
+            "risk_off": sum(1 for signal in signals if getattr(signal, "regime_label", None) == "risk_off"),
+        }
+        long_signals = [item for item in watchlist if str(item.get("action") or "").lower() == "long"]
+        if regime_counts["risk_on"] > regime_counts["risk_off"]:
+            regime = "risk_on"
+        elif regime_counts["risk_off"] > 0:
+            regime = "risk_off"
+        else:
+            regime = "neutral"
+
+        return {
+            "equity": account.get("equity"),
+            "capital_base": self.default_capital,
+            "expected_alpha": round(
+                statistics.mean([float(item.get("expected_return") or 0.0) for item in (long_signals or watchlist[:5])] or [0.0]),
+                6,
+            ),
+            "signal_count": len(watchlist),
+            "long_count": len(long_signals),
+            "sharpe": ((latest_backtest.get("metrics") or {}).get("sharpe")),
+            "max_drawdown": ((latest_backtest.get("metrics") or {}).get("max_drawdown")),
+            "regime": regime,
+            "regime_counts": regime_counts,
+            "symbol_count": len(snapshot.get("position_symbols") or []) or len(snapshot.get("universe") or []) or len(watchlist),
+        }
+
+    def build_dashboard_state(self, *, provider: str = "auto", symbol: str | None = None) -> dict[str, Any]:
+        provider_preference, provider_chain = self._dashboard_provider_chain(provider)
+        snapshot = self._resolve_dashboard_watchlist_snapshot(provider_preference, include_stale=True)
+        watchlist = list(snapshot.get("watchlist_signals") or [])
+        position_symbols = list(snapshot.get("position_symbols") or [])
+        selected_symbol = self._resolve_dashboard_symbol(
+            requested_symbol=symbol,
+            watchlist=watchlist,
+            position_symbols=position_symbols,
+            provider_preference=provider_preference,
+        )
+        chart = self._resolve_cached_chart_payload(selected_symbol, provider_preference=provider_preference, include_stale=True) or {}
+        source = str(chart.get("source") or "unknown")
+        provider_status = dict(chart.get("provider_status") or {})
+        if not provider_status:
+            provider_status = {
+                "available": False,
+                "provider": "unavailable",
+                "selected_provider": provider_preference,
+            }
+        else:
+            provider_status.setdefault("selected_provider", provider_preference)
+        degraded_from = chart.get("degraded_from")
+        candles = list(chart.get("candles") or [])
+        chart_reasons = list((chart.get("fallback_preview") or {}).get("reason") or [])
+        if chart.get("warning"):
+            chart_reasons.append(chart["warning"])
+        if chart.get("detail"):
+            chart_reasons.append(chart["detail"])
+        if isinstance(chart.get("market_data_warnings"), list):
+            chart_reasons.extend(chart["market_data_warnings"])
+        chart_reasons = list(dict.fromkeys(item for item in chart_reasons if item))
+        ready = bool(
+            candles
+            and source not in {"unknown", "loading", "unavailable", "", "cache", "synthetic"}
+            and not chart.get("degraded_snapshot")
+            and not degraded_from
+            and not chart_reasons
+        )
+        reason = list(chart_reasons)
+        if not ready and provider_status.get("available") and not candles:
+            reason.append("provider_connected_but_no_payload")
+        if not ready and degraded_from:
+            reason.append(f"provider_degraded_from_{degraded_from}")
+        if not ready and (chart.get("degraded_snapshot") or source in {"cache", "synthetic"}):
+            reason.append("cache_or_synthetic_fallback")
+        if not ready and source == "unknown":
+            reason.append("source_unknown")
+        if not ready and not reason:
+            reason.append("chart_data_unavailable")
+        fallback_preview = {
+            "symbol": selected_symbol,
+            "source": source or "unknown",
+            "source_chain": chart.get("data_source_chain") or chart.get("provider_chain") or provider_chain,
+            "last_snapshot": candles[-1] if candles else (chart.get("fallback_preview") or {}).get("last_snapshot"),
+            "reason": list(dict.fromkeys(reason)),
+            "next_actions": (chart.get("fallback_preview") or {}).get("next_actions") or [
+                "refresh_dashboard",
+                "switch_symbol",
+                "open_market_radar",
+                "open_backtest",
+            ],
+        }
+        return {
+            "generated_at": _iso_now(),
+            "phase": "ready" if ready else "degraded",
+            "ready": ready,
+            "symbol": selected_symbol,
+            "source": source or "unknown",
+            "selected_provider": provider_preference,
+            "source_chain": chart.get("data_source_chain") or chart.get("provider_chain") or provider_chain,
+            "provider_status": provider_status,
+            "degraded_from": degraded_from,
+            "fallback_preview": fallback_preview,
+        }
+
+    def build_dashboard_summary(self, provider: str = "auto") -> dict[str, Any]:
+        provider_preference, _ = self._dashboard_provider_chain(provider)
+        cached = self._cached_payload(self._dashboard_summary_cache.get(provider_preference))
+        if cached is not None:
+            return cached
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            snapshot_future = executor.submit(self._build_dashboard_watchlist_snapshot, provider=provider)
+            account_future = executor.submit(self._get_live_account_snapshot, mode="paper")
+            snapshot = snapshot_future.result()
+            live_account_snapshot = account_future.result()
+        snapshot_for_kpis = dict(snapshot)
+        snapshot_for_kpis["live_account_snapshot"] = live_account_snapshot
+        watchlist_signals = list(snapshot.get("watchlist_signals") or [])
+        signals = list(snapshot.get("signals") or [])
+        position_symbols = list(snapshot.get("position_symbols") or [])
+        symbol = self._resolve_dashboard_symbol(
+            watchlist=watchlist_signals,
+            position_symbols=position_symbols,
+            provider_preference=provider_preference,
+        )
+        dashboard_state = self.build_dashboard_state(provider=provider, symbol=symbol)
+        regime_counts = {
+            "risk_on": sum(1 for signal in signals if getattr(signal, "regime_label", None) == "risk_on"),
+            "neutral": sum(1 for signal in signals if getattr(signal, "regime_label", None) == "neutral"),
+            "risk_off": sum(1 for signal in signals if getattr(signal, "regime_label", None) == "risk_off"),
+        }
+        payload = {
+            "generated_at": _iso_now(),
+            "selected_provider": provider_preference,
+            "symbol": symbol,
+            "watchlist_signals": watchlist_signals,
+            "top_signals": watchlist_signals[:5],
+            "position_symbols": position_symbols,
+            "live_account_snapshot": live_account_snapshot,
+            "kpis": self._build_dashboard_kpis(snapshot_for_kpis),
+            "provider_status": dashboard_state["provider_status"],
+            "fallback_preview": dashboard_state["fallback_preview"],
+            "p1_signal_snapshot": {"regime_counts": regime_counts},
+            "universe": {
+                "size": len(snapshot.get("universe") or []),
+            },
+        }
+        self._dashboard_summary_cache[provider_preference] = self._cache_wrap(payload)
+        return payload
+
+    def build_dashboard_secondary(self, provider: str = "auto") -> dict[str, Any]:
+        provider_preference, _ = self._dashboard_provider_chain(provider)
+        cached = self._cached_payload(self._dashboard_secondary_cache.get(provider_preference))
+        if cached is not None:
+            return cached
+
+        snapshot = self._build_watchlist_snapshot()
+        signals = list(snapshot.get("signals") or [])
+        watchlist_signals = list(snapshot.get("watchlist_signals") or [])
+        bars_map = dict(snapshot.get("_bars_map") or {})
+        sector_heatmap = self._build_sector_heatmap(signals)
+        market_surface = self._build_market_surface(watchlist_signals, bars_map=bars_map)
+        portfolio = self._build_portfolio(signals, self.default_capital, self.default_benchmark)
+        backtests = self.storage.list_records("backtests")
+        latest_backtest = backtests[0] if backtests else self._build_backtest(
+            strategy_name="ESG Multi-Factor Long-Only",
+            benchmark=self.default_benchmark,
+            capital_base=self.default_capital,
+            positions=portfolio.positions,
+            lookback_days=126,
+            persist=False,
+        ).model_dump()
+        payload = {
+            "generated_at": _iso_now(),
+            "selected_provider": provider_preference,
+            "sector_heatmap": sector_heatmap,
+            "market_surface": market_surface,
+            "heatmap_nodes": market_surface,
+            "portfolio_preview": portfolio.model_dump(),
+            "latest_backtest": latest_backtest,
+        }
+        self._dashboard_secondary_cache[provider_preference] = self._cache_wrap(payload)
+        return payload
 
     def _synthetic_chart_frame(self, signal: ResearchSignal, timeframe: str) -> pd.DataFrame:
         limit = self._chart_limit_for_timeframe(timeframe)
@@ -689,46 +1183,44 @@ class QuantSystemService:
 
     def build_dashboard_chart(self, symbol: str | None = None, timeframe: str = "1D", provider: str = "auto") -> dict[str, Any]:
         provider_preference, provider_chain = self._dashboard_provider_chain(provider)
-        cache_key = (str(symbol or "").upper().strip(), str(timeframe or "1D").upper(), provider_preference)
+        requested_symbol = str(symbol or "").upper().strip()
+        normalized_timeframe = str(timeframe or "1D").upper()
+        cache_key = (requested_symbol, normalized_timeframe, provider_preference)
         cached = self._chart_cache.get(cache_key)
         if self._cache_is_fresh(cached):
             return cached["payload"]
-        overview_snapshot = self._overview_cache["payload"] if self._cache_is_fresh(self._overview_cache) else None
-        snapshot = (
-            {
-                "watchlist_signals": overview_snapshot.get("watchlist_signals", []),
-                "position_symbols": overview_snapshot.get("position_symbols", []),
-            }
-            if overview_snapshot is not None
-            else self._build_watchlist_snapshot()
+        snapshot = self._resolve_dashboard_watchlist_snapshot(provider_preference, include_stale=True)
+        watchlist = list(snapshot.get("watchlist_signals") or [])
+        position_symbols = list(snapshot.get("position_symbols") or [])
+        active_symbol = self._resolve_dashboard_symbol(
+            requested_symbol=symbol,
+            watchlist=watchlist,
+            position_symbols=position_symbols,
+            provider_preference=provider_preference,
         )
-        watchlist = snapshot.get("watchlist_signals") or []
-        if not watchlist:
-            return {
-                "symbol": symbol or "",
-                "timeframe": timeframe,
-                "candles": [],
-                "source": "unavailable",
-                "selected_provider": provider_preference,
-                "data_source_chain": provider_chain,
-                "indicators": {},
+        active = next((item for item in watchlist if item["symbol"] == active_symbol), None)
+        if active is None:
+            active = {
+                "symbol": active_symbol,
+                "company_name": active_symbol,
+                "sector": "Tracked",
+                "thesis": f"{active_symbol} chart loaded without a warm watchlist context.",
+                "action": "neutral",
+                "confidence": 0.5,
+                "expected_return": 0.0,
+                "risk_score": 0.5,
+                "overall_score": 0.0,
+                "e_score": 0.0,
+                "s_score": 0.0,
+                "g_score": 0.0,
+                "factor_scores": [],
+                "catalysts": [],
+                "data_lineage": [],
+                "market_data_source": "",
+                "prediction_mode": "unavailable",
+                "projection_basis_return": None,
                 "projection_scenarios": {},
-                "projection_explanations": {},
-                "projected_volume": [],
-                "viewport_defaults": {},
-                "click_targets": [],
-                "prediction_disabled_reason": "no_watchlist_signals",
-                "is_live_data": False,
-                "provider_status": {"available": False, "provider": "unavailable", "selected_provider": provider_preference},
-                "degraded_from": None,
-                "market_session": None,
-                "range_label": timeframe.upper(),
-                "positions_context": {"symbols": snapshot.get("position_symbols", [])},
-                "indicator_panels": [],
             }
-
-        active = next((item for item in watchlist if item["symbol"] == (symbol or "").upper().strip()), watchlist[0])
-        active_symbol = active["symbol"]
         limit = self._chart_limit_for_timeframe(timeframe)
         signal = self._enrich_signal_house_score(
             ResearchSignal(
@@ -754,17 +1246,24 @@ class QuantSystemService:
             )
         )
 
-        source = str(active.get("market_data_source") or self._resolve_market_data_source(signal))
+        source = str(active.get("market_data_source") or self._resolve_market_data_source(signal) or provider_preference)
         degraded_from = None
         provider_status = {"available": False, "provider": source, "selected_provider": provider_preference}
         try:
             if provider_preference == "synthetic":
                 raise RuntimeError("synthetic_requested")
+            live_provider_order = [item for item in provider_chain if item not in {"cache", "synthetic"}]
+            if provider_preference in {"alpaca", "twelvedata", "yfinance"}:
+                live_provider_order = [provider_preference]
+            elif live_provider_order:
+                live_provider_order = [live_provider_order[0]]
             bars_result = self.market_data.get_daily_bars(
                 active_symbol,
                 limit=limit,
-                provider_order_override=[item for item in provider_chain if item not in {"cache", "synthetic"}],
+                provider_order_override=live_provider_order,
                 cache_only=provider_preference == "cache",
+                allow_stale_cache=True,
+                timeout_override=self._dashboard_live_timeout_seconds,
             )
             source = "cache" if provider_preference == "cache" else bars_result.provider
             provider_status = {
@@ -848,12 +1347,17 @@ class QuantSystemService:
             market_data_warnings.append(f"provider_degraded_from_{degraded_from}")
         if source in {"cache", "synthetic"}:
             market_data_warnings.append("cache_or_synthetic_fallback")
+        if source == "unavailable" or (not candles and source not in {"loading", "unknown"}):
+            market_data_warnings.append("market_data_unavailable")
+        if not candles:
+            market_data_warnings.append("chart_data_unavailable")
+        market_data_warnings = list(dict.fromkeys(market_data_warnings))
         fallback_preview = {
             "symbol": active_symbol,
             "source": source,
             "source_chain": provider_chain,
             "last_snapshot": candles[-1] if candles else None,
-            "reason": market_data_warnings or ([prediction_disabled_reason] if prediction_disabled_reason else []),
+            "reason": market_data_warnings,
             "next_actions": ["refresh_dashboard", "switch_symbol", "open_market_radar", "open_backtest"],
         }
 
@@ -876,7 +1380,7 @@ class QuantSystemService:
             "click_targets": ["symbol_chip", "timeframe_tab", "zoom_control", "projection_line", "heatmap_tile"],
             "prediction_disabled_reason": prediction_disabled_reason,
             "market_data_warnings": market_data_warnings,
-            "warning": market_data_warnings[0] if market_data_warnings else prediction_disabled_reason,
+            "warning": market_data_warnings[0] if market_data_warnings else None,
             "detail": None,
             "fallback_preview": fallback_preview,
             "signal": active,
@@ -885,10 +1389,14 @@ class QuantSystemService:
             "degraded_from": degraded_from,
             "market_session": self._safe_get_clock(self._prepare_broker_adapter("alpaca", "paper")[0]),
             "range_label": timeframe.upper(),
-            "positions_context": {"symbols": snapshot.get("position_symbols", [])},
+            "positions_context": {"symbols": position_symbols},
             "indicator_panels": ["main", "volume"],
         }
-        self._chart_cache[cache_key] = self._cache_wrap(payload, ttl_seconds=30)
+        self._last_dashboard_symbol = active_symbol
+        resolved_cache_key = (active_symbol, normalized_timeframe, provider_preference)
+        self._chart_cache[resolved_cache_key] = self._cache_wrap(payload, ttl_seconds=30)
+        if requested_symbol != active_symbol:
+            self._chart_cache[cache_key] = self._chart_cache[resolved_cache_key]
         return payload
 
     @staticmethod
@@ -2073,13 +2581,190 @@ class QuantSystemService:
             tags=["backtest", "walk-forward", "portfolio"],
             artifact_uri=(artifact_payload or {}).get("storage", {}).get("artifact_uri"),
         )
-        return result.model_dump()
+        tearsheet = self.build_tearsheet(result.backtest_id, persist=True)
+        sweep_preview = self.run_backtest_sweep(
+            strategy_name=strategy_name,
+            universe_symbols=universe_symbols,
+            benchmark=benchmark,
+            capital_base=capital_base,
+            lookback_days=lookback_days,
+            market_data_provider=market_data_provider,
+            force_refresh=force_refresh,
+            parameter_grid={
+                "lookback_days": [lookback_days],
+                "position_scale": [0.9, 1.0, 1.1],
+                "transaction_cost_bps": [0.0, 8.0],
+            },
+            top_k=3,
+            persist=False,
+        )
+        payload = result.model_dump()
+        payload["market"] = "US"
+        payload["frequency"] = "daily"
+        payload["data_tier"] = "l1"
+        payload["protection_status"] = tearsheet.get("protection_status", "review")
+        payload["dataset_id"] = f"dataset-us-daily-{strategy_name.lower().replace(' ', '-')}"
+        payload["market_depth_status"] = {
+            "selected_provider": "daily_backtest_l1",
+            "data_tier": "l1",
+            "eligibility_status": "pass",
+            "available": True,
+            "blocking_reasons": [],
+        }
+        payload["tearsheet_report_id"] = tearsheet.get("report_id")
+        payload["tearsheet_summary"] = tearsheet.get("summary", {})
+        payload["sweep_preview"] = {
+            "run_id": sweep_preview.get("run_id"),
+            "summary": sweep_preview.get("summary", {}),
+            "best_run": sweep_preview.get("best_run", {}),
+            "walk_forward": sweep_preview.get("walk_forward", {}),
+        }
+        return payload
 
     def list_backtests(self) -> list[dict[str, Any]]:
         return self.storage.list_records("backtests")
 
     def get_backtest(self, backtest_id: str) -> dict[str, Any] | None:
         return self.storage.load_record("backtests", backtest_id)
+
+    def run_backtest_sweep(
+        self,
+        *,
+        strategy_name: str,
+        universe_symbols: list[str] | None = None,
+        benchmark: str | None = None,
+        capital_base: float | None = None,
+        lookback_days: int = 126,
+        market_data_provider: str | None = None,
+        force_refresh: bool = False,
+        parameter_grid: dict[str, list[Any]] | None = None,
+        top_k: int = 5,
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        from backtest.walk_forward import run_module as build_walk_forward_summary
+
+        benchmark = benchmark or self.default_benchmark
+        capital_base = capital_base or self.default_capital
+        universe = self.get_default_universe(universe_symbols)
+        signals = self._build_signals(universe, strategy_name, benchmark)
+        portfolio = self._build_portfolio(signals, capital_base, benchmark)
+        normalized_grid = self._normalize_sweep_grid(parameter_grid, lookback_days=lookback_days)
+        parameter_names = list(normalized_grid)
+        combinations: list[dict[str, Any]] = []
+
+        for combo_index, values in enumerate(product(*(normalized_grid[name] for name in parameter_names)), start=1):
+            parameters = {name: value for name, value in zip(parameter_names, values)}
+            combo_positions = self._apply_sweep_parameters(portfolio.positions, parameters)
+            combo_lookback = int(parameters.get("lookback_days") or lookback_days)
+            backtest = self._build_backtest(
+                strategy_name=strategy_name,
+                benchmark=benchmark,
+                capital_base=capital_base,
+                positions=combo_positions,
+                lookback_days=combo_lookback,
+                persist=False,
+                market_data_provider=market_data_provider,
+                force_refresh=force_refresh,
+            )
+            adjusted_metrics = self._apply_backtest_cost_adjustments(
+                backtest.metrics.model_dump(),
+                transaction_cost_bps=float(parameters.get("transaction_cost_bps") or 0.0),
+            )
+            combinations.append(
+                {
+                    "combo_id": f"{backtest.backtest_id}-combo-{combo_index}",
+                    "backtest_id": backtest.backtest_id,
+                    "parameters": parameters,
+                    "metrics": adjusted_metrics,
+                    "data_source": backtest.data_source,
+                    "used_synthetic_fallback": backtest.used_synthetic_fallback,
+                    "market_data_warnings": list(backtest.market_data_warnings),
+                }
+            )
+
+        combinations.sort(
+            key=lambda row: (
+                -float((row.get("metrics") or {}).get("sharpe") or 0.0),
+                -float((row.get("metrics") or {}).get("cumulative_return") or 0.0),
+                float((row.get("metrics") or {}).get("max_drawdown") or 0.0),
+            )
+        )
+        best_run = combinations[0] if combinations else {}
+        walk_forward = build_walk_forward_summary({"combinations": combinations, "window_count": min(3, len(combinations) or 1)})
+        protection_status = "review" if any(row.get("used_synthetic_fallback") for row in combinations[:1]) else "pass"
+        sweep = SweepRun(
+            run_id=f"sweep-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            generated_at=_iso_now(),
+            strategy_name=strategy_name,
+            benchmark=benchmark,
+            universe=[member.symbol for member in universe],
+            data_tier="l1",
+            dataset_id=f"dataset-us-daily-{strategy_name.lower().replace(' ', '-')}",
+            protection_status=protection_status,  # type: ignore[arg-type]
+            market_depth_status={
+                "selected_provider": "daily_backtest_l1",
+                "data_tier": "l1",
+                "eligibility_status": "pass",
+                "available": True,
+                "blocking_reasons": [],
+            },
+            provider_capabilities={"daily_backtest_l1": {"available": True, "history_ready": True, "realtime_ready": False}},
+            parameter_grid=normalized_grid,
+            combinations=combinations[: max(1, len(combinations))],
+            summary={
+                "combination_count": len(combinations),
+                "top_k": max(1, int(top_k)),
+                "best_sharpe": float((best_run.get("metrics") or {}).get("sharpe") or 0.0),
+                "best_cumulative_return": float((best_run.get("metrics") or {}).get("cumulative_return") or 0.0),
+                "parameter_names": parameter_names,
+                "scenario_matrix": self._build_scenario_matrix(combinations),
+            },
+            best_run=best_run,
+            walk_forward=walk_forward,
+            lineage=[
+                "L0: current strategy portfolio",
+                "L1: deterministic parameter sweep with cost sensitivity",
+                "L2: walk-forward robustness summary over ranked combinations",
+            ],
+        )
+        payload = sweep.model_dump(mode="json")
+        payload["top_combinations"] = combinations[: max(1, int(top_k))]
+        if persist:
+            payload["storage"] = self.storage.persist_record("backtest_sweeps", sweep.run_id, payload)
+        return payload
+
+    def get_backtest_sweep(self, run_id: str) -> dict[str, Any] | None:
+        return self.storage.load_record("backtest_sweeps", run_id)
+
+    def build_tearsheet(self, backtest_id: str, *, persist: bool = True) -> dict[str, Any]:
+        from reporting.tearsheet import build_output as build_tearsheet_output
+
+        backtest = self.get_backtest(backtest_id)
+        if backtest is None:
+            raise ValueError(f"Backtest not found: {backtest_id}")
+        tearsheet_payload = build_tearsheet_output(backtest)
+        protection_status = "review" if backtest.get("used_synthetic_fallback") or backtest.get("market_data_warnings") else "pass"
+        report = TearsheetReport(
+            report_id=f"tearsheet-{backtest_id}",
+            generated_at=_iso_now(),
+            backtest_id=backtest_id,
+            strategy_name=str(backtest.get("strategy_name") or "Backtest"),
+            data_tier=str(backtest.get("data_tier") or "l1"),  # type: ignore[arg-type]
+            protection_status=protection_status,  # type: ignore[arg-type]
+            market_depth_status=dict(backtest.get("market_depth_status") or {}),
+            summary=dict(tearsheet_payload.get("summary") or {}),
+            sections=dict(tearsheet_payload.get("sections") or {}),
+            html=str(tearsheet_payload.get("html") or ""),
+            lineage=[
+                "L0: persisted backtest result",
+                "L1: tearsheet rendering with monthly return table and cost sensitivity",
+                "L2: Monte Carlo snapshot and risk alerts serialized for the workbench",
+            ],
+        )
+        payload = report.model_dump(mode="json")
+        if persist:
+            payload["storage"] = self.storage.persist_record("tearsheets", report.report_id, payload)
+        return payload
 
     def get_execution_account(self) -> dict[str, Any]:
         status = self.alpaca.connection_status()
@@ -5422,23 +6107,61 @@ class QuantSystemService:
             payload["storage"] = self.storage.persist_record("backtests", result.backtest_id, payload)
         return result
 
-    def _build_signals(
+    def _build_live_market_signals(
         self,
         universe: list[UniverseMember],
         research_question: str,
         benchmark: str,
-    ) -> list[ResearchSignal]:
+        *,
+        provider_order_override: list[str] | None = None,
+        timeout_override: int | None = None,
+        cache_tag: str = "signal_bundle",
+    ) -> tuple[list[ResearchSignal], dict[str, Any]]:
+        bars_map = self._prefetch_market_bars(
+            [member.symbol for member in universe],
+            limit=self.signal_engine.history_bars,
+            provider_order_override=provider_order_override,
+            allow_stale_cache=True,
+            timeout_override=timeout_override,
+            cache_tag=cache_tag,
+        )
+        signals = self.signal_engine.build_signals(
+            universe=universe,
+            benchmark=benchmark,
+            research_question=research_question,
+            prefetched_bars=bars_map,
+        )
+        return signals, bars_map
+
+    def _build_signal_bundle(
+        self,
+        universe: list[UniverseMember],
+        research_question: str,
+        benchmark: str,
+        *,
+        provider_order_override: list[str] | None = None,
+        timeout_override: int | None = None,
+        cache_tag: str = "signal_bundle",
+    ) -> tuple[list[ResearchSignal], dict[str, Any]]:
         market_data_signals: list[ResearchSignal] = []
+        bars_map: dict[str, Any] = {}
         if self._should_use_live_market_data():
-            market_data_signals = self.signal_engine.build_signals(
-                universe=universe,
-                benchmark=benchmark,
-                research_question=research_question,
-            )
+            try:
+                market_data_signals, bars_map = self._build_live_market_signals(
+                    universe=universe,
+                    research_question=research_question,
+                    benchmark=benchmark,
+                    provider_order_override=provider_order_override,
+                    timeout_override=timeout_override,
+                    cache_tag=cache_tag,
+                )
+            except Exception as exc:
+                logger.warning(f"Signal engine fallback engaged: {exc}")
+
         if len(market_data_signals) == len(universe):
             ranked = self.alpha_ranker.rerank(market_data_signals)
             p1_enriched = self.p1_suite.enrich_and_rerank(ranked)
-            return [self._enrich_signal_house_score(signal) for signal in self._apply_p2_stack(p1_enriched)]
+            return [self._enrich_signal_house_score(signal) for signal in self._apply_p2_stack(p1_enriched)], bars_map
 
         fallback_signals = self._build_synthetic_signals(universe, research_question, benchmark)
         fallback_lookup = {signal.symbol: signal for signal in fallback_signals}
@@ -5454,7 +6177,17 @@ class QuantSystemService:
         blended.sort(key=lambda item: (item.action != "long", -item.overall_score, -item.confidence))
         ranked = self.alpha_ranker.rerank(blended)
         p1_enriched = self.p1_suite.enrich_and_rerank(ranked)
-        return [self._enrich_signal_house_score(signal) for signal in self._apply_p2_stack(p1_enriched)]
+        enriched = [self._enrich_signal_house_score(signal) for signal in self._apply_p2_stack(p1_enriched)]
+        return enriched, bars_map
+
+    def _build_signals(
+        self,
+        universe: list[UniverseMember],
+        research_question: str,
+        benchmark: str,
+    ) -> list[ResearchSignal]:
+        signals, _ = self._build_signal_bundle(universe, research_question, benchmark)
+        return signals
 
     def _apply_p2_stack(self, signals: list[ResearchSignal]) -> list[ResearchSignal]:
         if not signals or not self.p2_stack.available():
@@ -5801,6 +6534,76 @@ class QuantSystemService:
             used_synthetic_fallback=True,
             market_data_warnings=warnings or ["Synthetic fallback was used because live/cache market data was unavailable."],
         )
+
+    def _normalize_sweep_grid(self, parameter_grid: dict[str, list[Any]] | None, *, lookback_days: int) -> dict[str, list[Any]]:
+        normalized = {
+            "lookback_days": [lookback_days],
+            "position_scale": [0.9, 1.0, 1.1],
+            "position_cap": [1.0],
+            "signal_return_scale": [1.0],
+            "transaction_cost_bps": [0.0, 8.0],
+        }
+        for key, values in (parameter_grid or {}).items():
+            cleaned = [value for value in list(values or []) if value is not None]
+            if cleaned:
+                normalized[key] = cleaned
+        return normalized
+
+    def _apply_sweep_parameters(
+        self,
+        positions: list[PortfolioPosition],
+        parameters: dict[str, Any],
+    ) -> list[PortfolioPosition]:
+        scale = float(parameters.get("position_scale") or 1.0)
+        position_cap = float(parameters.get("position_cap") or 1.0)
+        return_scale = float(parameters.get("signal_return_scale") or 1.0)
+        updated: list[PortfolioPosition] = []
+        for position in positions:
+            updated.append(
+                position.model_copy(
+                    update={
+                        "weight": min(float(position.weight or 0.0) * scale, position_cap),
+                        "expected_return": float(position.expected_return or 0.0) * return_scale,
+                        "risk_budget": min(float(position.risk_budget or 0.0) * scale, 1.0),
+                    }
+                )
+            )
+        total_weight = sum(float(position.weight or 0.0) for position in updated)
+        if total_weight > 1.0 and total_weight > 0:
+            updated = [
+                position.model_copy(update={"weight": round(float(position.weight or 0.0) / total_weight, 6)})
+                for position in updated
+            ]
+        return updated
+
+    def _apply_backtest_cost_adjustments(self, metrics: dict[str, Any], *, transaction_cost_bps: float) -> dict[str, float]:
+        adjusted = {key: float(value) for key, value in metrics.items()}
+        drag = max(float(transaction_cost_bps), 0.0) / 10000.0
+        if drag <= 0:
+            return adjusted
+        adjusted["cumulative_return"] = round(adjusted.get("cumulative_return", 0.0) - drag * 2.4, 6)
+        adjusted["annualized_return"] = round(adjusted.get("annualized_return", 0.0) - drag * 1.8, 6)
+        adjusted["sharpe"] = round(adjusted.get("sharpe", 0.0) - drag * 18.0, 6)
+        adjusted["sortino"] = round(adjusted.get("sortino", 0.0) - drag * 14.0, 6)
+        adjusted["max_drawdown"] = round(adjusted.get("max_drawdown", 0.0) + drag * 1.5, 6)
+        adjusted["information_ratio"] = round(adjusted.get("information_ratio", 0.0) - drag * 10.0, 6)
+        return adjusted
+
+    def _build_scenario_matrix(self, combinations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        top = combinations[:3]
+        matrix: list[dict[str, Any]] = []
+        for row in top:
+            parameters = dict(row.get("parameters") or {})
+            metrics = dict(row.get("metrics") or {})
+            matrix.append(
+                {
+                    "label": f"lookback={parameters.get('lookback_days')} cost={parameters.get('transaction_cost_bps', 0)}bps",
+                    "sharpe": float(metrics.get("sharpe") or 0.0),
+                    "cumulative_return": float(metrics.get("cumulative_return") or 0.0),
+                    "max_drawdown": float(metrics.get("max_drawdown") or 0.0),
+                }
+            )
+        return matrix
 
     def _build_risk_alerts(self, metrics: BacktestMetrics) -> list[RiskAlert]:
         alerts: list[RiskAlert] = []

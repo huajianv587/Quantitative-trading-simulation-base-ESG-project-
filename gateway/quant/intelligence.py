@@ -5,21 +5,28 @@ import json
 import math
 import random
 import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from analysis.technical.market_microstructure import analyze_payload as analyze_market_microstructure
 from gateway.connectors.free_live import FreeLiveConnectorRegistry
+from gateway.quant.market_depth import MarketDepthGateway
 from gateway.quant.intelligence_models import (
+    DatasetManifest,
     DecisionReport,
     EvidenceBundle,
     FactorCard,
     FactorCandidate,
     InformationItem,
+    InstrumentContract,
     OutcomeRecord,
+    ResearchProtectionReport,
     SimulationResult,
     SimulationScenario,
     StructuredEvent,
+    SweepRun,
+    TearsheetReport,
 )
 from gateway.quant.models import ResearchSignal, UniverseMember
 
@@ -82,6 +89,47 @@ class QuantIntelligenceService:
         self.data_source_manager = data_source_manager
         self.repo_root = Path(__file__).resolve().parents[2]
         self.storage_root = self.repo_root / "storage"
+        self._market_depth_service: MarketDepthGateway | None = None
+
+    def _market_depth_gateway(self) -> MarketDepthGateway:
+        if (
+            self._market_depth_service is None
+            or self._market_depth_service.storage_root != Path(self.storage_root)
+        ):
+            self._market_depth_service = MarketDepthGateway(
+                storage_root=Path(self.storage_root),
+                market_data=getattr(self.quant_service, "market_data", None),
+            )
+        return self._market_depth_service
+
+    def market_depth_status(self, *, symbols: list[str] | None = None, require_l2: bool = False) -> dict[str, Any]:
+        return self._market_depth_gateway().status(symbols=symbols, require_l2=require_l2)
+
+    def market_depth_latest(self, *, symbol: str) -> dict[str, Any]:
+        return self._market_depth_gateway().latest(symbol)
+
+    def market_depth_replay(
+        self,
+        *,
+        symbol: str,
+        limit: int = 20,
+        timestamps: list[str] | None = None,
+        require_l2: bool = False,
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        return self._market_depth_gateway().replay(
+            symbol,
+            limit=limit,
+            timestamps=timestamps,
+            require_l2=require_l2,
+            persist=persist,
+        )
+
+    def get_market_depth_replay(self, session_id: str) -> dict[str, Any] | None:
+        return self._market_depth_gateway().load_replay(session_id)
+
+    def market_depth_live_payload(self, *, symbols: list[str] | None = None, require_l2: bool = False) -> dict[str, Any]:
+        return self._market_depth_gateway().live_payload(symbols=symbols, require_l2=require_l2)
 
     def scan(
         self,
@@ -211,6 +259,7 @@ class QuantIntelligenceService:
         mode: str = "local",
         providers: list[str] | None = None,
         quota_guard: bool = True,
+        required_data_tier: str = "l1",
         persist: bool = True,
     ) -> dict[str, Any]:
         loaded_evidence = self._load_evidence(evidence_run_id)
@@ -227,12 +276,43 @@ class QuantIntelligenceService:
         bundle = EvidenceBundle.model_validate(evidence)
         events = self.extract_events(bundle)
         features = self.build_as_of_features(bundle, events, decision_time=bundle.decision_time)
+        dataset_manifest = self._dataset_manifest_from_bundle(
+            bundle,
+            events,
+            features,
+            frequency="hybrid" if str(mode or "").lower() in {"live", "mixed"} else "daily",
+            required_data_tier=required_data_tier,
+            metadata={
+                "query": query,
+                "source_mode": mode,
+                "provider_request": providers or [],
+                "include_intraday": str(mode or "").lower() in {"live", "mixed"},
+            },
+        )
+        protection_report = self._protection_report_from_bundle(
+            bundle,
+            dataset_manifest=dataset_manifest,
+            formulas=["avg_quality", "positive_pressure-negative_pressure", "novelty_confidence_blend"],
+            frequency=dataset_manifest.frequency,
+            required_data_tier=required_data_tier,
+        )
         universe = self.quant_service.get_default_universe(universe_symbols or bundle.universe)
         signals = self._build_signals(universe, query)
         signal_returns = {signal.symbol: float(signal.expected_return or 0.0) for signal in signals}
 
         candidates = self._build_factor_candidates(bundle, events, features, horizon_days)
-        cards = [self._score_factor(candidate, signal_returns) for candidate in candidates]
+        cards = [
+            self._score_factor(
+                candidate,
+                signal_returns,
+                dataset_id=dataset_manifest.dataset_id,
+                protection_status=protection_report.protection_status,
+                frequency=dataset_manifest.frequency,
+                data_tier=dataset_manifest.data_tier,
+                blocking_reasons=protection_report.blocking_reasons,
+            )
+            for candidate in candidates
+        ]
         payload = {
             "run_id": f"factorlab-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{_stable_hash([card.factor_id for card in cards])[:8]}",
             "generated_at": _iso_now(),
@@ -243,6 +323,8 @@ class QuantIntelligenceService:
             "query": query,
             "horizon_days": horizon_days,
             "universe": [member.symbol for member in universe],
+            "dataset_manifest": dataset_manifest.model_dump(mode="json"),
+            "protection_report": protection_report.model_dump(mode="json"),
             "features": features,
             "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
             "factor_cards": [card.model_dump(mode="json") for card in cards],
@@ -269,12 +351,128 @@ class QuantIntelligenceService:
         if not rows:
             discovered = self.discover_factors(persist=False)
             rows = discovered.get("factor_cards", [])
+        latest_factor_run = self._list_json("quant/factor_lab", limit=1)
+        latest_payload = latest_factor_run[0] if latest_factor_run else {}
         return {
             "generated_at": _iso_now(),
             "factor_count": len(rows),
             "factors": rows[: max(1, int(limit))],
             "registry_policy": "Only promoted factors can become runtime inputs; research_only factors remain visible but gated.",
+            "latest_dataset_manifest": latest_payload.get("dataset_manifest", {}),
+            "latest_protection_report": latest_payload.get("protection_report", {}),
         }
+
+    def build_dataset_manifest(
+        self,
+        *,
+        universe_symbols: list[str] | None = None,
+        query: str = "",
+        as_of_time: str | None = None,
+        decision_time: str | None = None,
+        mode: str = "local",
+        providers: list[str] | None = None,
+        quota_guard: bool = True,
+        frequency: str = "daily",
+        include_intraday: bool = True,
+        required_data_tier: str = "l1",
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        evidence = self.scan(
+            universe_symbols=universe_symbols,
+            query=query or "build dataset manifest",
+            decision_time=as_of_time or decision_time,
+            live_connectors=str(mode or "").lower() in {"live", "mixed"},
+            mode=mode,
+            providers=providers,
+            quota_guard=quota_guard,
+            persist=False,
+        )
+        bundle = EvidenceBundle.model_validate(evidence)
+        events = self.extract_events(bundle)
+        features = self.build_as_of_features(bundle, events, decision_time=bundle.decision_time)
+        dataset = self._dataset_manifest_from_bundle(
+            bundle,
+            events,
+            features,
+            frequency="hybrid" if include_intraday and frequency in {"daily", "intraday", "hybrid"} else frequency,
+            required_data_tier=required_data_tier,
+            metadata={
+                "query": query,
+                "mode": mode,
+                "providers": providers or [],
+                "include_intraday": include_intraday,
+                "event_count": len(events),
+            },
+        )
+        payload = dataset.model_dump(mode="json")
+        if persist:
+            payload["storage"] = self._persist("quant/research_datasets", dataset.dataset_id, payload)
+        return payload
+
+    def list_dataset_manifests(self, *, limit: int = 20) -> dict[str, Any]:
+        rows = self._list_json("quant/research_datasets", limit=limit)
+        return {
+            "generated_at": _iso_now(),
+            "dataset_count": len(rows),
+            "datasets": rows,
+        }
+
+    def run_research_quality_checks(
+        self,
+        *,
+        universe_symbols: list[str] | None = None,
+        query: str = "",
+        decision_time: str | None = None,
+        as_of_time: str | None = None,
+        evidence_run_id: str | None = None,
+        mode: str = "local",
+        providers: list[str] | None = None,
+        quota_guard: bool = True,
+        frequency: str = "daily",
+        formulas: list[str] | None = None,
+        labels: list[dict[str, Any]] | None = None,
+        timestamps: list[str] | None = None,
+        current_constituents_only: bool = False,
+        required_data_tier: str = "l1",
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        evidence_payload = self._load_evidence(evidence_run_id)
+        if evidence_payload is None:
+            evidence_payload = self.scan(
+                universe_symbols=universe_symbols,
+                query=query or "quality checks",
+                decision_time=as_of_time or decision_time,
+                live_connectors=str(mode or "").lower() in {"live", "mixed"},
+                mode=mode,
+                providers=providers,
+                quota_guard=quota_guard,
+                persist=False,
+            )
+        bundle = EvidenceBundle.model_validate(evidence_payload)
+        events = self.extract_events(bundle)
+        features = self.build_as_of_features(bundle, events, decision_time=bundle.decision_time)
+        dataset = self._dataset_manifest_from_bundle(
+            bundle,
+            events,
+            features,
+            frequency=frequency,
+            required_data_tier=required_data_tier,
+            metadata={"query": query, "mode": mode, "providers": providers or []},
+        )
+        report = self._protection_report_from_bundle(
+            bundle,
+            dataset_manifest=dataset,
+            formulas=formulas or [],
+            labels=labels or [],
+            timestamps=timestamps or [],
+            current_constituents_only=current_constituents_only,
+            frequency=frequency,
+            required_data_tier=required_data_tier,
+        )
+        payload = report.model_dump(mode="json")
+        if persist:
+            payload["storage"] = self._persist("quant/research_quality", report.report_id, payload)
+        return payload
 
     def explain_decision(
         self,
@@ -412,6 +610,28 @@ class QuantIntelligenceService:
         base_return = float(signal.expected_return or 0.0) + float(scenario.shock_bps) / 10000.0 + event_adjustment
         cost = (float(scenario.transaction_cost_bps) + float(scenario.slippage_bps)) / 10000.0
         horizon_scale = math.sqrt(max(1, scenario.horizon_days))
+        events = self.extract_events(evidence)
+        features = self.build_as_of_features(evidence, events, decision_time=evidence.decision_time)
+        dataset_manifest = self._dataset_manifest_from_bundle(
+            evidence,
+            events,
+            features,
+            frequency="intraday",
+            required_data_tier=scenario.required_data_tier,
+            metadata={
+                "scenario_name": scenario.scenario_name,
+                "regime": scenario.regime,
+                "event_assumption": scenario.event_assumption,
+            },
+        )
+        protection_report = self._protection_report_from_bundle(
+            evidence,
+            dataset_manifest=dataset_manifest,
+            formulas=["intraday_replay", "execution_quality", "market_depth_replay"],
+            frequency="intraday",
+            required_data_tier=scenario.required_data_tier,
+        )
+        market_depth_status = dataset_manifest.market_depth_status
         results: list[float] = []
         drawdowns: list[float] = []
         for _ in range(int(scenario.paths)):
@@ -429,6 +649,7 @@ class QuantIntelligenceService:
             simulation_id=f"sim-{signal.symbol}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{_stable_hash(scenario.model_dump(mode='json'))[:8]}",
             generated_at=_iso_now(),
             scenario=scenario,
+            data_tier=dataset_manifest.data_tier,  # type: ignore[arg-type]
             expected_return=round(_mean(results), 6),
             median_return=round(self._quantile(results, 0.5), 6),
             probability_of_loss=round(len(losses) / max(len(results), 1), 6),
@@ -444,13 +665,48 @@ class QuantIntelligenceService:
             },
             factor_attribution=factor_attr,
             historical_analogs=self._historical_analogs(evidence, scenario),
+            market_depth_status=market_depth_status,
             lineage=[
                 "L0: current research signal expected return and volatility proxy",
                 "L1: deterministic seeded Monte Carlo with transaction cost and slippage",
                 "L2: evidence bundle searched for historical analog labels",
+                "L3: market depth replay and protection gate aligned to simulation scenario",
             ],
         )
         payload = result.model_dump(mode="json")
+        intraday_replay = self._build_intraday_replay(signal, scenario)
+        order_book_replay = self.market_depth_replay(
+            symbol=signal.symbol,
+            limit=min(24, max(8, int(scenario.paths // 32))),
+            require_l2=scenario.required_data_tier == "l2",
+            persist=persist,
+        )
+        microstructure = analyze_market_microstructure(
+            {
+                "symbol": signal.symbol,
+                "records": intraday_replay["bars"],
+                "order_book_snapshots": order_book_replay.get("snapshots", []),
+                "base_spread_bps": float(scenario.slippage_bps or 5.0) + float(scenario.transaction_cost_bps or 8.0) * 0.4,
+            }
+        )
+        payload["intraday_replay"] = intraday_replay
+        payload["order_book_replay"] = order_book_replay
+        payload["microstructure"] = microstructure
+        payload["dataset_manifest"] = dataset_manifest.model_dump(mode="json")
+        payload["protection_report"] = protection_report.model_dump(mode="json")
+        payload["market_depth_status"] = market_depth_status
+        payload["data_tier"] = dataset_manifest.data_tier
+        payload["execution_quality_sandbox"] = {
+            "best_session": microstructure.get("metrics", {}).get("best_session"),
+            "session_breakdown": microstructure.get("session_breakdown", {}),
+            "scenarios": microstructure.get("execution_scenarios", []),
+            "warnings": microstructure.get("warnings", []),
+            "fallback_banner": "Real L2 unavailable; showing explicit L1 proxy diagnostics."
+            if order_book_replay.get("data_tier") != "l2"
+            else "",
+            "l2_source": order_book_replay.get("provider"),
+            "registry_gate_status": "blocked" if protection_report.protection_status == "blocked" else "review",
+        }
         if persist:
             payload["storage"] = self._persist("quant/simulation_results", result.simulation_id, payload)
         return payload
@@ -967,7 +1223,17 @@ class QuantIntelligenceService:
         ]
         return candidates
 
-    def _score_factor(self, candidate: FactorCandidate, signal_returns: dict[str, float]) -> FactorCard:
+    def _score_factor(
+        self,
+        candidate: FactorCandidate,
+        signal_returns: dict[str, float],
+        *,
+        dataset_id: str | None = None,
+        protection_status: str = "review",
+        frequency: str = "daily",
+        data_tier: str = "l1",
+        blocking_reasons: list[str] | None = None,
+    ) -> FactorCard:
         symbols = list(candidate.exposures)
         exposure_values = [float(candidate.exposures.get(symbol, 0.0)) for symbol in symbols]
         returns = [float(signal_returns.get(symbol, 0.0)) for symbol in symbols]
@@ -987,6 +1253,9 @@ class QuantIntelligenceService:
             status = "promoted"
         else:
             status = "research_only"
+        gate_blockers = list(blocking_reasons or [])
+        if protection_status == "blocked" and status == "promoted":
+            status = "research_only"
         failure_modes = []
         if not sample_ok:
             failure_modes.append("small sample; needs Stage 2 independent test split")
@@ -996,12 +1265,28 @@ class QuantIntelligenceService:
             failure_modes.append("high turnover may fail after transaction costs")
         if not leakage_ok:
             failure_modes.append("one or more inputs are not as-of safe")
+        if protection_status == "blocked":
+            failure_modes.append("research protections blocked promotion; keep factor in research_only mode")
+        if gate_blockers:
+            failure_modes.extend(gate_blockers)
+        registry_gate_status = "pass"
+        if protection_status == "blocked" or gate_blockers:
+            registry_gate_status = "blocked"
+        elif protection_status == "review" or status != "promoted":
+            registry_gate_status = "review"
         return FactorCard(
             factor_id=candidate.factor_id,
             name=candidate.name,
             family=candidate.family,
             definition=candidate.description,
             status=status,  # type: ignore[arg-type]
+            market="US",
+            frequency=frequency if frequency in {"daily", "intraday", "hybrid"} else "daily",  # type: ignore[arg-type]
+            data_tier=data_tier if data_tier in {"l1", "l2"} else "l1",  # type: ignore[arg-type]
+            dataset_id=dataset_id,
+            protection_status=protection_status if protection_status in {"pass", "review", "blocked"} else "review",  # type: ignore[arg-type]
+            registry_gate_status=registry_gate_status,  # type: ignore[arg-type]
+            blocking_reasons=gate_blockers,
             universe=symbols,
             horizon_days=candidate.horizon_days,
             missing_rate=round(missing, 6),
@@ -1159,6 +1444,243 @@ class QuantIntelligenceService:
             return values[int(index)]
         fraction = index - lower
         return values[lower] * (1.0 - fraction) + values[upper] * fraction
+
+    def _dataset_manifest_from_bundle(
+        self,
+        bundle: EvidenceBundle,
+        events: list[StructuredEvent],
+        features: dict[str, dict[str, float]],
+        *,
+        frequency: str = "daily",
+        required_data_tier: str = "l1",
+        metadata: dict[str, Any] | None = None,
+    ) -> DatasetManifest:
+        normalized_frequency = frequency if frequency in {"daily", "intraday", "hybrid"} else "daily"
+        symbols = sorted(set(bundle.universe) | {item.symbol for item in bundle.items} | set(features))
+        providers = list(dict.fromkeys([item.provider for item in bundle.items] + [str(bundle.connector_status.get("mode") or "")]))
+        providers = [provider for provider in providers if provider]
+        freshness_scores = [float(item.freshness_score or 0.0) for item in bundle.items]
+        market_depth_status = self.market_depth_status(
+            symbols=symbols[:5],
+            require_l2=str(required_data_tier or "l1").lower() == "l2",
+        )
+        dataset_seed = {
+            "decision_time": bundle.decision_time,
+            "symbols": symbols,
+            "providers": providers,
+            "frequency": normalized_frequency,
+            "item_count": len(bundle.items),
+            "event_count": len(events),
+            "market_depth_provider": market_depth_status.get("selected_provider"),
+            "required_data_tier": required_data_tier,
+        }
+        dataset_id = f"dataset-{_stable_hash(dataset_seed)[:12]}"
+        return DatasetManifest(
+            dataset_id=dataset_id,
+            generated_at=_iso_now(),
+            market="US",
+            frequency=normalized_frequency,  # type: ignore[arg-type]
+            data_tier=market_depth_status.get("data_tier", "l1"),  # type: ignore[arg-type]
+            as_of_time=bundle.decision_time,
+            universe=symbols,
+            instruments=[self._instrument_contract(symbol) for symbol in symbols],
+            provider_chain=providers,
+            freshness={
+                "item_count": len(bundle.items),
+                "event_count": len(events),
+                "avg_freshness_score": round(_mean(freshness_scores), 6),
+                "as_of_safe_ratio": bundle.quality_summary.get("as_of_safe_ratio", 0.0),
+            },
+            market_depth_status=market_depth_status,
+            depth_session_ids=[
+                str(snapshot.get("snapshot_id") or "")
+                for snapshot in market_depth_status.get("latest", [])
+                if str(snapshot.get("snapshot_id") or "").strip()
+            ],
+            provider_capabilities=market_depth_status.get("provider_capabilities", {}),
+            lineage=bundle.lineage
+            + [
+                "L3: US equity instrument contract normalization",
+                "L4: dataset manifest with provider chain, freshness, and feature store",
+                "L5: shared market-depth contract with explicit data-tier diagnostics",
+            ],
+            feature_store=features,
+            metadata={**(metadata or {}), "required_data_tier": required_data_tier},
+        )
+
+    def _protection_report_from_bundle(
+        self,
+        bundle: EvidenceBundle,
+        *,
+        dataset_manifest: DatasetManifest,
+        formulas: list[str] | None = None,
+        labels: list[dict[str, Any]] | None = None,
+        timestamps: list[str] | None = None,
+        current_constituents_only: bool = False,
+        frequency: str = "daily",
+        required_data_tier: str = "l1",
+    ) -> ResearchProtectionReport:
+        formulas = formulas or []
+        labels = labels or []
+        timestamps = timestamps or []
+        decision_dt = _parse_dt(bundle.decision_time) or datetime.now(timezone.utc)
+        lookahead_hits = [
+            item.item_id
+            for item in bundle.items
+            if item.leakage_guard != "as_of_safe" or ((_parse_dt(item.observed_at) or decision_dt) > decision_dt)
+        ]
+        label_hits = [
+            label
+            for label in labels
+            if (_parse_dt(str(label.get("timestamp") or label.get("observed_at") or "")) or decision_dt) > decision_dt
+        ]
+        timestamp_hits = [value for value in timestamps if (_parse_dt(value) or decision_dt) > decision_dt]
+        recursive_flags = [
+            formula
+            for formula in formulas
+            if any(token in str(formula).lower() for token in ("shift(-", "lead(", "future", "t+1", "next_return"))
+        ]
+        session_misaligned = [
+            item.item_id
+            for item in bundle.items
+            if str(item.metadata.get("timezone") or "America/New_York") not in {"America/New_York", "US/Eastern"}
+        ]
+        survivorship_warning = bool(current_constituents_only or len(dataset_manifest.universe) <= 3)
+        market_depth_status = dict(dataset_manifest.market_depth_status or {})
+        latest_depth = list(market_depth_status.get("latest") or [])
+        depth_timestamp_violations = [
+            str(snapshot.get("snapshot_id") or snapshot.get("timestamp") or "")
+            for snapshot in latest_depth
+            if (
+                _parse_dt(str(snapshot.get("timestamp") or "")) is None
+                or (_parse_dt(str(snapshot.get("timestamp") or "")) or decision_dt) > (datetime.now(timezone.utc) + timedelta(minutes=5))
+            )
+        ]
+        allowed_sessions = {"pre", "open", "midday", "close", "post", "regular", "halt", "auction"}
+        depth_session_violations = [
+            str(snapshot.get("snapshot_id") or snapshot.get("session") or "")
+            for snapshot in latest_depth
+            if str(snapshot.get("session") or "regular") not in allowed_sessions
+        ]
+        l2_required = str(required_data_tier or "l1").lower() == "l2"
+        l2_available = bool(
+            market_depth_status.get("available")
+            and market_depth_status.get("is_real_provider")
+            and market_depth_status.get("data_tier") == "l2"
+        )
+        checks = {
+            "lookahead": {
+                "passed": not lookahead_hits and not label_hits and not timestamp_hits,
+                "violations": lookahead_hits + [str(item.get("timestamp") or item.get("observed_at") or "") for item in label_hits] + timestamp_hits,
+                "detail": "Evidence and labels must be observed on or before decision_time.",
+            },
+            "recursive_formula": {
+                "passed": not recursive_flags,
+                "violations": recursive_flags,
+                "detail": "Formula strings may not reference future shifts or lead windows.",
+            },
+            "as_of_leakage": {
+                "passed": bundle.quality_summary.get("as_of_safe_ratio", 0.0) >= 0.99,
+                "violations": lookahead_hits,
+                "detail": "Evidence bundle must remain as-of safe.",
+            },
+            "session_alignment": {
+                "passed": not session_misaligned,
+                "violations": session_misaligned,
+                "detail": "US equity research should stay aligned to America/New_York and XNYS sessions.",
+            },
+            "survivorship_bias": {
+                "passed": not survivorship_warning,
+                "violations": ["current_constituents_only"] if current_constituents_only else (["small_shadow_universe"] if len(dataset_manifest.universe) <= 3 else []),
+                "detail": "Registry promotion should not rely only on current constituents or tiny universes.",
+            },
+            "l2_availability": {
+                "passed": (not l2_required) or l2_available,
+                "violations": [] if (not l2_required or l2_available) else ["l2_required_but_unavailable"],
+                "detail": "Strategies or research that require L2 must be backed by a real market-depth provider.",
+            },
+            "depth_timestamp_integrity": {
+                "passed": not depth_timestamp_violations,
+                "violations": depth_timestamp_violations,
+                "detail": "Depth snapshots must carry parseable timestamps and may not drift into the future.",
+            },
+            "depth_session_alignment": {
+                "passed": not depth_session_violations,
+                "violations": depth_session_violations,
+                "detail": "Depth snapshots must map to supported US equity session labels.",
+            },
+        }
+        blocking_checks = [
+            name
+            for name, report in checks.items()
+            if not bool(report.get("passed")) and name != "survivorship_bias"
+        ]
+        warnings = []
+        if survivorship_warning:
+            warnings.append("Universe composition may be survivorship-biased; keep outputs in research_only mode until expanded.")
+        if market_depth_status.get("data_tier") != "l2":
+            warnings.append("Minute-level or execution-quality diagnostics may be running on explicit L1 proxy mode.")
+        blocking_reasons = list(dict.fromkeys(
+            [value for name in blocking_checks for value in checks.get(name, {}).get("violations", []) if value]
+        ))
+        protection_status = "blocked" if blocking_checks else "review" if warnings else "pass"
+        return ResearchProtectionReport(
+            report_id=f"protection-{dataset_manifest.dataset_id}",
+            generated_at=_iso_now(),
+            dataset_id=dataset_manifest.dataset_id,
+            decision_time=bundle.decision_time,
+            market="US",
+            frequency=frequency if frequency in {"daily", "intraday", "hybrid"} else "daily",  # type: ignore[arg-type]
+            data_tier=dataset_manifest.data_tier,  # type: ignore[arg-type]
+            required_data_tier=required_data_tier if required_data_tier in {"l1", "l2"} else "l1",  # type: ignore[arg-type]
+            protection_status=protection_status,  # type: ignore[arg-type]
+            market_depth_status=market_depth_status,
+            checks=checks,
+            blocking_checks=blocking_checks,
+            blocking_reasons=blocking_reasons,
+            warnings=warnings,
+            lineage=dataset_manifest.lineage
+            + [
+                "L6: research protections covering lookahead, recursive formulas, as-of leakage, session alignment, survivorship bias, and market depth integrity",
+            ],
+        )
+
+    def _instrument_contract(self, symbol: str) -> InstrumentContract:
+        return InstrumentContract(symbol=str(symbol).upper())
+
+    def _build_intraday_replay(self, signal: ResearchSignal, scenario: SimulationScenario) -> dict[str, Any]:
+        base_price = 100.0 + abs(float(signal.expected_return or 0.0)) * 800
+        bars: list[dict[str, Any]] = []
+        sessions = [
+            ("open", "09:30"),
+            ("midday", "12:00"),
+            ("close", "15:45"),
+            ("halt", "13:10"),
+            ("high_volatility", "10:05"),
+        ]
+        for index, (session, clock) in enumerate(sessions):
+            spread_bps = float(scenario.slippage_bps or 5.0) + (4.0 if session == "open" else 1.5 if session == "midday" else 3.0)
+            impact_bps = float(scenario.transaction_cost_bps or 8.0) * (0.55 if session == "midday" else 0.95)
+            fill_probability = _bounded(0.97 - (spread_bps + impact_bps) / 120.0 - (0.25 if session == "halt" else 0.0), 0.2, 0.99)
+            bars.append(
+                {
+                    "timestamp": f"{datetime.now(timezone.utc).date().isoformat()}T{clock}:00-04:00",
+                    "session": session,
+                    "price": round(base_price * (1 + (index - 2) * 0.0025), 4),
+                    "spread_bps": round(spread_bps, 4),
+                    "impact_bps": round(impact_bps, 4),
+                    "slippage_bps": round(spread_bps * 0.7, 4),
+                    "fill_probability": round(fill_probability, 6),
+                    "volume": round(90000 * (1.4 if session == "open" else 0.7 if session == "midday" else 1.1), 2),
+                }
+            )
+        return {
+            "symbol": signal.symbol,
+            "frequencies": ["1m", "5m", "15m"],
+            "bars": bars,
+            "session_calendar": "XNYS",
+            "timezone": "America/New_York",
+        }
 
     def _persist(self, relative_dir: str, record_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         target_dir = self.storage_root / relative_dir

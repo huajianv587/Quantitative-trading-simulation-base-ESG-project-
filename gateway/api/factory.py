@@ -16,6 +16,20 @@ from gateway.ops.security import authorize_request
 from gateway.utils.logger import get_logger
 
 logger = get_logger(__name__)
+APP_ID = "quant-terminal"
+APP_SERVICE_NAME = "Quant Terminal"
+
+
+def _resolve_frontend_mount_dir() -> tuple[Path | None, str]:
+    project_root = Path(__file__).resolve().parents[2]
+    dist_frontend_path = project_root / "dist" / "app"
+    source_frontend_path = project_root / "frontend"
+
+    if dist_frontend_path.exists():
+        return dist_frontend_path, "dist"
+    if source_frontend_path.exists():
+        return source_frontend_path, "source"
+    return None, "missing"
 
 
 def _parse_cors_origins(raw_value: str) -> list[str]:
@@ -46,13 +60,17 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
 
     app = FastAPI(title="ESG Agentic RAG Copilot", lifespan=lifespan)
     app.state.runtime = app_runtime
+    app.state.app_id = APP_ID
+    app.state.service_name = APP_SERVICE_NAME
+    app.state.landing_entry = "/"
+    app.state.ui_entry = "/app/"
 
     allowed_origins = _parse_cors_origins(os.getenv("CORS_ORIGINS", "*"))
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+        allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Trace-ID", "x-api-key"],
     )
 
     @app.middleware("http")
@@ -80,11 +98,13 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
     app.include_router(trading.router)
     app.include_router(ops.router)
 
-    frontend_path = Path(__file__).resolve().parents[2] / "frontend"
-    if frontend_path.exists():
+    frontend_path, frontend_source = _resolve_frontend_mount_dir()
+    app.state.frontend_source = frontend_source
+    app.state.frontend_path = str(frontend_path) if frontend_path else None
+    if frontend_path is not None:
         app.mount("/app", StaticFiles(directory=frontend_path, html=True), name="frontend")
-        logger.info(f"Frontend mounted at /app from {frontend_path}")
+        logger.info(f"Frontend mounted at /app from {frontend_path} ({frontend_source})")
     else:
-        logger.warning(f"Frontend directory not found at {frontend_path}")
+        logger.warning("Frontend directory not found in dist/app or frontend source")
 
     return app

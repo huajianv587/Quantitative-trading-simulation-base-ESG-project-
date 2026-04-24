@@ -90,6 +90,14 @@ class ResearchSignal(BaseModel):
     factor_scores: list[FactorScore] = Field(default_factory=list)
     catalysts: list[str] = Field(default_factory=list)
     data_lineage: list[str] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
+    dataset_id: str | None = None
+    protection_status: Literal["pass", "review", "blocked"] = "review"
+    frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    data_tier: Literal["l1", "l2"] = "l1"
+    registry_gate_status: Literal["pass", "review", "blocked"] = "review"
+    blocking_reasons: list[str] = Field(default_factory=list)
+    market: str = "US"
     market_data_source: str | None = None
     prediction_mode: Literal["model", "unavailable"] | None = None
     projection_basis_return: float | None = None

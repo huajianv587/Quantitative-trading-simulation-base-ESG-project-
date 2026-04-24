@@ -112,6 +112,11 @@ def test_health_endpoint_returns_basic_status():
     assert "runtime" in data
     assert "modules" in data
     assert "ready" in data
+    assert data["app_id"] == "quant-terminal"
+    assert data["service_name"] == "Quant Terminal"
+    assert data["landing_entry"].endswith("/")
+    assert data["ui_entry"].endswith("/app/")
+    assert data["api_base_url"].startswith("http://testserver")
 
 
 def test_ready_endpoint_tracks_rag_initialization():

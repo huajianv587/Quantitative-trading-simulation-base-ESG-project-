@@ -6,6 +6,7 @@ import {
   esc,
   metric,
   pct,
+  renderRegistryGate,
   renderError,
   renderTokenPreview,
   setLoading,
@@ -16,6 +17,7 @@ let _container = null;
 let _langCleanup = null;
 let _strategies = [];
 let _policy = null;
+let _eligibility = null;
 let _clickHandler = null;
 
 const COPY = {
@@ -107,6 +109,7 @@ export function destroy() {
   _container = null;
   _strategies = [];
   _policy = null;
+  _eligibility = null;
 }
 
 function renderShell() {
@@ -162,6 +165,7 @@ async function refreshRegistry() {
     ]);
     if (!isMounted()) return;
     _strategies = Array.isArray(strategyPayload?.strategies) ? strategyPayload.strategies : [];
+    _eligibility = strategyPayload?.eligibility || null;
     _policy = policy;
     renderRegistry();
   } catch (error) {
@@ -202,6 +206,7 @@ function renderKpis() {
     ${metric(c('allocation'), pct(activeAllocation))}
     ${metric(c('allowed'), allowlist.length, allowlist.length ? 'positive' : 'risk')}
     ${metric(c('paperReady'), paperReady, paperReady ? 'positive' : 'risk')}
+    ${metric('Eligible', _eligibility?.eligible_count ?? 0, (_eligibility?.eligible_count || 0) ? 'positive' : 'risk')}
   `;
 }
 
@@ -226,6 +231,7 @@ function renderStrategyCard(strategy) {
         ${metric(c('allowlistState'), included ? c('included') : c('excluded'), included ? 'positive' : 'risk')}
         ${metric(c('paperReady'), strategy.paper_ready ? 'yes' : 'no', strategy.paper_ready ? 'positive' : 'risk')}
       </div>
+      ${renderRegistryGate(strategy)}
       <div class="workbench-section">
         <div class="workbench-section__title">${c('factorDeps')}</div>
         ${renderTokenPreview(strategy.factor_dependencies || [], { tone: 'accent', maxItems: 6 })}
@@ -233,6 +239,15 @@ function renderStrategyCard(strategy) {
       <div class="workbench-section">
         <div class="workbench-section__title">${c('allowedSymbols')}</div>
         ${renderTokenPreview(strategy.allowed_symbols || [], { tone: 'neutral', maxItems: 6 })}
+      </div>
+      <div class="workbench-section">
+        <div class="workbench-section__title">Runtime</div>
+        <div class="workbench-kv-list compact-kv-list">
+          <div class="workbench-kv-row"><span>dataset</span><strong>${esc(strategy.latest_dataset_id || '-')}</strong></div>
+          <div class="workbench-kv-row"><span>protection</span><strong>${esc(strategy.latest_protection_status || 'review')}</strong></div>
+          <div class="workbench-kv-row"><span>L2</span><strong>${esc(strategy.latest_l2_status || 'review')}</strong></div>
+          <div class="workbench-kv-row"><span>RL run</span><strong>${esc(strategy.bound_rl_run_id || '-')}</strong></div>
+        </div>
       </div>
       <div class="grid-2 compact-control-grid">
         <label class="field">

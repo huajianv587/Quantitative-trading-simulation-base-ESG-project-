@@ -224,9 +224,103 @@ export function emptyState(title = text('empty'), detail = '') {
   </div>`;
 }
 
-export function renderError(el, err) {
+export function renderError(el, err, options = {}) {
   if (!el) return;
-  el.innerHTML = emptyState(text('requestFailed'), err?.message || String(err || ''));
+
+  // 使用统一的错误处理系统
+  if (window.errorHandler) {
+    const errorInfo = window.errorHandler.parseError(err, {
+      context: options.context || 'workbench',
+    });
+    const errorUI = window.errorHandler.createErrorUI(errorInfo, {
+      variant: options.variant || 'compact',
+      showRetry: options.showRetry !== undefined ? options.showRetry : Boolean(options.onRetry),
+      showSuggestions: options.showSuggestions !== undefined ? options.showSuggestions : true,
+      onRetry: typeof options.onRetry === 'function' ? options.onRetry : null,
+    });
+    el.innerHTML = '';
+    el.appendChild(errorUI);
+  } else {
+    // 降级处理
+    el.innerHTML = emptyState(text('requestFailed'), err?.message || String(err || ''));
+  }
+}
+
+export function persistPayloadSnapshot(storageKey, payload, meta) {
+  if (!storageKey || payload === undefined) return null;
+  const record = {
+    saved_at: Date.now(),
+    payload,
+    meta: meta || {},
+  };
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(record));
+  } catch (_ignore) {
+    return null;
+  }
+  return record;
+}
+
+export function loadPayloadSnapshot(storageKey, ttlMs) {
+  if (!storageKey) return null;
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.payload === undefined) return null;
+    const savedAt = Number(parsed.saved_at || 0);
+    if (ttlMs && savedAt && (Date.now() - savedAt) > Number(ttlMs)) return null;
+    return {
+      saved_at: savedAt || null,
+      payload: parsed.payload,
+      meta: parsed.meta || {},
+    };
+  } catch (_ignore) {
+    return null;
+  }
+}
+
+export function removePayloadSnapshot(storageKey) {
+  if (!storageKey) return;
+  try {
+    localStorage.removeItem(storageKey);
+  } catch (_ignore) {
+    // Ignore cleanup failures.
+  }
+}
+
+function formatSnapshotAge(savedAt) {
+  const ageMs = Date.now() - Number(savedAt || 0);
+  if (!Number.isFinite(ageMs) || ageMs <= 0) return '-';
+  const ageSeconds = Math.round(ageMs / 1000);
+  if (ageSeconds < 60) return `${ageSeconds}s`;
+  const ageMinutes = Math.round(ageSeconds / 60);
+  if (ageMinutes < 60) return `${ageMinutes}m`;
+  const ageHours = Math.round(ageMinutes / 60);
+  if (ageHours < 48) return `${ageHours}h`;
+  return `${Math.round(ageHours / 24)}d`;
+}
+
+export function renderDegradedNotice(meta) {
+  const state = meta || {};
+  const tone = String(state.tone || 'warning').toLowerCase();
+  const title = state.title || 'Degraded view';
+  const reason = state.reason || 'Showing the last successful snapshot while the live request recovers.';
+  const detail = state.detail || '';
+  const action = state.action || '';
+  const savedAt = state.savedAt || state.saved_at || null;
+  const staleLabel = savedAt ? `snapshot ${formatSnapshotAge(savedAt)} ago` : '';
+  return `<div class="degraded-notice degraded-notice--${esc(tone)}">
+    <div class="degraded-notice__header">
+      <strong>${esc(title)}</strong>
+      ${staleLabel ? `<span>${esc(staleLabel)}</span>` : ''}
+    </div>
+    <div class="degraded-notice__body">
+      <span>${esc(reason)}</span>
+      ${detail ? `<span>${esc(detail)}</span>` : ''}
+      ${action ? `<span>${esc(action)}</span>` : ''}
+    </div>
+  </div>`;
 }
 
 export function metric(label, value, tone = '') {
@@ -346,24 +440,123 @@ export function renderFactorCards(cards, options = {}) {
   </div>`;
 }
 
+export function renderProtectionChecks(checks) {
+  var entries = checks && typeof checks === 'object' ? Object.entries(checks) : [];
+  if (!entries.length) return emptyState('Protection Checks', text('notSet'));
+  return `<div class="workbench-kv-list compact-kv-list">
+    ${entries.map(function(entry) {
+      var key = entry[0];
+      var value = entry[1] || {};
+      var violations = Array.isArray(value.violations) ? value.violations : [];
+      return `<div class="workbench-kv-row">
+        <span>${esc(key.replace(/_/g, ' '))}</span>
+        <strong>${statusBadge(value.passed ? 'pass' : 'blocked')}</strong>
+        <em>${esc(violations.length ? violations.slice(0, 2).join(', ') : (value.detail || 'clean'))}</em>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+export function renderProtectionReport(report) {
+  if (!report || typeof report !== 'object') return emptyState('Protection Report', text('notSet'));
+  return `
+    <section class="workbench-section">
+      <div class="workbench-section__title">Protection Report</div>
+      <div class="workbench-mini-grid">
+        ${miniMetric('dataset', report.dataset_id || '-')}
+        ${miniMetric('market', report.market || 'US')}
+        ${miniMetric('frequency', report.frequency || '-')}
+        ${miniMetric('tier', report.data_tier || 'l1')}
+      </div>
+      <div class="factor-check-row">
+        <span>status</span>
+        <strong>${statusBadge(report.protection_status || 'review')}</strong>
+      </div>
+      ${renderTokenPreview(report.blocking_reasons || report.blocking_checks || [], { tone: 'risk', maxItems: 6, emptyLabel: 'no blockers' })}
+      ${renderProtectionChecks(report.checks)}
+    </section>
+  `;
+}
+
+export function renderRegistryGate(payload) {
+  if (!payload || typeof payload !== 'object') return emptyState('Registry Gate', text('notSet'));
+  return `
+    <section class="workbench-section">
+      <div class="workbench-section__title">Registry Gate</div>
+      <div class="workbench-mini-grid">
+        ${miniMetric('status', humanizeStatus(payload.registry_gate_status || payload.eligibility_status || 'review'))}
+        ${miniMetric('eligible', payload.eligible_for_execution === undefined ? '-' : String(Boolean(payload.eligible_for_execution)))}
+        ${miniMetric('required freq', payload.required_frequency || payload.frequency || '-')}
+        ${miniMetric('required tier', payload.required_data_tier || payload.data_tier || 'l1')}
+      </div>
+      ${renderTokenPreview(payload.blocking_reasons || [], { tone: 'risk', maxItems: 6, emptyLabel: 'no blockers' })}
+    </section>
+  `;
+}
+
+export function renderMarketDepthDiagnostics(payload) {
+  if (!payload || typeof payload !== 'object') return emptyState('Market Depth', text('notSet'));
+  var latest = Array.isArray(payload.latest) ? payload.latest : [];
+  return `
+    <section class="workbench-section">
+      <div class="workbench-section__title">Market Depth</div>
+      <div class="workbench-mini-grid">
+        ${miniMetric('provider', payload.selected_provider || payload.provider || '-')}
+        ${miniMetric('tier', payload.data_tier || 'l1')}
+        ${miniMetric('history', payload.history_ready === undefined ? '-' : String(Boolean(payload.history_ready)))}
+        ${miniMetric('realtime', payload.realtime_ready === undefined ? '-' : String(Boolean(payload.realtime_ready)))}
+      </div>
+      <div class="factor-check-row">
+        <span>gate</span>
+        <strong>${statusBadge(payload.eligibility_status || 'review')}</strong>
+      </div>
+      ${renderTokenPreview(payload.blocking_reasons || [], { tone: 'risk', maxItems: 6, emptyLabel: 'no blockers' })}
+      ${latest.length ? `<div class="workbench-kv-list compact-kv-list">
+        ${latest.slice(0, 3).map(function(snapshot) {
+          return `<div class="workbench-kv-row"><span>${esc(snapshot.symbol || '')}</span><strong>${esc(snapshot.spread_bps || 0)} bps / ${esc(snapshot.session || '-')}</strong></div>`;
+        }).join('')}
+      </div>` : ''}
+    </section>
+  `;
+}
+
 export function renderSimulationSummary(payload) {
   if (!payload) return emptyState(text('noSimulation'), text('noSimulationHint'));
-  const regime = payload.market_regime || payload.regime || '-';
+  var scenario = payload.scenario || {};
   return `
     <div class="workbench-metric-grid functional-empty__metrics">
       ${metric(text('expected'), pct(payload.expected_return ?? payload.mean_return ?? 0))}
-      ${metric(text('lossProb'), pct(payload.loss_probability ?? payload.tail_loss_probability ?? 0))}
-      ${metric(text('stability'), num(payload.stability_score ?? payload.sharpe_like ?? 0))}
-      ${metric(text('samples'), payload.sample_count ?? payload.paths ?? '-')}
+      ${metric(text('lossProb'), pct(payload.probability_of_loss ?? payload.loss_probability ?? payload.tail_loss_probability ?? 0))}
+      ${metric(text('stability'), num(payload.max_drawdown_p95 ?? payload.stability_score ?? payload.sharpe_like ?? 0))}
+      ${metric(text('samples'), payload.path_summary?.p50 !== undefined ? Object.keys(payload.path_summary || {}).length : (scenario.paths ?? payload.paths ?? '-'))}
     </div>
     <div class="workbench-kv-list compact-kv-list">
-      <div class="workbench-kv-row"><span>${text('pathSummary')}</span><strong>${esc(regime)}</strong></div>
-      <div class="workbench-kv-row"><span>${text('factorAttribution')}</span><strong>${esc(payload.factor_summary || payload.driver_summary || text('notSet'))}</strong></div>
-      <div class="workbench-kv-row"><span>${text('historicalAnalogs')}</span><strong>${esc(payload.analog_count ?? payload.closest_analogs ?? '-')}</strong></div>
+      <div class="workbench-kv-row"><span>${text('pathSummary')}</span><strong>${esc(scenario.regime || scenario.scenario_name || '-')}</strong></div>
+      <div class="workbench-kv-row"><span>frequency / tier</span><strong>${esc((payload.dataset_manifest || {}).frequency || payload.frequency || '-')} / ${esc(payload.data_tier || ((payload.dataset_manifest || {}).data_tier) || 'l1')}</strong></div>
+      <div class="workbench-kv-row"><span>${text('historicalAnalogs')}</span><strong>${esc((payload.historical_analogs || []).length || '-')}</strong></div>
     </div>
   `;
 }
 
 export function renderSimulationResult(payload) {
-  return renderSimulationSummary(payload);
+  if (!payload) return renderSimulationSummary(payload);
+  var micro = payload.microstructure || {};
+  var sandbox = payload.execution_quality_sandbox || {};
+  var replay = payload.order_book_replay || {};
+  return `
+    ${renderSimulationSummary(payload)}
+    ${renderMarketDepthDiagnostics(payload.market_depth_status || replay)}
+    ${renderProtectionReport(payload.protection_report)}
+    <section class="workbench-section">
+      <div class="workbench-section__title">Execution Sandbox</div>
+      <div class="workbench-mini-grid">
+        ${miniMetric('best session', micro.metrics?.best_session || sandbox.best_session || '-')}
+        ${miniMetric('spread', num(micro.metrics?.avg_spread_bps || replay.summary?.avg_spread_bps || 0, 2))}
+        ${miniMetric('depth', num(micro.metrics?.avg_depth || replay.summary?.avg_bid_depth || 0, 2))}
+        ${miniMetric('imbalance', num(micro.metrics?.avg_imbalance || replay.summary?.avg_imbalance || 0, 3))}
+      </div>
+      ${sandbox.fallback_banner ? `<div class="empty-state empty-state--compact"><div class="empty-state__text">${esc(sandbox.fallback_banner)}</div></div>` : ''}
+      ${renderTokenPreview((sandbox.warnings || micro.warnings || []), { tone: 'risk', maxItems: 6, emptyLabel: 'no warnings' })}
+    </section>
+  `;
 }

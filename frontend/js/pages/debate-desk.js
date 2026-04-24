@@ -4,10 +4,13 @@ import { getLang, onLangChange } from '../i18n.js?v=8';
 import {
   emptyState,
   esc,
+  loadPayloadSnapshot,
   metric,
   miniMetric,
   num,
+  persistPayloadSnapshot,
   pct,
+  renderDegradedNotice,
   renderError,
   renderTokenPreview,
   setLoading,
@@ -19,6 +22,10 @@ let _container = null;
 let _langCleanup = null;
 let _debates = [];
 let _current = null;
+let _degradedMeta = null;
+
+const DEBATE_CACHE_KEY = 'qt.debate-desk.snapshot.v1';
+const DEBATE_CACHE_TTL_MS = 20 * 60 * 1000;
 
 const COPY = {
   en: {
@@ -178,11 +185,45 @@ function actionLabel(value) {
   return map[normalized] || String(value || '-');
 }
 
+function debateDegradedState(savedAt, reason) {
+  return {
+    tone: 'warning',
+    saved_at: savedAt || null,
+    title: getLang() === 'zh' ? '辩论台已切换到缓存快照' : 'Debate Desk is showing a cached snapshot',
+    reason: reason || (getLang() === 'zh'
+      ? '当前继续展示最近一次成功的辩论结果，等待实时链路恢复。'
+      : 'The latest successful debate payload is still visible while the live request recovers.'),
+    detail: getLang() === 'zh'
+      ? '当前结论、冲突点和移交动作都来自最近一次成功结果。'
+      : 'Current verdict, conflict map, and handoff actions come from the latest successful run.',
+    action: getLang() === 'zh'
+      ? '可以继续点击“运行辩论”或“刷新台账”重试。'
+      : 'Use Run Debate or Refresh Ledger to retry.',
+  };
+}
+
+function hydrateDebateSnapshot() {
+  const cached = loadPayloadSnapshot(DEBATE_CACHE_KEY, DEBATE_CACHE_TTL_MS);
+  if (!cached?.payload) return false;
+  _debates = cached.payload.debates || [];
+  _current = cached.payload.current || _debates[0] || null;
+  _degradedMeta = debateDegradedState(
+    cached.saved_at,
+    getLang() === 'zh'
+      ? '正在回填最近一次成功的辩论快照，并在后台重新连接服务。'
+      : 'Rehydrating the latest successful debate snapshot while reconnecting.',
+  );
+  renderCurrent();
+  renderLedger();
+  return true;
+}
+
 export async function render(container) {
   _container = container;
   renderShell();
   wire();
   renderFieldPreviews();
+  hydrateDebateSnapshot();
   _langCleanup = onLangChange(() => {
     if (!_container?.isConnected) return;
     renderShell();
@@ -198,6 +239,7 @@ export function destroy() {
   _container = null;
   _debates = [];
   _current = null;
+  _degradedMeta = null;
   _langCleanup?.();
   _langCleanup = null;
 }
@@ -321,11 +363,22 @@ async function refreshLedger() {
     const payload = await api.trading.debateRuns(symbol(), 12);
     _debates = payload.debates || [];
     _current = _debates[0] || null;
+    persistPayloadSnapshot(DEBATE_CACHE_KEY, { debates: _debates, current: _current }, { symbol: symbol() });
+    _degradedMeta = null;
     renderLedger();
     renderCurrent();
   } catch (err) {
-    renderError(_container.querySelector('#debate-ledger'), err);
-    renderError(_container.querySelector('#debate-current'), err);
+    const cached = loadPayloadSnapshot(DEBATE_CACHE_KEY, DEBATE_CACHE_TTL_MS);
+    if (cached?.payload) {
+      _debates = cached.payload.debates || [];
+      _current = cached.payload.current || _debates[0] || null;
+      _degradedMeta = debateDegradedState(cached.saved_at, err.message);
+      renderLedger();
+      renderCurrent();
+      return;
+    }
+    renderError(_container.querySelector('#debate-ledger'), err, { onRetry: refreshLedger });
+    renderError(_container.querySelector('#debate-current'), err, { onRetry: refreshLedger });
   }
 }
 
@@ -343,22 +396,35 @@ async function runDebate() {
     });
     _debates = [payload, ..._debates.filter((item) => item.debate_id !== payload.debate_id)];
     _current = payload;
+    persistPayloadSnapshot(DEBATE_CACHE_KEY, { debates: _debates, current: _current }, { symbol: symbol() });
+    _degradedMeta = null;
     renderLedger();
     renderCurrent();
   } catch (err) {
-    renderError(_container.querySelector('#debate-current'), err);
+    const cached = loadPayloadSnapshot(DEBATE_CACHE_KEY, DEBATE_CACHE_TTL_MS);
+    if (cached?.payload) {
+      _debates = cached.payload.debates || [];
+      _current = cached.payload.current || _debates[0] || null;
+      _degradedMeta = debateDegradedState(cached.saved_at, err.message);
+      renderLedger();
+      renderCurrent();
+      return;
+    }
+    renderError(_container.querySelector('#debate-current'), err, { onRetry: runDebate });
   }
 }
 
 function renderLedger() {
   const host = _container.querySelector('#debate-ledger');
   if (!host) return;
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!_debates.length) {
     host.innerHTML = emptyState(c('noLedger'), c('noLedgerHint'));
     return;
   }
 
   host.innerHTML = `
+    ${degradedBanner}
     <div class="workbench-mini-grid">
       ${miniMetric(c('latestRun'), _debates[0]?.symbol || '-')}
       ${miniMetric(c('roundsCount'), String(_debates[0]?.turns?.length || 0))}
@@ -386,6 +452,7 @@ function renderLedger() {
 function renderCurrent() {
   const host = _container.querySelector('#debate-current');
   if (!host) return;
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!_current) {
     host.innerHTML = emptyState(c('noSelected'), c('noSelectedHint'));
     return;
@@ -401,6 +468,7 @@ function renderCurrent() {
   const paperReady = riskReady && Number(_current.dispute_score || 0) < 0.68;
 
   host.innerHTML = `
+    ${degradedBanner}
     <div class="workbench-metric-grid">
       ${metric(c('verdict'), actionLabel(_current.judge_verdict || _current.recommended_action), 'positive')}
       ${metric(c('confidence'), num(_current.judge_confidence || 0))}

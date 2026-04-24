@@ -33,15 +33,14 @@ const TEXT_AUDIT_PATTERNS = [
 const rawApiBaseUrl = String(process.env.ESG_API_BASE_URL || '').trim();
 const apiBaseUrl = rawApiBaseUrl ? rawApiBaseUrl.replace(/\/+$/, '') : '';
 
-rmSync(distDir, { recursive: true, force: true });
-mkdirSync(distAppDir, { recursive: true });
+prepareDistBundle();
 copyDirectory(frontendDir, distAppDir);
 
 writeFileSync(
   join(distAppDir, 'app-config.js'),
   apiBaseUrl
-    ? `window.__ESG_API_BASE_URL__ = window.__ESG_API_BASE_URL__ || ${JSON.stringify(apiBaseUrl)};\n`
-    : `window.__ESG_API_BASE_URL__ = window.__ESG_API_BASE_URL__ || window.location.origin;\n`,
+    ? `window.__ESG_APP_ORIGIN__ = window.__ESG_APP_ORIGIN__ || window.location.origin;\nwindow.__ESG_API_BASE_URL__ = window.__ESG_API_BASE_URL__ || ${JSON.stringify(apiBaseUrl)};\n`
+    : `window.__ESG_APP_ORIGIN__ = window.__ESG_APP_ORIGIN__ || window.location.origin;\nwindow.__ESG_API_BASE_URL__ = window.__ESG_API_BASE_URL__ || window.location.origin;\n`,
   'utf8',
 );
 
@@ -78,6 +77,31 @@ function copyDirectory(sourceDir, targetDir) {
     if (entry.isFile() || statSync(sourcePath).isFile()) {
       copyFileSync(sourcePath, targetPath);
     }
+  }
+}
+
+function prepareDistBundle() {
+  mkdirSync(distDir, { recursive: true });
+  resetDirectoryContents(distAppDir);
+  removeIfExists(join(distDir, 'index.html'));
+}
+
+function resetDirectoryContents(targetDir) {
+  mkdirSync(targetDir, { recursive: true });
+  for (const entry of readdirSync(targetDir, { withFileTypes: true })) {
+    removeIfExists(join(targetDir, entry.name));
+  }
+}
+
+function removeIfExists(targetPath) {
+  if (!existsSync(targetPath)) return;
+  try {
+    rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 120 });
+  } catch (error) {
+    if (error?.code !== 'EPERM') {
+      throw error;
+    }
+    console.warn(`build_static_frontend: unable to fully remove ${targetPath}; continuing with overwrite mode`);
   }
 }
 

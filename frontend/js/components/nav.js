@@ -94,6 +94,15 @@ function currentGroupState() {
   return isDesktopNavViewport() ? getStoredGroups() : _runtimeGroupState;
 }
 
+function defaultGroupState(currentPath) {
+  const openAllGroups = !isDesktopNavViewport();
+  const state = {};
+  NAV_GROUPS.forEach((group) => {
+    state[group.id] = openAllGroups || group.paths.includes(currentPath);
+  });
+  return state;
+}
+
 function routeMeta(path) {
   return ROUTES[path];
 }
@@ -117,16 +126,16 @@ function groupChildCount(group) {
   }).length;
 }
 
-function normalizeGroupState(currentPath, routeChanged = false) {
+function normalizeGroupState(currentPath) {
   const stored = currentGroupState();
-  const state = {};
+  const hasStoredPreference = NAV_GROUPS.some((group) => Object.prototype.hasOwnProperty.call(stored, group.id));
+  const state = defaultGroupState(currentPath);
   NAV_GROUPS.forEach((group) => {
     const hasActive = group.paths.includes(currentPath);
-    const hasStoredPreference = Object.prototype.hasOwnProperty.call(stored, group.id);
-    state[group.id] = hasStoredPreference
-      ? Boolean(stored[group.id])
-      : false;
-    if (isDesktopNavViewport() && hasActive && (routeChanged || !hasStoredPreference)) {
+    if (hasStoredPreference && Object.prototype.hasOwnProperty.call(stored, group.id)) {
+      state[group.id] = Boolean(stored[group.id]);
+    }
+    if (hasActive) {
       state[group.id] = true;
     }
   });
@@ -172,12 +181,10 @@ export function renderNav() {
 
   const current = window.location.hash.slice(1) || '/dashboard';
   const routeChanged = current !== _lastRenderedPath;
-  const openState = normalizeGroupState(current, routeChanged);
+  const openState = normalizeGroupState(current);
   if (routeChanged) {
     _lastRenderedPath = current;
-    if (isDesktopNavViewport()) {
-      setStoredGroups(openState);
-    }
+    setStoredGroups(openState);
   }
 
   const dashboardMeta = ROUTES['/dashboard'];
@@ -201,7 +208,7 @@ export function renderNav() {
     });
     button.addEventListener('click', () => {
       const groupId = button.getAttribute('data-group-trigger');
-      const currentState = normalizeGroupState(current, false);
+      const currentState = normalizeGroupState(current);
       const next = { ...currentGroupState(), [groupId]: !currentState[groupId] };
       setStoredGroups(next);
       renderNav();

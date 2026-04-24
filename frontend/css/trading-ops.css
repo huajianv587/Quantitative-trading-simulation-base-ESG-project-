@@ -1,0 +1,79 @@
+.trading-ops-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+}
+
+.live-control-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workbench-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.trading-ops-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.trading-ops-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  width: 100%;
+  min-height: 0;
+}
+
+.trading-ops-grid .card {
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+}
+
+.trading-ops-grid .card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+}
+
+.field--with-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field--with-preview input {
+  width: 100%;
+}
+
+@media (max-width: 1280px) {
+  .live-control-grid,
+  .trading-ops-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .trading-ops-page {
+    gap: 10px;
+  }
+
+  .workbench-action-grid,
+  .trading-ops-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trading-ops-grid .card-body {
+    padding: 12px 13px;
+  }
+}

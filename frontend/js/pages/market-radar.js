@@ -4,9 +4,12 @@ import { getLang, onLangChange } from '../i18n.js?v=8';
 import {
   emptyState,
   esc,
+  loadPayloadSnapshot,
   metric,
   miniMetric,
   num,
+  persistPayloadSnapshot,
+  renderDegradedNotice,
   renderError,
   renderTokenPreview,
   setLoading,
@@ -23,6 +26,10 @@ let _selectedItemId = null;
 let _lastSentiment = null;
 let _lastAlerts = [];
 let _overlayState = { phase: 'loading', warnings: [], fallback: '', nextActions: [] };
+let _degradedMeta = null;
+
+const MARKET_RADAR_CACHE_KEY = 'qt.market-radar.snapshot.v1';
+const MARKET_RADAR_CACHE_TTL_MS = 20 * 60 * 1000;
 
 const COPY = {
   en: {
@@ -148,6 +155,29 @@ function isMounted() {
   return Boolean(_container && _container.isConnected);
 }
 
+function radarDegradedState(savedAt, reason, detail) {
+  return {
+    tone: 'warning',
+    saved_at: savedAt || null,
+    title: t('Cached evidence snapshot', '已切换到缓存证据快照'),
+    reason: reason || t('Showing the last successful evidence feed while live refresh recovers.', '正在使用最近一次成功的证据流，等待实时刷新恢复。'),
+    detail: detail || t('Alpaca-first market context stays active; only the evidence refresh is degraded.', 'Alpaca 优先的市场上下文仍保留，当前只是证据刷新进入降级。'),
+    action: t('Use Refresh Evidence to retry the live feed.', '可以继续点击“刷新证据”重试实时链路。'),
+  };
+}
+
+function hydrateRadarSnapshot() {
+  const cached = loadPayloadSnapshot(MARKET_RADAR_CACHE_KEY, MARKET_RADAR_CACHE_TTL_MS);
+  if (!cached?.payload) return false;
+  assignEvidence(cached.payload);
+  _degradedMeta = radarDegradedState(
+    cached.saved_at,
+    t('Loading the last evidence snapshot while reconnecting.', '正在回填最近一次成功快照，并同步重连后端。'),
+  );
+  renderItems(cached.payload);
+  return true;
+}
+
 function buildOverlayState(phase, warnings = []) {
   const nextActions = phase === 'ready'
     ? [t('Open Debate Desk', '打开辩论台'), t('Open Risk Board', '打开风控板'), t('Open Trading Ops', '打开交易运维')]
@@ -223,6 +253,7 @@ export async function render(container) {
   _overlayState = buildOverlayState('loading');
   renderShell();
   wire();
+  hydrateRadarSnapshot();
   _langCleanup = onLangChange(() => {
     if (!_container?.isConnected) return;
     renderShell();
@@ -236,6 +267,7 @@ export function destroy() {
   _langCleanup?.();
   _langCleanup = null;
   _container = null;
+  _degradedMeta = null;
 }
 
 function renderShell() {
@@ -373,11 +405,24 @@ async function scanRadar() {
     });
     if (!isMounted()) return;
     assignEvidence(payload);
+    persistPayloadSnapshot(MARKET_RADAR_CACHE_KEY, payload, { symbol: symbolFilter() || null });
+    _degradedMeta = null;
     renderItems(payload);
     void refreshTradingOverlay();
   } catch (error) {
     if (!isMounted()) return;
-    renderError(feed, error);
+    const cached = loadPayloadSnapshot(MARKET_RADAR_CACHE_KEY, MARKET_RADAR_CACHE_TTL_MS);
+    if (cached?.payload) {
+      assignEvidence(cached.payload);
+      _degradedMeta = radarDegradedState(
+        cached.saved_at,
+        error?.message || t('Radar scan failed, so the latest successful evidence snapshot is still shown.', '雷达扫描失败，当前继续保留最近一次成功的证据快照。'),
+      );
+      _overlayState = buildOverlayState('degraded', [error?.message || t('Radar scan failed.', '雷达扫描失败。')]);
+      renderItems(cached.payload);
+      return;
+    }
+    renderError(feed, error, { onRetry: scanRadar });
     _overlayState = buildOverlayState('degraded', [error?.message || t('Radar scan failed.', '雷达扫描失败。')]);
     renderSummary({ lineage: _lastLineage });
   }
@@ -392,11 +437,24 @@ async function refreshEvidence() {
     const payload = await api.intelligence.evidence(null, 40);
     if (!isMounted()) return;
     assignEvidence(payload);
+    persistPayloadSnapshot(MARKET_RADAR_CACHE_KEY, payload, { symbol: symbolFilter() || null });
+    _degradedMeta = null;
     renderItems(payload);
     void refreshTradingOverlay();
   } catch (error) {
     if (!isMounted()) return;
-    renderError(feed, error);
+    const cached = loadPayloadSnapshot(MARKET_RADAR_CACHE_KEY, MARKET_RADAR_CACHE_TTL_MS);
+    if (cached?.payload) {
+      assignEvidence(cached.payload);
+      _degradedMeta = radarDegradedState(
+        cached.saved_at,
+        error?.message || t('Evidence API is unavailable, so the last successful snapshot is still shown.', '证据接口暂不可用，当前继续展示最近一次成功快照。'),
+      );
+      _overlayState = buildOverlayState('degraded', [error?.message || t('Evidence API unavailable.', '证据接口当前不可用。')]);
+      renderItems(cached.payload);
+      return;
+    }
+    renderError(feed, error, { onRetry: refreshEvidence });
     _overlayState = buildOverlayState('degraded', [error?.message || t('Evidence API unavailable.', '证据接口当前不可用。')]);
     renderSummary({ lineage: _lastLineage });
   }
@@ -501,7 +559,9 @@ function renderEvidencePage(items, pageItems, pageCount) {
         <span>${esc(item.leakage_guard || '')}</span>
       </div>
     </article>`).join('');
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   return `
+    ${degradedBanner}
     <div class="workbench-list workbench-scroll-list workbench-scroll-list--short radar-feed-scroll">${rows}</div>
     <div class="workbench-pagination">
       <span>${c('showing')} ${start}-${end} / ${items.length} ${c('rows')}</span>
@@ -561,7 +621,9 @@ function renderSummary(payload = {}) {
     || null;
   const latestAlert = _lastAlerts[0] || null;
   const overlayWarnings = Array.isArray(_overlayState.warnings) ? _overlayState.warnings : [];
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   _container.querySelector('#market-radar-summary').innerHTML = `
+    ${degradedBanner}
     <div class="quality-summary-panel">
       <div class="workbench-metric-grid">
         ${metric(t('Items', '条目数'), filtered.length, filtered.length ? 'positive' : 'risk')}

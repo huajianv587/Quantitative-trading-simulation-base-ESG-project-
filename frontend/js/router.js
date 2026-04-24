@@ -48,6 +48,9 @@ export const ROUTES = {
   '/portfolio': { module: () => import(`./pages/portfolio.js?${VER}`), labelKey: 'page.portfolio', icon: 'pie', group: 'quant' },
   '/backtest': { module: () => import(`./pages/backtest.js?${VER}`), labelKey: 'page.backtest', icon: 'chart', group: 'quant' },
   '/backtests': { module: () => import(`./pages/backtests.js?${VER}`), labelKey: 'page.backtest', icon: 'chart', group: 'quant', hidden: true },
+  '/sweep': { module: () => import(`./pages/sweep.js?${VER}`), labelKey: 'page.sweep', icon: 'grid', group: 'quant' },
+  '/tearsheet': { module: () => import(`./pages/tearsheet.js?${VER}`), labelKey: 'page.tearsheet', icon: 'file-text', group: 'quant' },
+  '/dataset': { module: () => import(`./pages/dataset.js?${VER}`), labelKey: 'page.dataset', icon: 'database', group: 'quant' },
   '/execution': { module: () => import(`./pages/execution.js?${VER}`), labelKey: 'page.execution', icon: 'zap', group: 'quant' },
   '/validation': { module: () => import(`./pages/validation.js?${VER}`), labelKey: 'page.validation', icon: 'shield', group: 'research' },
   '/models': { module: () => import(`./pages/models.js?${VER}`), labelKey: 'page.models', icon: 'cpu', group: 'research' },
@@ -62,6 +65,20 @@ export const ROUTES = {
 
 const DEFAULT = '/dashboard';
 
+function resolveLandingEntry() {
+  const configured = typeof window.__ESG_LANDING_ENTRY__ === 'string' ? window.__ESG_LANDING_ENTRY__.trim() : '';
+  if (configured) return configured;
+
+  const { origin, pathname } = window.location;
+  if (/\/app\/index\.html$/i.test(pathname || '')) {
+    return `${origin}${pathname.replace(/\/app\/index\.html$/i, '/')}`;
+  }
+  if (/\/app\/$/i.test(pathname || '')) {
+    return `${origin}${pathname.replace(/\/app\/$/i, '/')}`;
+  }
+  return `${origin}/`;
+}
+
 class Router {
   constructor() {
     this._mod = null;
@@ -73,11 +90,21 @@ class Router {
     this._container = container;
     window.addEventListener('hashchange', () => this._go());
     onLangChange(() => this._applyTitle(this.getCurrentPath()));
+
+    // 如果没有hash或hash为空,直接跳转到dashboard
+    if (!window.location.hash || window.location.hash === '#' || window.location.hash === '#/') {
+      window.location.replace(resolveLandingEntry());
+      return;
+    }
     this._go();
   }
 
   path() {
     const hashPath = window.location.hash.slice(1);
+    // 处理空路径或根路径
+    if (!hashPath || hashPath === '/') {
+      return DEFAULT;
+    }
     return hashPath in ROUTES ? hashPath : DEFAULT;
   }
 
@@ -132,11 +159,27 @@ class Router {
       requestAnimationFrame(() => this._container.classList.add('page-ready'));
     } catch (err) {
       console.error('Page load failed:', err);
-      this._container.innerHTML = `<div class="empty-state">
-        <div class="empty-state__icon">!</div>
-        <div class="empty-state__title">${t('common.page_failed_load')}</div>
-        <div class="empty-state__text">${err.message || t('common.page_failed_retry')}</div>
-      </div>`;
+
+      // 使用统一的错误处理系统
+      if (window.errorHandler) {
+        const errorInfo = window.errorHandler.parseError(err, {
+          page: path,
+          url: `http://127.0.0.1:8088/app/#/pages/${path.slice(1)}.js?${VER}`
+        });
+        const errorUI = window.errorHandler.createErrorUI(errorInfo, {
+          variant: 'compact',
+          showRetry: true,
+          onRetry: () => this._go()
+        });
+        this._container.appendChild(errorUI);
+      } else {
+        // 降级处理
+        this._container.innerHTML = `<div class="empty-state">
+          <div class="empty-state__icon">!</div>
+          <div class="empty-state__title">${t('common.page_failed_load')}</div>
+          <div class="empty-state__text">${err.message || t('common.page_failed_retry')}</div>
+        </div>`;
+      }
     }
   }
 

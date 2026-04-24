@@ -6,16 +6,20 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, st
 
 from gateway.api.quant_schemas import (
     QuantBacktestRequest,
+    QuantBacktestSweepRequest,
+    QuantDatasetBuildRequest,
     QuantDecisionExplainRequest,
     QuantExecutionRequest,
     QuantFactorDiscoveryRequest,
     QuantKillSwitchRequest,
     QuantIntelligenceScanRequest,
+    QuantMarketDepthReplayRequest,
     QuantOrderActionRequest,
     QuantOutcomeEvaluateRequest,
     QuantP1StackRequest,
     QuantP2DecisionRequest,
     QuantPortfolioRequest,
+    QuantResearchQualityRequest,
     QuantResearchRequest,
     ResearchContextResponse,
     QuantSimulationScenarioRequest,
@@ -68,6 +72,16 @@ def _run_execution_request(req: QuantExecutionRequest):
 @router.get("/platform/overview")
 def get_platform_overview():
     return _quant_service().build_platform_overview()
+
+
+@router.get("/platform/dashboard-summary")
+def get_dashboard_summary(provider: str = "auto"):
+    return _quant_service().build_dashboard_summary(provider=provider)
+
+
+@router.get("/platform/dashboard-secondary")
+def get_dashboard_secondary(provider: str = "auto"):
+    return _quant_service().build_dashboard_secondary(provider=provider)
 
 
 @router.get("/dashboard/chart")
@@ -159,6 +173,21 @@ def run_backtest(req: QuantBacktestRequest):
     )
 
 
+@router.post("/backtests/sweep")
+def run_backtest_sweep(req: QuantBacktestSweepRequest):
+    return _quant_service().run_backtest_sweep(
+        strategy_name=req.strategy_name,
+        universe_symbols=req.universe or None,
+        benchmark=req.benchmark,
+        capital_base=req.capital_base,
+        lookback_days=req.lookback_days,
+        market_data_provider=req.market_data_provider,
+        force_refresh=req.force_refresh,
+        parameter_grid=req.parameter_grid,
+        top_k=req.top_k,
+    )
+
+
 @router.get("/backtests")
 def list_backtests():
     return {"backtests": _quant_service().list_backtests()}
@@ -170,6 +199,22 @@ def get_backtest(backtest_id: str):
     if payload is None:
         raise HTTPException(status_code=404, detail="Backtest not found")
     return payload
+
+
+@router.get("/backtests/sweep/{run_id}")
+def get_backtest_sweep(run_id: str):
+    payload = _quant_service().get_backtest_sweep(run_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Backtest sweep not found")
+    return payload
+
+
+@router.get("/reports/tearsheet/{backtest_id}")
+def get_backtest_tearsheet(backtest_id: str):
+    try:
+        return _quant_service().build_tearsheet(backtest_id, persist=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/execution/paper")
@@ -362,12 +407,105 @@ def discover_factors(req: QuantFactorDiscoveryRequest):
         mode=req.mode,
         providers=req.providers or None,
         quota_guard=req.quota_guard,
+        required_data_tier=req.required_data_tier,
+    )
+
+
+@router.post("/research/datasets/build")
+def build_dataset_manifest(req: QuantDatasetBuildRequest):
+    return _intelligence_service().build_dataset_manifest(
+        universe_symbols=req.universe or None,
+        query=req.query,
+        as_of_time=req.as_of_time,
+        decision_time=req.decision_time,
+        mode=req.mode,
+        providers=req.providers or None,
+        quota_guard=req.quota_guard,
+        frequency=req.frequency,
+        include_intraday=req.include_intraday,
+        required_data_tier=req.required_data_tier,
+        persist=req.persist,
+    )
+
+
+@router.get("/research/datasets")
+def list_dataset_manifests(limit: int = 20):
+    return _intelligence_service().list_dataset_manifests(limit=limit)
+
+
+@router.post("/research/quality/checks")
+def run_research_quality_checks(req: QuantResearchQualityRequest):
+    return _intelligence_service().run_research_quality_checks(
+        universe_symbols=req.universe or None,
+        query=req.query,
+        decision_time=req.decision_time,
+        as_of_time=req.as_of_time,
+        evidence_run_id=req.evidence_run_id,
+        mode=req.mode,
+        providers=req.providers or None,
+        quota_guard=req.quota_guard,
+        frequency=req.frequency,
+        formulas=req.formulas,
+        labels=req.labels,
+        timestamps=req.timestamps,
+        current_constituents_only=req.current_constituents_only,
+        required_data_tier=req.required_data_tier,
+        persist=req.persist,
     )
 
 
 @router.get("/factors/registry")
 def get_factor_registry(limit: int = 50):
     return _intelligence_service().factor_registry(limit=limit)
+
+
+@router.get("/market-depth/status")
+def get_market_depth_status(symbols: str | None = None, require_l2: bool = False):
+    values = [item.strip().upper() for item in str(symbols or "").split(",") if item.strip()]
+    return _intelligence_service().market_depth_status(symbols=values or None, require_l2=require_l2)
+
+
+@router.post("/market-depth/replay")
+def build_market_depth_replay(req: QuantMarketDepthReplayRequest):
+    return _intelligence_service().market_depth_replay(
+        symbol=req.symbol,
+        limit=req.limit,
+        timestamps=req.timestamps or None,
+        require_l2=str(req.required_data_tier or "l1").lower() == "l2",
+        persist=req.persist,
+    )
+
+
+@router.get("/market-depth/replay/{session_id}")
+def get_market_depth_replay(session_id: str):
+    payload = _intelligence_service().get_market_depth_replay(session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Market depth replay not found")
+    return payload
+
+
+@router.get("/market-depth/latest")
+def get_market_depth_latest(symbol: str = "AAPL"):
+    return _intelligence_service().market_depth_latest(symbol=symbol)
+
+
+@router.websocket("/market-depth/live/ws")
+async def market_depth_live_stream(
+    websocket: WebSocket,
+    symbols: str = "AAPL",
+    require_l2: bool = False,
+):
+    await websocket.accept()
+    refresh_seconds = max(1, int(getattr(settings, "EXECUTION_REALTIME_REFRESH_SECONDS", 5) or 5))
+    symbol_list = [item.strip().upper() for item in str(symbols or "").split(",") if item.strip()]
+    try:
+        while True:
+            await websocket.send_json(
+                _intelligence_service().market_depth_live_payload(symbols=symbol_list or None, require_l2=require_l2)
+            )
+            await asyncio.sleep(refresh_seconds)
+    except WebSocketDisconnect:
+        return
 
 
 @router.post("/simulate/scenario")
@@ -386,6 +524,7 @@ def simulate_scenario(req: QuantSimulationScenarioRequest):
         regime=req.regime,
         event_id=req.event_id,
         evidence_run_id=req.evidence_run_id,
+        required_data_tier=req.required_data_tier,
     )
     return _intelligence_service().simulate_scenario(scenario)
 

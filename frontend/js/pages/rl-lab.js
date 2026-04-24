@@ -397,6 +397,7 @@ function buildShell() {
                   <th>Status</th>
                   <th>Phase</th>
                   <th>Checkpoint</th>
+                  <th>Promote</th>
                 </tr>
               </thead>
               <tbody id="rl-runs-body"></tbody>
@@ -429,6 +430,11 @@ function bindEvents() {
   query('#rl-search-recipe')?.addEventListener('click', () => handleSearchRecipe());
   query('#rl-run-train')?.addEventListener('click', () => handleTrain());
   query('#rl-run-backtest')?.addEventListener('click', () => handleBacktest());
+  query('#rl-runs-body')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-promote-run]');
+    if (!button) return;
+    handlePromote(button.getAttribute('data-promote-run'));
+  });
   query('#rl-recipe')?.addEventListener('change', (event) => {
     _state.selectedRecipeKey = event.target.value;
     applyRecipeDefaults();
@@ -725,18 +731,28 @@ function renderRuns(runs) {
   const node = query('#rl-runs-body');
   if (!node) return;
   if (!runs.length) {
-    node.innerHTML = '<tr><td colspan="5" class="rl-lab-empty">No RL runs yet</td></tr>';
+    node.innerHTML = '<tr><td colspan="6" class="rl-lab-empty">No RL runs yet</td></tr>';
     return;
   }
   node.innerHTML = runs.map((run) => {
     const checkpointPath = ((run.artifacts || {}).checkpoint_path) || '--';
+    const eligibility = run.eligibility_status || 'review';
+    const canPromote = eligibility === 'pass';
     return `
       <tr>
-        <td>${escapeHtml(run.run_id || '')}</td>
+        <td>
+          <div>${escapeHtml(run.run_id || '')}</div>
+          <div class="rl-lab-path">${escapeHtml(run.dataset_id || '')}</div>
+        </td>
         <td>${escapeHtml(run.algorithm || '')}</td>
-        <td>${escapeHtml(run.status || '')}</td>
+        <td>${escapeHtml(run.status || '')}<div class="rl-lab-path">${escapeHtml(eligibility)} / ${escapeHtml(run.promotion_status || 'research_only')}</div></td>
         <td>${escapeHtml(run.phase || '')}</td>
         <td class="rl-lab-path">${escapeHtml(checkpointPath)}</td>
+        <td>
+          <button class="btn btn-ghost btn-sm" data-promote-run="${escapeHtml(run.run_id || '')}" ${canPromote ? '' : 'disabled'}>
+            ${escapeHtml(canPromote ? 'Promote' : 'Blocked')}
+          </button>
+        </td>
       </tr>
     `;
   }).join('');
@@ -910,6 +926,26 @@ async function handleBacktest() {
     await loadOverview(false);
   } catch (error) {
     toast.error('RL backtest failed', error.message || 'Unknown error');
+  }
+}
+
+async function handlePromote(runId) {
+  if (!runId) return;
+  const payload = {
+    run_id: runId,
+    strategy_id: 'rl_timing_overlay',
+    required_data_tier: 'l2',
+  };
+  try {
+    const result = await api.quantRL.promote(payload);
+    _state.lastPayload = result;
+    renderActionOutput('#rl-train-output', result);
+    renderLatestPayload();
+    toast.success('RL promotion evaluated', `${result.promotion_status} / ${result.eligibility_status}`);
+    recordUiAuditEvent('rl_promote', '[data-promote-run]', payload, result);
+    await loadOverview(false);
+  } catch (error) {
+    toast.error('RL promotion failed', error.message || 'Unknown error');
   }
 }
 

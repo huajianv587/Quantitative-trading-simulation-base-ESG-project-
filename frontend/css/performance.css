@@ -1,0 +1,491 @@
+/* ═══════════════════════════════════════════════════════════════
+   Performance Optimizations
+   GPU加速、Containment、统一过渡
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── GPU加速 (will-change) ─────────────────────────────────────── */
+/* 为频繁动画的元素添加will-change提示 */
+
+/* 自定义光标 */
+#c-dot,
+#c-ring {
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+/* 背景动画元素 */
+.bg-aurora__spot {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+}
+
+/* 按钮悬停效果 */
+.btn:hover,
+.btn-primary:hover,
+.btn-ghost:hover {
+  will-change: transform, box-shadow;
+}
+
+.btn::before,
+.btn-primary::after {
+  will-change: opacity, left;
+  transform: translateZ(0);
+}
+
+/* 导航项 */
+.nav-item {
+  will-change: background-color, border-color;
+}
+
+.nav-item::before {
+  will-change: opacity;
+  transform: translateZ(0);
+}
+
+/* 卡片和面板 */
+.card,
+.panel,
+.dashboard-card {
+  will-change: transform, box-shadow;
+}
+
+.card:hover,
+.panel:hover,
+.dashboard-card:hover {
+  transform: translateZ(0);
+}
+
+/* Toast通知 */
+.toast {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+}
+
+/* 模态框 */
+.modal-overlay {
+  will-change: opacity;
+}
+
+.modal-content {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+}
+
+/* 输入框焦点 */
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus {
+  will-change: border-color, box-shadow;
+}
+
+/* Tab切换 */
+.tab,
+.tf-tab {
+  will-change: background-color, border-color, color;
+}
+
+/* 加载动画 */
+.spinner,
+.loading-spinner,
+.skeleton {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+}
+
+/* 图表容器 */
+.chart-container,
+.kline-canvas-wrap,
+.heatmap-chart-container,
+.heatmap-chart {
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+/* ── CSS Containment ───────────────────────────────────────────── */
+/* 限制布局、样式和绘制的影响范围，提升渲染性能 */
+
+/* 独立组件容器 */
+.app-sidebar {
+  contain: layout style;
+}
+
+.app-topbar {
+  contain: layout style;
+}
+
+.app-content {
+  contain: layout style paint;
+}
+
+/* 卡片和面板 */
+.card,
+.panel,
+.dashboard-card {
+  contain: layout style paint;
+}
+
+/* 列表项 */
+.nav-item,
+.layer-item,
+.freshness-row {
+  contain: layout style;
+}
+
+/* Toast容器 */
+#toast-container {
+  contain: layout style;
+}
+
+.toast {
+  contain: layout style paint;
+}
+
+/* 模态框 */
+.modal-overlay {
+  contain: layout style paint;
+}
+
+.modal-content {
+  contain: layout style paint;
+}
+
+/* 表格行 */
+.tbl-wrap tbody tr {
+  contain: layout style;
+}
+
+/* 图表容器 */
+.chart-container {
+  contain: layout style paint;
+}
+
+/*
+  Dashboard chart shells host auto-sized canvas/ECharts content.
+  Layout containment collapses these wrappers to border-only bars in Chromium
+  after async chart hydration, so keep them in normal document flow.
+*/
+.kline-wrap,
+.heatmap-wrap {
+  contain: none;
+}
+
+/* 输入框 */
+.form-input,
+.form-select,
+.form-textarea {
+  contain: layout style;
+}
+
+/* 按钮 */
+.btn,
+.btn-primary,
+.btn-ghost,
+.btn-danger {
+  contain: layout style;
+}
+
+/* ── 统一过渡时间 ──────────────────────────────────────────────── */
+/* 标准化所有过渡动画的时长和缓动函数 */
+
+/* 快速过渡 (150ms) - 用于微交互 */
+.transition-fast {
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-out);
+}
+
+/* 标准过渡 (250ms) - 用于大多数交互 */
+.transition-standard {
+  transition-duration: 250ms;
+  transition-timing-function: var(--ease);
+}
+
+/* 慢速过渡 (400ms) - 用于复杂动画 */
+.transition-slow {
+  transition-duration: 400ms;
+  transition-timing-function: var(--ease-smooth);
+}
+
+/* 应用统一过渡到常见元素 */
+.btn,
+.nav-item,
+.tab,
+.tf-tab,
+.card,
+.panel,
+.form-input,
+.form-select,
+.form-textarea {
+  transition-duration: 250ms;
+  transition-timing-function: var(--ease);
+}
+
+/* 快速过渡元素 */
+.btn::before,
+.nav-item::before,
+.toast-close {
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-out);
+}
+
+/* 慢速过渡元素 */
+.modal-overlay,
+.modal-content,
+.bg-aurora__spot {
+  transition-duration: 400ms;
+  transition-timing-function: var(--ease-smooth);
+}
+
+/* ── 减少重绘和回流 ────────────────────────────────────────────── */
+/* 使用transform和opacity代替top/left/width/height */
+
+/* 动画优化 */
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%) translateZ(0);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0) translateZ(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOutRight {
+  from {
+    transform: translateX(0) translateZ(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%) translateZ(0);
+    opacity: 0;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateZ(0);
+  }
+  to {
+    opacity: 1;
+    transform: translateZ(0);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+    transform: translateZ(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateZ(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    transform: scale(0.9) translateZ(0);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateZ(0);
+    opacity: 1;
+  }
+}
+
+@keyframes scaleOut {
+  from {
+    transform: scale(1) translateZ(0);
+    opacity: 1;
+  }
+  to {
+    transform: scale(0.9) translateZ(0);
+    opacity: 0;
+  }
+}
+
+/* ── 硬件加速 ──────────────────────────────────────────────────── */
+/* 强制使用GPU渲染 */
+
+.gpu-accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* 应用到关键元素 */
+.btn,
+.card,
+.modal-content,
+.toast,
+.nav-item,
+#c-dot,
+#c-ring {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* ── 图层提升 ──────────────────────────────────────────────────── */
+/* 为独立动画元素创建合成层 */
+
+.layer-promote {
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* 背景元素 */
+.bg-aurora,
+.bg-grid {
+  transform: translateZ(0);
+  will-change: opacity;
+}
+
+/* 固定定位元素 */
+.app-sidebar,
+.app-topbar,
+#toast-container {
+  transform: translateZ(0);
+}
+
+/* ── 滚动性能优化 ──────────────────────────────────────────────── */
+/* 使用CSS滚动捕捉和平滑滚动 */
+
+.smooth-scroll {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+.scroll-snap-container {
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+}
+
+.scroll-snap-item {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+/* 应用到滚动容器 */
+.app-content,
+.tbl-wrap,
+.results-panel {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* ── 减少动画模式支持 ──────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* 保留关键动画但缩短时长 */
+  .toast,
+  .modal-overlay,
+  .modal-content {
+    animation-duration: 100ms !important;
+    transition-duration: 100ms !important;
+  }
+
+  /* 移除will-change以减少内存使用 */
+  * {
+    will-change: auto !important;
+  }
+}
+
+/* ── 内容可见性优化 ────────────────────────────────────────────── */
+/* 使用content-visibility延迟渲染屏幕外内容 */
+
+.lazy-render {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 500px;
+}
+
+/* 应用到长列表项 */
+.tbl-wrap tbody tr,
+.layer-item,
+.freshness-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 50px;
+}
+
+/* 应用到卡片 */
+.card,
+.dashboard-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 300px;
+}
+
+/* ── 字体渲染优化 ──────────────────────────────────────────────── */
+body {
+  text-rendering: optimizeSpeed;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-smooth: always;
+}
+
+/* 标题使用更好的渲染 */
+h1, h2, h3, h4, h5, h6,
+.logo-name,
+.modal-title {
+  text-rendering: optimizeLegibility;
+}
+
+/* ── 图片和媒体优化 ────────────────────────────────────────────── */
+img,
+video,
+canvas {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
+/* SVG优化 */
+svg {
+  shape-rendering: geometricPrecision;
+}
+
+/* ── 防止布局抖动 ──────────────────────────────────────────────── */
+/* 为动态内容预留空间 */
+
+.skeleton-loader {
+  min-height: 100px;
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.05) 25%,
+    rgba(255,255,255,0.1) 50%,
+    rgba(255,255,255,0.05) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  will-change: background-position;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* ── 性能监控辅助类 ────────────────────────────────────────────── */
+/* 用于调试和性能分析 */
+
+.perf-debug {
+  outline: 2px solid red;
+}
+
+.perf-debug-paint {
+  outline: 2px solid blue;
+}
+
+.perf-debug-layout {
+  outline: 2px solid green;
+}

@@ -34,6 +34,15 @@ class _TradingStub:
                 "display_name": "ESG Multi-Factor Long Only",
                 "status": "active",
                 "factor_dependencies": ["quality", "value", "momentum", "esg_delta"],
+                "required_frequency": "daily",
+                "required_data_tier": "l1",
+                "registry_gate_status": "pass",
+                "eligible_for_execution": True,
+                "blocking_reasons": [],
+                "latest_dataset_id": "dataset-aapl",
+                "latest_protection_status": "pass",
+                "latest_l2_status": "pass",
+                "bound_rl_run_id": None,
                 "risk_profile": "balanced",
                 "capital_allocation": 0.34,
                 "allowed_symbols": ["AAPL", "MSFT", "NVDA"],
@@ -86,6 +95,12 @@ class _TradingStub:
             "recommended_notional": 5000.0,
             "signal_ttl_minutes": 180,
             "guards": ["judge_gate", "risk_gate", "auto_submit"],
+            "dataset_id": "dataset-aapl",
+            "protection_status": "pass",
+            "frequency": "daily",
+            "data_tier": "l1",
+            "registry_gate_status": "pass",
+            "blocking_reasons": [],
             "metadata": {"sample": True},
         }
 
@@ -102,6 +117,12 @@ class _TradingStub:
             "requested_action": "long",
             "approved_action": "long",
             "verdict": "approve",
+            "dataset_id": "dataset-aapl",
+            "protection_status": "pass",
+            "frequency": "daily",
+            "data_tier": "l1",
+            "registry_gate_status": "pass",
+            "blocking_reasons": [],
             "order_payload": {"symbol": "AAPL", "side": "buy", "notional": 5000},
             "receipt": {"id": "paper-aapl-1"},
             "warnings": [],
@@ -122,9 +143,37 @@ class _TradingStub:
                 {"stage": "feature_build", "status": "ready"},
                 {"stage": "factor_gate", "status": "ready"},
                 {"stage": "strategy_slot", "status": "ready"},
+                {"stage": "registry_gate", "status": "ready"},
             ],
             "warnings": [],
             "next_action": "Compare factor gate output with strategy allocation before promotion.",
+            "market_depth_status": self.market_depth_status(),
+        }
+
+    def market_depth_status(self):
+        return {
+            "generated_at": "2026-04-20T12:00:00Z",
+            "selected_provider": "fake_l2",
+            "configured_providers": ["fake_l2"],
+            "provider_capabilities": {"fake_l2": {"available": True, "history_ready": True, "realtime_ready": True}},
+            "available": True,
+            "history_ready": True,
+            "realtime_ready": True,
+            "data_tier": "l1",
+            "eligibility_status": "review",
+            "blocking_reasons": [],
+            "latest": [{"symbol": "AAPL", "spread_bps": 4.8, "session": "midday"}],
+        }
+
+    def list_strategy_eligibility(self, **kwargs):
+        return {
+            "generated_at": "2026-04-20T12:00:00Z",
+            "symbol": kwargs.get("symbol"),
+            "eligible_count": 1,
+            "blocked_count": 0,
+            "review_count": 0,
+            "market_depth_status": self.market_depth_status(),
+            "strategies": self._strategies,
         }
 
     def schedule_status(self):
@@ -261,7 +310,9 @@ class _TradingStub:
             "debates": self.debate_runs(symbol="AAPL"),
             "risk": self.risk_board(symbol="AAPL"),
             "autopilot_policy": self._policy,
-            "strategies": {"count": len(self._strategies), "strategies": self._strategies},
+            "strategies": {"count": len(self._strategies), "strategies": self._strategies, "eligibility": self.list_strategy_eligibility()},
+            "strategy_eligibility": self.list_strategy_eligibility(),
+            "market_depth": self.market_depth_status(),
             "execution_path": self.execution_path_status(),
             "factor_pipeline": self.factor_pipeline_manifest(),
             "fusion_manifest": self.fusion_reference_manifest(),
@@ -285,7 +336,7 @@ class _TradingStub:
         return self._policy
 
     def list_strategies(self):
-        return {"count": len(self._strategies), "strategies": self._strategies}
+        return {"count": len(self._strategies), "strategies": self._strategies, "eligibility": self.list_strategy_eligibility()}
 
     def toggle_strategy(self, *, strategy_id, status):
         self._strategies[0]["status"] = status
@@ -313,8 +364,8 @@ class _TradingStub:
             "risk_passed": True,
             "kill_switch": False,
             "current_stage": "blocked" if self._policy["block_reason"] else "idle",
-            "stages": [{"stage": "scan", "status": "ready"}, {"stage": "judge", "status": "passed"}, {"stage": "risk", "status": "passed"}, {"stage": "submit", "status": "ready"}],
-            "lineage": ["scan", "factors", "debate", "judge", "risk", "submit", "monitor", "review"],
+            "stages": [{"stage": "scan", "status": "ready"}, {"stage": "factors", "status": "ready"}, {"stage": "l2_ready", "status": "guarded"}, {"stage": "judge", "status": "passed"}, {"stage": "risk", "status": "passed"}, {"stage": "submit", "status": "ready"}],
+            "lineage": ["scan", "factors", "l2_ready", "debate", "judge", "risk", "submit", "monitor", "review"],
             "warnings": [self._policy["block_reason"]] if self._policy["block_reason"] else [],
         }
 
@@ -417,6 +468,8 @@ def test_trading_monitor_and_ops_snapshot(monkeypatch):
     assert "schedule" in payload
     assert "watchlist" in payload
     assert "latest_review" in payload
+    assert "market_depth" in payload
+    assert "strategy_eligibility" in payload
     assert payload["factor_pipeline"]["manifest_id"] == "factor-pipeline-current"
 
     job = client.post("/api/v1/trading/jobs/run/premarket_agent", json={})
@@ -455,6 +508,11 @@ def test_autopilot_strategy_and_dashboard_routes(monkeypatch):
     strategies = client.get("/api/v1/trading/strategies")
     assert strategies.status_code == 200
     assert strategies.json()["count"] == 1
+    assert strategies.json()["eligibility"]["eligible_count"] == 1
+
+    eligibility = client.get("/api/v1/trading/strategies/eligibility?symbol=AAPL")
+    assert eligibility.status_code == 200
+    assert eligibility.json()["market_depth_status"]["selected_provider"] == "fake_l2"
 
     toggle = client.post("/api/v1/trading/strategies/esg_multifactor_long_only/toggle", json={"status": "paused"})
     assert toggle.status_code == 200
@@ -469,6 +527,7 @@ def test_autopilot_strategy_and_dashboard_routes(monkeypatch):
     assert execution_path.json()["mode"] == "paper"
     assert execution_path.json()["requested_mode"] == "paper"
     assert execution_path.json()["effective_mode"] == "paper"
+    assert any(stage["stage"] == "l2_ready" for stage in execution_path.json()["stages"])
 
     dashboard_state = client.get("/api/v1/trading/dashboard/state?provider=alpaca")
     assert dashboard_state.status_code == 200

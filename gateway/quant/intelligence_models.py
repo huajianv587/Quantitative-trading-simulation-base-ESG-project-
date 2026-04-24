@@ -5,6 +5,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+DataTier = Literal["l1", "l2"]
+RegistryGateStatus = Literal["pass", "review", "blocked"]
+
+
 InfoType = Literal[
     "news",
     "filing",
@@ -93,6 +97,13 @@ class FactorCard(BaseModel):
     family: str
     definition: str
     status: Literal["promoted", "research_only", "low_confidence", "rejected"]
+    market: str = "US"
+    frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    data_tier: DataTier = "l1"
+    dataset_id: str | None = None
+    protection_status: Literal["pass", "review", "blocked"] = "review"
+    registry_gate_status: RegistryGateStatus = "review"
+    blocking_reasons: list[str] = Field(default_factory=list)
     universe: list[str] = Field(default_factory=list)
     horizon_days: int
     missing_rate: float = Field(ge=0.0, le=1.0)
@@ -104,6 +115,147 @@ class FactorCard(BaseModel):
     sample_count: int
     gate_results: dict[str, Any] = Field(default_factory=dict)
     failure_modes: list[str] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
+
+
+class InstrumentContract(BaseModel):
+    symbol: str
+    market: str = "US"
+    asset_class: Literal["equity"] = "equity"
+    venue: str = "NASDAQ"
+    currency: str = "USD"
+    session_calendar: str = "XNYS"
+    lot_size: int = Field(default=1, ge=1)
+    timezone: str = "America/New_York"
+
+
+class DatasetManifest(BaseModel):
+    dataset_id: str
+    generated_at: str
+    market: str = "US"
+    frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    data_tier: DataTier = "l1"
+    as_of_time: str
+    universe: list[str] = Field(default_factory=list)
+    instruments: list[InstrumentContract] = Field(default_factory=list)
+    provider_chain: list[str] = Field(default_factory=list)
+    freshness: dict[str, Any] = Field(default_factory=dict)
+    market_depth_status: dict[str, Any] = Field(default_factory=dict)
+    depth_session_ids: list[str] = Field(default_factory=list)
+    provider_capabilities: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    lineage: list[str] = Field(default_factory=list)
+    feature_store: dict[str, dict[str, float]] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResearchProtectionReport(BaseModel):
+    report_id: str
+    generated_at: str
+    dataset_id: str | None = None
+    decision_time: str | None = None
+    market: str = "US"
+    frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    data_tier: DataTier = "l1"
+    required_data_tier: DataTier = "l1"
+    protection_status: Literal["pass", "review", "blocked"] = "review"
+    market_depth_status: dict[str, Any] = Field(default_factory=dict)
+    checks: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    blocking_checks: list[str] = Field(default_factory=list)
+    blocking_reasons: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
+
+
+class OrderBookLevel(BaseModel):
+    level: int = Field(ge=1)
+    price: float = Field(ge=0.0)
+    size: float = Field(ge=0.0, default=0.0)
+    order_count: int | None = Field(default=None, ge=0)
+
+
+class OrderBookSnapshot(BaseModel):
+    snapshot_id: str
+    symbol: str
+    provider: str
+    timestamp: str
+    session: str = "regular"
+    is_real: bool = False
+    bids: list[OrderBookLevel] = Field(default_factory=list)
+    asks: list[OrderBookLevel] = Field(default_factory=list)
+    best_bid: float = Field(ge=0.0, default=0.0)
+    best_ask: float = Field(ge=0.0, default=0.0)
+    mid_price: float = Field(ge=0.0, default=0.0)
+    spread_bps: float = Field(ge=0.0, default=0.0)
+    total_bid_size: float = Field(ge=0.0, default=0.0)
+    total_ask_size: float = Field(ge=0.0, default=0.0)
+    imbalance: float = 0.0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MarketDepthReplay(BaseModel):
+    session_id: str
+    generated_at: str
+    symbol: str
+    provider: str
+    data_tier: DataTier = "l1"
+    is_real_provider: bool = False
+    snapshots: list[OrderBookSnapshot] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
+
+
+class MarketDepthStatus(BaseModel):
+    generated_at: str
+    symbols: list[str] = Field(default_factory=list)
+    selected_provider: str = "unavailable"
+    configured_providers: list[str] = Field(default_factory=list)
+    provider_capabilities: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    available: bool = False
+    is_real_provider: bool = False
+    history_ready: bool = False
+    realtime_ready: bool = False
+    data_tier: DataTier = "l1"
+    eligibility_status: RegistryGateStatus = "review"
+    blocking_reasons: list[str] = Field(default_factory=list)
+    latest: list[OrderBookSnapshot] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
+
+
+class SweepRun(BaseModel):
+    run_id: str
+    generated_at: str
+    strategy_name: str
+    benchmark: str
+    universe: list[str] = Field(default_factory=list)
+    market: str = "US"
+    frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    data_tier: DataTier = "l1"
+    dataset_id: str | None = None
+    protection_status: Literal["pass", "review", "blocked"] = "review"
+    market_depth_status: dict[str, Any] = Field(default_factory=dict)
+    provider_capabilities: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    parameter_grid: dict[str, list[Any]] = Field(default_factory=dict)
+    combinations: list[dict[str, Any]] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    best_run: dict[str, Any] = Field(default_factory=dict)
+    walk_forward: dict[str, Any] = Field(default_factory=dict)
+    lineage: list[str] = Field(default_factory=list)
+
+
+class TearsheetReport(BaseModel):
+    report_id: str
+    generated_at: str
+    backtest_id: str
+    strategy_name: str
+    market: str = "US"
+    frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    data_tier: DataTier = "l1"
+    protection_status: Literal["pass", "review", "blocked"] = "review"
+    market_depth_status: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    sections: dict[str, Any] = Field(default_factory=dict)
+    html: str
     lineage: list[str] = Field(default_factory=list)
 
 
@@ -121,12 +273,14 @@ class SimulationScenario(BaseModel):
     regime: str = "neutral"
     event_id: str | None = None
     evidence_run_id: str | None = None
+    required_data_tier: DataTier = "l1"
 
 
 class SimulationResult(BaseModel):
     simulation_id: str
     generated_at: str
     scenario: SimulationScenario
+    data_tier: DataTier = "l1"
     expected_return: float
     median_return: float
     probability_of_loss: float
@@ -136,6 +290,7 @@ class SimulationResult(BaseModel):
     path_summary: dict[str, float] = Field(default_factory=dict)
     factor_attribution: dict[str, float] = Field(default_factory=dict)
     historical_analogs: list[dict[str, Any]] = Field(default_factory=list)
+    market_depth_status: dict[str, Any] = Field(default_factory=dict)
     lineage: list[str] = Field(default_factory=list)
 
 

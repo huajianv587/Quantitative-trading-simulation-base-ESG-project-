@@ -99,7 +99,11 @@
       "Bash(node --check frontend/js/app.js)",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('total expected:', len\\(d.get\\('runs', d\\) if isinstance\\(d,dict\\) else d\\)\\); print\\(json.dumps\\(list\\(d.keys\\(\\)\\) if isinstance\\(d,dict\\) else d[:3], indent=2, ensure_ascii=False\\)\\)\")",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2, ensure_ascii=False\\)\\)\")",
-      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k != 'runs'}, indent=2, ensure_ascii=False\\)\\)\")"
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k != 'runs'}, indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(python gateway/main.py --help)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl -s http://localhost:8080/)",
+      "Bash(curl -s http://localhost:8000/api/health)"
     ],
     "additionalDirectories": [
       "e:\\项目夹\\ESG Agentic RAG Copilot\\evaluation\\results"

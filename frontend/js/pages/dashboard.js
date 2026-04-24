@@ -1,5 +1,6 @@
 ﻿import { api } from '../qtapi.js?v=8';
 import { computeAllIndicators, buildIndicatorsPanel, showIndicatorModal } from '../modules/indicators.js?v=8';
+import { getApiEndpointLabel } from '../qtapi.js?v=8';
 import { getLang, getLocale, onLangChange } from '../i18n.js?v=8';
 import { createDashboardKlineRenderer } from '../modules/dashboard-kline-renderer.js?v=8';
 import { ensureUiAuditLog, recordUiAuditEvent } from '../modules/ui-audit.js?v=8';
@@ -11,6 +12,7 @@ const ZOOM_STEP = 20;
 const DEFAULT_INDICATORS = ['VOL'];
 const HEATMAP_TFS = ['1D', '1W', '1M'];
 const CHART_CACHE_TTL_MS = 45_000;
+const CHART_REQUEST_DEADLINE_MS = 4_000;
 const DASHBOARD_PROVIDER_STORAGE_KEY = 'qt.dashboard.provider.v1';
 const DASHBOARD_STATE_STORAGE_KEY = 'qt.dashboard.state.v1';
 const DASHBOARD_CHART_STORAGE_PREFIX = 'qt.dashboard.chart.v1';
@@ -78,6 +80,7 @@ const TEXT = {
     chartLoadingTitle: 'Loading chart',
     chartLoadingText: 'Fetching live candles and model coverage for the current symbol.',
     chartUnavailableText: 'Chart data is temporarily unavailable for the current symbol.',
+    liveRequestTimeout: 'Live market data exceeded the dashboard deadline. Showing the latest cached snapshot when available.',
     noAccountData: 'Awaiting live account snapshot',
     degradedTitle: 'Degraded dashboard preview',
     fallbackSymbol: 'Current Symbol',
@@ -169,6 +172,7 @@ const TEXT = {
     chartLoadingTitle: '图表加载中',
     chartLoadingText: '正在拉取当前标的的实时 K 线与模型覆盖。',
     chartUnavailableText: '当前标的暂无可用图表数据。',
+    liveRequestTimeout: '实时行情请求超过 Dashboard 截止时间，若有最近快照则先展示缓存。',
     noAccountData: '等待实时账户快照',
     degradedTitle: '降级预览',
     fallbackSymbol: '当前标的',
@@ -237,6 +241,12 @@ const _chartCache = new Map();
 const _chartInflight = new Map();
 
 function copy(key) {
+  if (key === 'backendUnavailableText') {
+    const endpoint = getApiEndpointLabel();
+    return getLang() === 'zh'
+      ? `当前无法连接 ${endpoint} API 服务，请检查 Quant Terminal 后端后再刷新页面。`
+      : `The API service at ${endpoint} could not be reached. Check Quant Terminal and refresh this page.`;
+  }
   return TEXT[getLang()]?.[key] ?? TEXT.en[key] ?? key;
 }
 
@@ -309,15 +319,104 @@ function persistChartSnapshot(symbol, timeframe, provider, payload) {
   }
 }
 
-function loadPersistedChartSnapshot(symbol, timeframe, provider = _selectedProvider) {
+function readPersistedChartSnapshotEntry(symbol, timeframe, provider = _selectedProvider) {
   try {
     const raw = localStorage.getItem(chartStorageKey(symbol, timeframe, provider));
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed?.payload || null;
+    return JSON.parse(raw);
   } catch {
     return null;
   }
+}
+
+function loadPersistedChartSnapshot(symbol, timeframe, provider = _selectedProvider) {
+  return readPersistedChartSnapshotEntry(symbol, timeframe, provider)?.payload || null;
+}
+
+function withDeadline(promise, timeoutMs, reason = 'live_request_deadline_exceeded') {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      const err = new Error(reason);
+      err.code = reason;
+      reject(err);
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function emptyDashboardSummary() {
+  return {
+    generated_at: null,
+    selected_provider: _selectedProvider,
+    symbol: _activeSymbol || _dashboardState?.symbol || '',
+    watchlist_signals: [],
+    top_signals: [],
+    position_symbols: [],
+    live_account_snapshot: null,
+    kpis: {},
+    provider_status: _dashboardState?.provider_status || {},
+    fallback_preview: _dashboardState?.fallback_preview || {
+      symbol: _activeSymbol || _dashboardState?.symbol || '',
+      source: _dashboardState?.source || 'unknown',
+      source_chain: _dashboardState?.source_chain || sourceChainDefault(),
+      last_snapshot: null,
+      reason: ['chart_loading'],
+      next_actions: ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
+    },
+    p1_signal_snapshot: { regime_counts: {} },
+    universe: { size: 0 },
+    sector_heatmap: [],
+    heatmap_nodes: [],
+    portfolio_preview: {},
+    latest_backtest: { metrics: {} },
+  };
+}
+
+function emptyDashboardSecondary() {
+  return {
+    generated_at: null,
+    sector_heatmap: [],
+    market_surface: [],
+    heatmap_nodes: [],
+    portfolio_preview: {},
+    latest_backtest: { metrics: {} },
+  };
+}
+
+function mergeDashboardOverview(base, patch) {
+  return {
+    ...(base || emptyDashboardSummary()),
+    ...(patch || {}),
+    p1_signal_snapshot: {
+      ...((base || {}).p1_signal_snapshot || {}),
+      ...((patch || {}).p1_signal_snapshot || {}),
+    },
+    universe: {
+      ...((base || {}).universe || {}),
+      ...((patch || {}).universe || {}),
+    },
+    portfolio_preview: {
+      ...((base || {}).portfolio_preview || {}),
+      ...((patch || {}).portfolio_preview || {}),
+    },
+    latest_backtest: {
+      ...((base || {}).latest_backtest || {}),
+      ...((patch || {}).latest_backtest || {}),
+      metrics: {
+        ...(((base || {}).latest_backtest || {}).metrics || {}),
+        ...((((patch || {}).latest_backtest || {}).metrics) || {}),
+      },
+    },
+  };
 }
 
 function formatPct(value) {
@@ -345,6 +444,17 @@ function escapeHtml(value) {
   }[ch]));
 }
 
+function normalizeDegradedReasons(input) {
+  const list = Array.isArray(input) ? input : (input ? [input] : []);
+  return Array.from(
+    new Set(
+      list
+        .map((reason) => String(reason || '').trim())
+        .filter(Boolean),
+    ),
+  ).filter((reason) => reason !== 'prediction_mode_unavailable');
+}
+
 function defaultDashboardState(overrides = {}) {
   const symbol = overrides.symbol ?? _activeSymbol ?? '';
   const sourceChain = Array.isArray(overrides.source_chain) && overrides.source_chain.length
@@ -366,7 +476,7 @@ function defaultDashboardState(overrides = {}) {
       source: overrides.source || 'unknown',
       source_chain: sourceChain,
       last_snapshot: overrides.fallback_preview?.last_snapshot || null,
-      reason: overrides.fallback_preview?.reason || (phase === 'loading' ? ['chart_loading'] : ['chart_data_unavailable']),
+      reason: normalizeDegradedReasons(overrides.fallback_preview?.reason || (phase === 'loading' ? ['chart_loading'] : ['chart_data_unavailable'])),
       next_actions: overrides.fallback_preview?.next_actions || ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
     },
   };
@@ -376,13 +486,33 @@ function isMounted() {
   return Boolean(_container && _container.isConnected);
 }
 
-function chartReady() {
+function chartSnapshotAvailable(response = _lastCandleResponse, symbol = _activeSymbol || _dashboardState?.symbol || '') {
+  return Boolean(symbol && response?.candles?.length);
+}
+
+function chartDegraded(response = _lastCandleResponse, symbol = _activeSymbol || _dashboardState?.symbol || '') {
+  const source = String(response?.source || '').trim().toLowerCase();
+  const reasons = normalizeDegradedReasons([
+    ...(Array.isArray(response?.fallback_preview?.reason) ? response.fallback_preview.reason : []),
+    response?.warning,
+    response?.detail,
+    ...(Array.isArray(response?.market_data_warnings) ? response.market_data_warnings : []),
+  ]);
   return Boolean(
-    _activeSymbol
-    && _lastCandleResponse.candles?.length
-    && _lastCandleResponse.source
-    && !['unknown', 'loading', 'unavailable', ''].includes(_lastCandleResponse.source),
+    !chartSnapshotAvailable(response, symbol)
+    || !source
+    || ['unknown', 'loading', 'unavailable', '', 'cache', 'synthetic'].includes(source)
+    || response?.degraded_snapshot
+    || reasons.some((reason) => reason !== 'chart_loading'),
   );
+}
+
+function chartHealthy(response = _lastCandleResponse, symbol = _activeSymbol || _dashboardState?.symbol || '') {
+  return chartSnapshotAvailable(response, symbol) && !chartDegraded(response, symbol);
+}
+
+function chartReady() {
+  return chartSnapshotAvailable();
 }
 
 function reasonLabel(reason) {
@@ -396,6 +526,7 @@ function reasonLabel(reason) {
     chart_loading: copy('chartLoadingText'),
     chart_data_unavailable: copy('chartUnavailableText'),
     market_data_unavailable: copy('chartUnavailableText'),
+    live_request_deadline_exceeded: copy('liveRequestTimeout'),
     no_watchlist_signal: copy('noSignalsText'),
     source_unknown: copy('sourceUnknownWhy'),
     provider_connected_but_no_payload: copy('providerConnectedNoPayload'),
@@ -424,22 +555,62 @@ function snapshotLabel(snapshot) {
   return `${close != null ? `$${Number(close).toFixed(2)}` : '--'} · ${date ? String(date).slice(0, 16) : '--'}`;
 }
 
+function buildCachedSnapshotPayload(symbol, timeframe, provider = _selectedProvider, reason = 'market_data_unavailable') {
+  const entry = readPersistedChartSnapshotEntry(symbol, timeframe, provider);
+  const payload = entry?.payload;
+  if (!payload?.candles?.length) return null;
+  const sourceChain = payload.source_chain || payload.data_source_chain || _dashboardState?.source_chain || sourceChainDefault();
+  const providerStatus = {
+    ...(_dashboardState?.provider_status || {}),
+    ...(payload.provider_status || {}),
+    available: false,
+    provider: payload.selected_provider || provider || _selectedProvider || 'cache',
+  };
+  const reasonList = normalizeDegradedReasons([
+    ...(payload.fallback_preview?.reason || []),
+    reason,
+    'cache_or_synthetic_fallback',
+  ]);
+  return {
+    ...payload,
+    source: payload.source === 'synthetic' ? 'synthetic' : 'cache',
+    selected_provider: provider || _selectedProvider,
+    source_chain: sourceChain,
+    provider_status: providerStatus,
+    degraded_snapshot: true,
+    fallback_preview: {
+      symbol: symbol || payload.symbol || _dashboardState?.symbol || _activeSymbol || '',
+      source: payload.source || 'cache',
+      source_chain: sourceChain,
+      last_snapshot: payload.candles[payload.candles.length - 1] || null,
+      reason: reasonList,
+      next_actions: ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
+    },
+    prediction_disabled_reason: payload.prediction_disabled_reason || reason,
+    market_data_warnings: Array.from(new Set([...(payload.market_data_warnings || []), reason])),
+    warning: payload.warning || reason,
+    detail: payload.detail || reason,
+    saved_at: entry?.saved_at || null,
+  };
+}
+
 function syncDashboardStateFromChart(response, symbol) {
   const source = response?.source || 'unknown';
   const sourceChain = response?.source_chain || response?.data_source_chain || _dashboardState?.source_chain || sourceChainDefault();
   const providerStatus = response?.provider_status || _dashboardState?.provider_status || {};
   const degradedFrom = response?.degraded_from || _dashboardState?.degraded_from || null;
-  const ready = Boolean(symbol && response?.candles?.length && source && !['unknown', 'loading', 'unavailable', ''].includes(source));
-  const reason = Array.isArray(response?.fallback_preview?.reason) ? [...response.fallback_preview.reason] : [];
+  const ready = chartHealthy(response, symbol);
+  const reason = normalizeDegradedReasons(Array.isArray(response?.fallback_preview?.reason) ? [...response.fallback_preview.reason] : []);
   if (response?.warning) reason.push(response.warning);
   if (response?.detail) reason.push(response.detail);
   if (Array.isArray(response?.market_data_warnings)) reason.push(...response.market_data_warnings);
   if (!ready && providerStatus?.available && !response?.candles?.length) reason.push('provider_connected_but_no_payload');
   if (!ready && degradedFrom) reason.push(`provider_degraded_from_${degradedFrom}`);
   if (!ready && providerStatus?.provider === 'unavailable') reason.push('provider_not_configured');
-  if (!ready && ['cache', 'synthetic'].includes(source)) reason.push('cache_or_synthetic_fallback');
+  if (!ready && (response?.degraded_snapshot || ['cache', 'synthetic'].includes(source))) reason.push('cache_or_synthetic_fallback');
   if (!ready && source === 'unknown') reason.push('source_unknown');
-  if (!ready && !reason.length) reason.push(response?.prediction_disabled_reason || 'chart_data_unavailable');
+  if (!ready && !reason.length) reason.push('chart_data_unavailable');
+  const uniqueReason = normalizeDegradedReasons(reason);
   _dashboardState = defaultDashboardState({
     phase: ready ? 'ready' : (_chartLoading ? 'loading' : 'degraded'),
     symbol,
@@ -453,7 +624,7 @@ function syncDashboardStateFromChart(response, symbol) {
       source,
       source_chain: sourceChain,
       last_snapshot: response?.candles?.length ? response.candles[response.candles.length - 1] : (_dashboardState?.fallback_preview?.last_snapshot || null),
-      reason,
+      reason: uniqueReason,
       next_actions: ['refresh_dashboard', 'switch_symbol', 'open_market_radar', 'open_backtest'],
     },
   });
@@ -860,25 +1031,43 @@ function renderHealthBanner() {
   const state = _dashboardState || defaultDashboardState({ phase: _chartLoading ? 'loading' : 'degraded' });
   const fallback = state.fallback_preview || {};
   const providerStatus = state.provider_status || {};
-  const reasonText = (fallback.reason || []).map(reasonLabel).join(' | ') || copy('noReason');
+  const reasonText = normalizeDegradedReasons(fallback.reason || []).map(reasonLabel).join(' | ') || copy('noReason');
   const nextSteps = (fallback.next_actions || []).map(nextActionLabel).join(' · ') || copy('refreshDashboard');
+  const hasSnapshot = chartSnapshotAvailable();
+  const liveChartHealthy = chartHealthy();
+  const liveChartDegraded = chartDegraded();
+
   if (_overviewError) {
     banner.hidden = false;
     banner.classList.add('is-error');
-    banner.innerHTML = `
-      <strong>${copy('backendUnavailableTitle')}</strong>
-      <span>${copy('backendUnavailableText')}</span>
-      <span>${copy('nextStep')}: ${escapeHtml(nextSteps)}</span>
-    `;
+
+    // 使用统一的错误处理系统
+    if (window.errorHandler) {
+      const errorInfo = window.errorHandler.parseError(_overviewError, {
+        context: 'dashboard_overview',
+        page: 'dashboard'
+      });
+      banner.innerHTML = `
+        <div class="inline-error">
+          <span class="inline-error-icon">⚠️</span>
+          <div class="inline-error-message">
+            <strong>${errorInfo.message}</strong>
+            ${errorInfo.details ? `<div style="margin-top:4px;font-size:12px;opacity:0.8">${errorInfo.details}</div>` : ''}
+            ${errorInfo.suggestions.length > 0 ? `<div style="margin-top:8px;font-size:12px">${errorInfo.suggestions[0]}</div>` : ''}
+          </div>
+        </div>
+      `;
+    } else {
+      // 降级处理
+      banner.innerHTML = `
+        <strong>${copy('backendUnavailableTitle')}</strong>
+        <span>${copy('backendUnavailableText')}</span>
+        <span>${copy('nextStep')}: ${escapeHtml(nextSteps)}</span>
+      `;
+    }
     return;
   }
-  if (_chartLoading && chartReady()) {
-    banner.hidden = true;
-    banner.classList.remove('is-error');
-    banner.innerHTML = '';
-    return;
-  }
-  if (_chartLoading || state.phase === 'loading') {
+  if ((_chartLoading || state.phase === 'loading') && !hasSnapshot) {
     banner.hidden = false;
     banner.classList.remove('is-error');
     banner.innerHTML = `
@@ -888,7 +1077,7 @@ function renderHealthBanner() {
     `;
     return;
   }
-  if (!chartReady()) {
+  if (!liveChartHealthy && liveChartDegraded) {
     banner.hidden = false;
     banner.classList.remove('is-error');
     banner.innerHTML = `
@@ -896,7 +1085,7 @@ function renderHealthBanner() {
       <span>${copy('source')}: ${escapeHtml(state.source || copy('unavailable'))}</span>
       <span>${copy('providerStatus')}: ${escapeHtml(providerStatus.provider || copy('unavailable'))}</span>
       <span>${copy('degradedReason')}: ${escapeHtml(reasonText)}</span>
-      <span>${copy('nextStep')}: ${escapeHtml(nextSteps)}</span>
+      <span>${copy('nextStep')}: ${escapeHtml(nextSteps)}${hasSnapshot ? '' : ` · ${copy('chartUnavailableText')}`}</span>
     `;
     return;
   }
@@ -909,7 +1098,7 @@ function renderChartFallbackCard() {
   const state = _dashboardState || defaultDashboardState({ phase: _chartLoading ? 'loading' : 'degraded' });
   const fallback = state.fallback_preview || {};
   const providerStatus = state.provider_status || {};
-  const reasonText = (fallback.reason || []).map(reasonLabel).join(' | ') || copy('noReason');
+  const reasonText = normalizeDegradedReasons(fallback.reason || []).map(reasonLabel).join(' | ') || copy('noReason');
   const nextSteps = (fallback.next_actions || []).map(nextActionLabel);
   return `
     <div class="functional-empty compact-functional-empty">
@@ -945,6 +1134,56 @@ function populateKPIs() {
       { label: copy('backtestSharpe'), value: '--', cls: '', sub: copy('backendUnavailableTitle') },
       { label: copy('regime'), value: '--', cls: '', sub: copy('backendUnavailableTitle') },
     ].map((item) => `
+      <div class="metric-card">
+        <div class="metric-sheen"></div>
+        <div class="metric-label">${item.label}</div>
+        <div class="metric-value ${item.cls}">${item.value}</div>
+        <div class="metric-sub">${item.sub}</div>
+      </div>
+    `).join('');
+    return;
+  }
+  const summaryKpis = _overview?.kpis || {};
+  if (Object.keys(summaryKpis).length) {
+    const regimeLabel = summaryKpis.regime === 'risk_on'
+      ? copy('riskOn')
+      : summaryKpis.regime === 'risk_off'
+        ? copy('riskOff')
+        : copy('neutral');
+    const cards = [
+      {
+        label: copy('portfolioNav'),
+        value: formatCurrencyValue(summaryKpis.equity ?? summaryKpis.capital_base),
+        cls: '',
+        sub: summaryKpis.equity != null ? copy('capitalBase') : copy('noAccountData'),
+      },
+      {
+        label: copy('expectedAlpha'),
+        value: formatPct(summaryKpis.expected_alpha),
+        cls: pctCls(summaryKpis.expected_alpha),
+        sub: copy('vsBenchmark'),
+      },
+      {
+        label: copy('activeSignals'),
+        value: String(summaryKpis.signal_count ?? _watchlist.length),
+        cls: 'pos',
+        sub: `${summaryKpis.long_count ?? 0} long`,
+      },
+      {
+        label: copy('backtestSharpe'),
+        value: formatNum(summaryKpis.sharpe),
+        cls: Number(summaryKpis.sharpe || 0) >= 1 ? 'pos' : '',
+        sub: `MaxDD ${formatMaybePct(summaryKpis.max_drawdown)}`,
+      },
+      {
+        label: copy('regime'),
+        value: regimeLabel,
+        cls: regimeLabel === copy('riskOff') ? 'neg' : 'pos',
+        sub: `${summaryKpis.symbol_count ?? _watchlist.length} ${copy('symbols')}`,
+      },
+    ];
+
+    row.innerHTML = cards.map((item) => `
       <div class="metric-card">
         <div class="metric-sheen"></div>
         <div class="metric-label">${item.label}</div>
@@ -1641,7 +1880,10 @@ async function fetchCandles(symbol, timeframe) {
   }
   const request = (async () => {
     try {
-      const response = await api.platform.dashboardChart(symbol, timeframe, _selectedProvider);
+      const response = await withDeadline(
+        api.platform.dashboardChart(symbol, timeframe, _selectedProvider),
+        CHART_REQUEST_DEADLINE_MS,
+      );
       const payload = {
         source: response.source || 'unknown',
         selected_provider: response.selected_provider || _selectedProvider,
@@ -1674,7 +1916,13 @@ async function fetchCandles(symbol, timeframe) {
         persistChartSnapshot(symbol, timeframe, _selectedProvider, payload);
       }
       return payload;
-    } catch {
+    } catch (err) {
+      const reason = err?.code === 'live_request_deadline_exceeded' ? 'live_request_deadline_exceeded' : 'market_data_unavailable';
+      const cachedPayload = buildCachedSnapshotPayload(symbol, timeframe, _selectedProvider, reason);
+      if (cachedPayload) {
+        _chartCache.set(cacheKey, { at: Date.now(), payload: cachedPayload });
+        return cachedPayload;
+      }
       const payload = {
         source: 'unavailable',
         selected_provider: _selectedProvider,
@@ -1689,8 +1937,8 @@ async function fetchCandles(symbol, timeframe) {
         viewport_defaults: {},
         click_targets: [],
         prediction_disabled_reason: 'market_data_unavailable',
-        market_data_warnings: ['market_data_unavailable'],
-        warning: 'market_data_unavailable',
+        market_data_warnings: [reason],
+        warning: reason,
         detail: null,
         signal: null,
         candles: [],
@@ -1712,7 +1960,7 @@ function renderChartStage() {
   const overlayEl = _container?.querySelector('#kline-projection-float');
   if (!canvas || !statusEl) return false;
 
-  if (!chartReady()) {
+  if (!chartSnapshotAvailable()) {
     canvas.style.display = 'none';
     legendEl.innerHTML = '';
     if (overlayEl) {
@@ -1757,6 +2005,20 @@ async function loadActiveKline() {
   const signal = activeSignal();
   if (!signal) {
     _chartLoading = false;
+    const snapshotSymbol = _activeSymbol || _dashboardState?.symbol || '';
+    const cachedPayload = snapshotSymbol
+      ? buildCachedSnapshotPayload(snapshotSymbol, _activeTF, _selectedProvider, _overviewError ? 'backend_unavailable' : 'no_watchlist_signal')
+      : null;
+    if (cachedPayload) {
+      _activeSymbol = snapshotSymbol || cachedPayload.fallback_preview?.symbol || _activeSymbol;
+      _lastCandleResponse = cachedPayload;
+      syncDashboardStateFromChart(_lastCandleResponse, _activeSymbol);
+      updateIndicators(_lastCandleResponse.candles);
+      renderAiPanel(_lastCandleResponse.signal || null);
+      updateRenderer();
+      renderHealthBanner();
+      return;
+    }
     _lastCandleResponse = {
       source: _overviewError ? 'unavailable' : 'unknown',
       selected_provider: _selectedProvider,
@@ -1826,7 +2088,7 @@ async function loadActiveKline() {
     renderChips();
     drawHeatmap();
   }
-  const latestSignal = activeSignal();
+  const latestSignal = activeSignal() || _lastCandleResponse.signal || signal;
   if (_lastCandleResponse.source === 'unavailable' || latestSignal?.prediction_mode !== 'model' || _lastCandleResponse.prediction_disabled_reason) {
     _selectedProjection = null;
   }
@@ -1903,6 +2165,7 @@ async function loadOverview() {
   }
   const persistedChart = loadPersistedChartSnapshot(_activeSymbol || _dashboardState?.symbol, _activeTF, _selectedProvider);
   if (persistedChart?.candles?.length) {
+    _activeSymbol = _activeSymbol || persistedChart.symbol || _dashboardState?.symbol || '';
     _lastCandleResponse = {
       ..._lastCandleResponse,
       ...persistedChart,
@@ -1913,7 +2176,9 @@ async function loadOverview() {
   }
   renderHealthBanner();
 
-  const overviewPromise = api.platform.overview();
+  const prefetchSymbol = _activeSymbol || _dashboardState?.symbol || 'AAPL';
+  const chartPrefetch = prefetchSymbol ? fetchCandles(prefetchSymbol, _activeTF).catch(() => null) : Promise.resolve(null);
+  const summaryPromise = api.platform.dashboardSummary(_selectedProvider);
   const dashboardStateResult = await Promise.allSettled([api.trading.dashboardState(_selectedProvider)]).then((results) => results[0]);
   if (!isMounted()) return;
 
@@ -1932,29 +2197,17 @@ async function loadOverview() {
       },
     });
   }
-  const prefetchSymbol = _dashboardState?.symbol || _activeSymbol || '';
-  const chartPrefetch = prefetchSymbol ? fetchCandles(prefetchSymbol, _activeTF).catch(() => null) : Promise.resolve(null);
+  renderHealthBanner();
 
-  const overviewResult = await Promise.allSettled([overviewPromise]).then((results) => results[0]);
+  const summaryResult = await Promise.allSettled([summaryPromise]).then((results) => results[0]);
   if (!isMounted()) return;
-  if (overviewResult.status === 'fulfilled') {
-    _overview = overviewResult.value;
+  if (summaryResult.status === 'fulfilled') {
+    _overview = mergeDashboardOverview(emptyDashboardSummary(), summaryResult.value || {});
     _overviewError = null;
   } else {
-    console.warn('Dashboard overview unavailable', overviewResult.reason);
-    _overviewError = overviewResult.reason;
-    _overview = {
-      watchlist_signals: [],
-      top_signals: [],
-      portfolio_preview: {},
-      latest_backtest: { metrics: {} },
-      p1_signal_snapshot: { regime_counts: {} },
-      universe: { size: 0 },
-      sector_heatmap: [],
-      heatmap_nodes: [],
-      live_account_snapshot: null,
-      position_symbols: [],
-    };
+    console.warn('Dashboard summary unavailable', summaryResult.reason);
+    _overviewError = summaryResult.reason;
+    _overview = emptyDashboardSummary();
     if (!(_dashboardState?.fallback_preview?.reason || []).length) {
       _dashboardState = defaultDashboardState({
         ..._dashboardState,
@@ -1969,12 +2222,18 @@ async function loadOverview() {
   }
   _watchlist = unifiedWatchlist(_overview);
   _selectedHeatmapNode = null;
-  if (!_watchlist.find((signal) => signal.symbol === _activeSymbol)) {
-    _activeSymbol = _watchlist[0]?.symbol || '';
+  const fallbackSymbol = _overview?.symbol || _dashboardState?.symbol || _activeSymbol || '';
+  if (_watchlist.length) {
+    const preferredSymbol = [_overview?.symbol, _dashboardState?.symbol, _activeSymbol]
+      .map((candidate) => String(candidate || '').toUpperCase().trim())
+      .find((candidate) => candidate && _watchlist.find((watchSignal) => watchSignal.symbol === candidate));
+    _activeSymbol = preferredSymbol || _watchlist[0]?.symbol || fallbackSymbol;
+  } else if (!_activeSymbol) {
+    _activeSymbol = fallbackSymbol;
   }
   _dashboardState = defaultDashboardState({
     ..._dashboardState,
-    symbol: _dashboardState?.symbol || _activeSymbol,
+    symbol: _overview?.symbol || _dashboardState?.symbol || _activeSymbol,
     fallback_preview: {
       ...(_dashboardState?.fallback_preview || {}),
       symbol: (_dashboardState?.fallback_preview?.symbol || _activeSymbol),
@@ -1987,11 +2246,20 @@ async function loadOverview() {
   syncPageState();
   renderHealthBanner();
   if (!isMounted()) return;
-  await Promise.allSettled([
-    chartPrefetch,
-    loadActiveKline(),
-    loadPositions(),
-  ]);
+  await Promise.allSettled([chartPrefetch, loadActiveKline(), loadPositions()]);
+  if (!isMounted() || _overviewError) return;
+
+  const secondaryResult = await Promise.allSettled([api.platform.dashboardSecondary(_selectedProvider)]).then((results) => results[0]);
+  if (!isMounted()) return;
+  if (secondaryResult.status === 'fulfilled') {
+    _overview = mergeDashboardOverview(_overview, secondaryResult.value || emptyDashboardSecondary());
+    populateKPIs();
+    drawHeatmap();
+    syncPageState();
+    renderHealthBanner();
+  } else {
+    console.warn('Dashboard secondary payload unavailable', secondaryResult.reason);
+  }
 }
 
 function bindEvents() {
@@ -2261,4 +2529,3 @@ export function destroy() {
     prediction_disabled_reason: null,
   };
 }
-

@@ -19,8 +19,6 @@ import {
 
 let _container = null;
 let _langCleanup = null;
-let _evidenceResizeObserver = null;
-let _evidenceResizeFrame = 0;
 let _latest = {
   evidence: null,
   decision: null,
@@ -28,6 +26,14 @@ let _latest = {
   debate: null,
   risk: null,
 };
+
+function normalizeEvidencePayload(payload) {
+  const normalized = (payload && typeof payload === 'object') ? payload : {};
+  return {
+    ...normalized,
+    items: Array.isArray(normalized.items) ? normalized.items : [],
+  };
+}
 
 const COPY = {
   en: {
@@ -402,13 +408,11 @@ function buildShell() {
 export async function render(container) {
   _container = container;
   container.innerHTML = buildShell();
-  installEvidenceAutoLayout();
   bindEvents();
   renderConfigPreview();
   _langCleanup = onLangChange(() => {
     if (!_container?.isConnected) return;
     _container.innerHTML = buildShell();
-    installEvidenceAutoLayout();
     bindEvents();
     renderConfigPreview();
     renderCached();
@@ -417,10 +421,6 @@ export async function render(container) {
 }
 
 export function destroy() {
-  if (_evidenceResizeFrame) cancelAnimationFrame(_evidenceResizeFrame);
-  _evidenceResizeFrame = 0;
-  _evidenceResizeObserver?.disconnect();
-  _evidenceResizeObserver = null;
   _container = null;
   _latest = { evidence: null, decision: null, audit: null, debate: null, risk: null };
   _langCleanup?.();
@@ -494,24 +494,31 @@ function renderConfigPreview() {
 async function refreshEvidence(showToast) {
   if (!isMounted()) return;
   const cfg = readConfig();
+  const previousEvidence = normalizeEvidencePayload(_latest.evidence);
   setLoading(_container?.querySelector('#evidence-panel'));
   try {
-    _latest.evidence = await api.intelligence.evidence(cfg.symbol, 12);
+    _latest.evidence = normalizeEvidencePayload(await api.intelligence.evidence(cfg.symbol, 12));
     if (!isMounted()) return;
-    renderEvidence(_latest.evidence?.items || []);
-    if (showToast) toast.success(c('refresh'), localizedCount((_latest.evidence?.items || []).length));
+    renderEvidence(_latest.evidence.items);
+    if (showToast) toast.success(c('refresh'), localizedCount(_latest.evidence.items.length));
   } catch (err) {
     if (!isMounted()) return;
-    renderError(_container?.querySelector('#evidence-panel'), err);
+    _latest.evidence = previousEvidence;
+    if (previousEvidence.items.length) {
+      renderEvidence(previousEvidence.items);
+    } else {
+      renderError(_container?.querySelector('#evidence-panel'), err);
+    }
   }
 }
 
 async function runEvidence() {
   if (!isMounted()) return;
   const cfg = readConfig();
+  const previousEvidence = normalizeEvidencePayload(_latest.evidence);
   setLoading(_container?.querySelector('#evidence-panel'), c('scanning'));
   try {
-    _latest.evidence = await api.intelligence.scan({
+    _latest.evidence = normalizeEvidencePayload(await api.intelligence.scan({
       universe: cfg.universe,
       query: cfg.query,
       live_connectors: cfg.mode !== 'local',
@@ -519,13 +526,18 @@ async function runEvidence() {
       providers: cfg.providers,
       quota_guard: true,
       limit: 20,
-    });
+    }));
     if (!isMounted()) return;
-    renderEvidence(_latest.evidence.items || []);
-    toast.success(c('scan'), localizedCount(_latest.evidence.items?.length || 0));
+    renderEvidence(_latest.evidence.items);
+    toast.success(c('scan'), localizedCount(_latest.evidence.items.length));
   } catch (err) {
     if (!isMounted()) return;
-    renderError(_container?.querySelector('#evidence-panel'), err);
+    _latest.evidence = previousEvidence;
+    if (previousEvidence.items.length) {
+      renderEvidence(previousEvidence.items);
+    } else {
+      renderError(_container?.querySelector('#evidence-panel'), err);
+    }
     toast.error(c('scan'), err.message);
   }
 }
@@ -586,12 +598,11 @@ async function loadAudit() {
 
 function renderCached() {
   if (_latest.decision) renderDecision(_latest.decision);
-  if (_latest.evidence) renderEvidence(_latest.evidence.items || []);
+  if (_latest.evidence) renderEvidence(normalizeEvidencePayload(_latest.evidence).items);
   if (_latest.decision) renderCounterEvidence(_latest.decision.counter_evidence || []);
   if (_latest.audit) renderAudit(_latest.audit.decisions || _latest.audit.records || []);
   renderDebateSummary(_latest.debate);
   renderRiskSummary(_latest.risk);
-  queueEvidenceLayoutSync();
 }
 
 function renderEvidence(items) {
@@ -601,7 +612,6 @@ function renderEvidence(items) {
     scroll: false,
     listClass: 'decision-evidence-list',
   });
-  queueEvidenceLayoutSync();
 }
 
 function renderDecision(report) {
@@ -652,7 +662,6 @@ function renderDecision(report) {
       <div class="workbench-report-text">${esc(report.simulation ? c('bridgeSimHint') : c('noEmbeddedSimulation'))}</div>
     </section>
   `;
-  queueEvidenceLayoutSync();
 }
 
 function renderCounterEvidence(items) {
@@ -660,11 +669,9 @@ function renderCounterEvidence(items) {
   const host = _container.querySelector('#counter-panel');
   if (!items?.length) {
     host.innerHTML = renderCounterReadyState();
-    queueEvidenceLayoutSync();
     return;
   }
   host.innerHTML = renderEvidenceItems(items, { maxItems: 5, scroll: true });
-  queueEvidenceLayoutSync();
 }
 
 function renderAudit(records) {
@@ -672,7 +679,6 @@ function renderAudit(records) {
   const host = _container.querySelector('#audit-panel');
   if (!records?.length) {
     host.innerHTML = renderAuditReadyState();
-    queueEvidenceLayoutSync();
     return;
   }
   host.innerHTML = `
@@ -685,7 +691,6 @@ function renderAudit(records) {
       `).join('')}
     </div>
   `;
-  queueEvidenceLayoutSync();
 }
 
 function renderDebateSummary(debate) {
@@ -694,7 +699,6 @@ function renderDebateSummary(debate) {
   if (!host) return;
   if (!debate) {
     host.innerHTML = renderDebateReadyState();
-    queueEvidenceLayoutSync();
     return;
   }
   host.innerHTML = `
@@ -713,7 +717,6 @@ function renderDebateSummary(debate) {
       <div class="workbench-kv-row"><span>${c('bearLabel')}</span><strong>${esc((debate.bear_thesis || '-').slice(0, 44))}</strong></div>
     </div>
   `;
-  queueEvidenceLayoutSync();
 }
 
 function renderRiskSummary(approval) {
@@ -722,7 +725,6 @@ function renderRiskSummary(approval) {
   if (!host) return;
   if (!approval) {
     host.innerHTML = renderRiskReadyState();
-    queueEvidenceLayoutSync();
     return;
   }
   const blocks = approval.hard_blocks || [];
@@ -746,68 +748,6 @@ function renderRiskSummary(approval) {
       `).join('')}
     </div>
   `;
-  queueEvidenceLayoutSync();
-}
-
-function installEvidenceAutoLayout() {
-  _evidenceResizeObserver?.disconnect();
-  _evidenceResizeObserver = null;
-  if (!_container || !window.ResizeObserver) return;
-  const leftStack = _container.querySelector('.decision-stack--left');
-  const rightStack = _container.querySelector('.decision-stack--right');
-  if (!leftStack || !rightStack) return;
-  _evidenceResizeObserver = new ResizeObserver(() => queueEvidenceLayoutSync());
-  _evidenceResizeObserver.observe(leftStack);
-  _evidenceResizeObserver.observe(rightStack);
-  queueEvidenceLayoutSync();
-}
-
-function queueEvidenceLayoutSync() {
-  if (!isMounted()) return;
-  if (_evidenceResizeFrame) cancelAnimationFrame(_evidenceResizeFrame);
-  _evidenceResizeFrame = requestAnimationFrame(() => {
-    _evidenceResizeFrame = 0;
-    syncEvidenceLayout();
-  });
-}
-
-function syncEvidenceLayout() {
-  if (!isMounted()) return;
-  const evidenceCard = _container.querySelector('.decision-evidence-card');
-  const evidencePanel = _container.querySelector('#evidence-panel');
-  const evidenceList = evidencePanel?.querySelector('.decision-evidence-list');
-  const rightStack = _container.querySelector('.decision-stack--right');
-  if (!evidenceCard || !evidencePanel || !rightStack) return;
-
-  evidenceCard.style.minHeight = '';
-  evidenceCard.style.height = '';
-  evidencePanel.style.minHeight = '';
-  evidencePanel.style.height = '';
-  if (evidenceList) {
-    evidenceList.style.maxHeight = '';
-    evidenceList.style.overflowY = '';
-  }
-
-  if (window.innerWidth <= 1100 || !evidenceList) return;
-
-  const cardRect = evidenceCard.getBoundingClientRect();
-  const panelRect = evidencePanel.getBoundingClientRect();
-  const rightRect = rightStack.getBoundingClientRect();
-  const viewportBottom = window.innerHeight - 24;
-  const targetBottom = Math.max(cardRect.top + 320, Math.min(rightRect.bottom, viewportBottom));
-  const availableCardHeight = Math.max(320, Math.round(targetBottom - cardRect.top));
-  const availablePanelHeight = Math.max(240, Math.round(targetBottom - panelRect.top));
-  const availableListHeight = Math.max(240, Math.round(targetBottom - panelRect.top - 8));
-
-  evidenceCard.style.minHeight = `${availableCardHeight}px`;
-  evidenceCard.style.height = `${availableCardHeight}px`;
-  evidencePanel.style.minHeight = `${availablePanelHeight}px`;
-  evidencePanel.style.height = `${availablePanelHeight}px`;
-
-  if (evidenceList.scrollHeight > availableListHeight + 4) {
-    evidenceList.style.maxHeight = `${availableListHeight}px`;
-    evidenceList.style.overflowY = 'auto';
-  }
 }
 
 function mergedEvidenceItems(decisionEvidence = [], fallbackEvidence = _latest?.evidence?.items || []) {

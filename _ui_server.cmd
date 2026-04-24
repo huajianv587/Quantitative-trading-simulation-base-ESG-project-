@@ -1,10 +1,16 @@
 @echo off
-title UI Server - port 9000
-cd /d "%~dp0dist"
+setlocal EnableExtensions
+set "UI_PORT=1002"
+set "UI_URL=http://127.0.0.1:%UI_PORT%/app/"
+title UI Entry - port %UI_PORT%
+cd /d "%~dp0"
 echo.
-echo  UI Server starting on http://127.0.0.1:9000
-echo  Serving directory: %CD%
-echo  Press Ctrl+C to stop.
+echo  Quant Terminal UI now uses the integrated gateway entry.
+echo  Open this URL after the gateway starts:
+echo  %UI_URL%
 echo.
-python -m http.server 9000
+start "" "%UI_URL%"
+if errorlevel 1 (
+  echo  Browser auto-open failed. Open the URL above manually.
+)
 pause

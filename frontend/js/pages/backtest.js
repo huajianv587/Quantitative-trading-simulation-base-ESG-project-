@@ -613,14 +613,24 @@ function renderParameterSweep(container, result) {
   const positions = Array.isArray(result.positions) ? result.positions : [];
   const dataChain = Array.isArray(result.data_source_chain) ? result.data_source_chain : [];
   const warnings = Array.isArray(result.market_data_warnings) ? result.market_data_warnings : [];
-  const combos = Math.max(6, (dataChain.length || 2) * 3);
-  const batches = Math.max(1, Math.ceil(combos / 6));
+  const sweep = result.sweep_preview || {};
+  const sweepSummary = sweep.summary || {};
+  const bestRun = sweep.best_run || {};
+  const walkForward = sweep.walk_forward || {};
+  const combos = Number(sweepSummary.combination_count || Math.max(6, (dataChain.length || 2) * 3));
+  const batches = Number(walkForward.window_count || Math.max(1, Math.ceil(combos / 6)));
   const bestScenario = result.used_synthetic_fallback
     ? (getLang() === 'zh' ? '先缩小股票池再重跑' : 'narrow universe before promotion')
     : (getLang() === 'zh' ? '质量 + 低滑点' : 'quality + low slip');
   const stagedCapability = result.used_synthetic_fallback
     ? (getLang() === 'zh' ? '仅摘要，等待真实数据补齐' : 'summary only until real data is restored')
     : (getLang() === 'zh' ? '参数网格 + 场景矩阵已就绪' : 'parameter grid + scenario matrix ready');
+  const resolvedBestScenario = bestRun.parameters
+    ? Object.keys(bestRun.parameters).map((key) => `${key}=${bestRun.parameters[key]}`).join(', ')
+    : bestScenario;
+  const resolvedStagedCapability = sweep.run_id
+    ? `${sweep.run_id} / ${(walkForward.summary || {}).stability_band || 'mixed'}`
+    : stagedCapability;
   const matrixRows = [
     {
       label: getLang() === 'zh' ? '参数网格' : 'parameter_grid',
@@ -644,7 +654,7 @@ function renderParameterSweep(container, result) {
       <div class="workbench-metric-grid backtest-attribution-metrics">
         ${metric(c('sweepCombos'), combos, warnings.length ? 'risk' : 'positive')}
         ${metric(c('batchCount'), batches)}
-        ${metric(c('bestScenario'), bestScenario, result.used_synthetic_fallback ? 'risk' : 'positive')}
+        ${metric(c('bestScenario'), resolvedBestScenario, result.used_synthetic_fallback ? 'risk' : 'positive')}
         ${metric(c('sourceLineage'), dataChain[0] || result.data_source || '-', 'positive')}
       </div>
       <div class="workbench-section">
@@ -664,7 +674,7 @@ function renderParameterSweep(container, result) {
           <div class="workbench-kv-row"><span>${c('dataChain')}</span><strong>${esc(dataChain.join(' -> ') || '-')}</strong></div>
           <div class="workbench-kv-row"><span>${c('marketWarnings')}</span><strong>${esc(warnings.join(' | ') || c('noWarnings'))}</strong></div>
           <div class="workbench-kv-row"><span>${c('nextAction')}</span><strong>${esc(result.used_synthetic_fallback ? c('nextActionFallback') : c('nextActionReady'))}</strong></div>
-          <div class="workbench-kv-row"><span>${c('stagedCapability')}</span><strong>${esc(stagedCapability)}</strong></div>
+          <div class="workbench-kv-row"><span>${c('stagedCapability')}</span><strong>${esc(resolvedStagedCapability)}</strong></div>
         </div>
       </div>
     </div>

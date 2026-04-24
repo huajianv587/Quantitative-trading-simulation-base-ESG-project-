@@ -130,10 +130,16 @@ def test_router_declares_current_workbench_routes():
         assert route in router_source
 
 
-def test_router_declares_all_31_routes():
+def test_router_declares_all_current_routes():
     router_source = Path("frontend/js/router.js").read_text(encoding="utf-8")
     routes = re.findall(r"'((?:/)[^']*)':\s*\{", router_source)
-    assert len(routes) == 31
+    assert len(routes) == 34
+
+
+def test_router_redirects_empty_shell_urls_back_to_landing():
+    router_source = Path("frontend/js/router.js").read_text(encoding="utf-8")
+    assert "resolveLandingEntry" in router_source
+    assert "window.location.replace(resolveLandingEntry())" in router_source
 
 
 def test_trading_api_client_declares_public_runtime_methods():
@@ -176,6 +182,8 @@ def test_trading_api_client_declares_public_runtime_methods():
         "/api/v1/trading/execution-path/status",
         "/api/v1/trading/dashboard/state",
         "/api/v1/trading/fusion/status",
+        "/platform/dashboard-summary",
+        "/platform/dashboard-secondary",
     ]:
         assert route in api_source
 
@@ -241,6 +249,8 @@ def test_workbench_layout_css_exposes_dense_product_patterns():
     for selector in [
         ".workbench-action-grid",
         ".workbench-main-grid",
+        ".workbench-tabs",
+        ".workbench-tab",
         ".nav-group__trigger",
         ".dashboard-degraded-banner",
         ".dashboard-provider-switch",
@@ -248,12 +258,86 @@ def test_workbench_layout_css_exposes_dense_product_patterns():
         ".decision-evidence-card",
         ".connector-registry-body",
         ".risk-board-grid",
+        ".risk-board-lower-grid",
         ".outcome-top-grid",
+        ".reports-layout",
+        ".report-archive-item",
         ".trading-ops-grid",
         ".workbench-action-btn--primary",
         ".workbench-action-btn--secondary",
+        ".app-content > *",
     ]:
         assert selector in css_source
+
+
+def test_reports_and_dashboard_keep_runtime_layout_hooks():
+    reports_source = Path("frontend/js/pages/reports.js").read_text(encoding="utf-8")
+    for hook in [
+        "report-type-tabs",
+        "reports-archive-body",
+        "report-archive-item",
+        "reports-workspace-body",
+    ]:
+        assert hook in reports_source
+
+    dashboard_source = Path("frontend/js/pages/dashboard.js").read_text(encoding="utf-8")
+    for hook in [
+        "#kline-canvas",
+        "#dashboard-health-banner",
+        "#kline-status-note",
+        "buildCachedSnapshotPayload",
+        "renderChartFallbackCard",
+        "dashboardSummary",
+        "dashboardSecondary",
+        "withDeadline",
+    ]:
+        assert hook in dashboard_source
+
+    intelligence_source = Path("frontend/js/pages/intelligence.js").read_text(encoding="utf-8")
+    assert "normalizeEvidencePayload" in intelligence_source
+
+
+def test_dashboard_prediction_fallbacks_stay_compact_and_projection_width_collapses_without_model_coverage():
+    dashboard_source = Path("frontend/js/pages/dashboard.js").read_text(encoding="utf-8")
+    renderer_source = Path("frontend/js/modules/dashboard-kline-renderer.js").read_text(encoding="utf-8")
+
+    assert "normalizeDegradedReasons" in dashboard_source
+    assert "reason !== 'prediction_mode_unavailable'" in dashboard_source
+    assert "const preferredSymbol = [_overview?.symbol, _dashboardState?.symbol, _activeSymbol]" in dashboard_source
+    assert "const projectionWidth = state.predictionEnabled ? innerWidth * preset.projectionWidthRatio : 0;" in renderer_source
+
+
+def test_nav_preserves_multi_group_expansion_and_mobile_defaults():
+    nav_source = Path("frontend/js/components/nav.js").read_text(encoding="utf-8")
+    assert "defaultGroupState" in nav_source
+    assert "const openAllGroups = !isDesktopNavViewport();" in nav_source
+    assert "setStoredGroups(openState);" in nav_source
+
+
+def test_compact_error_and_degraded_patterns_exist():
+    error_css = Path("frontend/css/error-ui.css").read_text(encoding="utf-8")
+    for selector in [
+        ".error-state--compact",
+        ".backend-disconnected-banner",
+        ".degraded-notice",
+    ]:
+        assert selector in error_css
+
+
+def test_app_config_prefers_runtime_origin_over_localhost_hardcode():
+    content = Path("frontend/app-config.js").read_text(encoding="utf-8")
+    assert "window.__ESG_APP_ORIGIN__" in content
+    assert "window.location.origin" in content
+    assert "window.__ESG_LANDING_ENTRY__" in content
+    assert "http://localhost:8000" not in content
+
+
+def test_launcher_opens_root_and_verifies_quant_fingerprint():
+    content = Path("start.cmd").read_text(encoding="utf-8")
+    assert 'set "APP_URL=%API_URL%/"' in content
+    assert "app_id -eq 'quant-terminal'" in content
+    assert "service_name -eq 'Quant Terminal'" in content
+    assert "PORT_CANDIDATES=8000 8010 8011" in content
 
 
 def test_critical_shell_and_workbench_files_do_not_contain_known_mojibake_fragments():

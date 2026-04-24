@@ -1,0 +1,454 @@
+/* Loading & Error Components */
+
+/* ── Loading Spinner ─────────────────────────────────────────── */
+.loading-spinner {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(0,255,136,0.1);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3,3,8,0.85);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: fadeIn 0.2s ease;
+}
+
+.loading-content {
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.loading-content .loading-spinner {
+  width: 60px;
+  height: 60px;
+  border-width: 4px;
+  margin-bottom: 20px;
+}
+
+.loading-text {
+  font-family: var(--f-display);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  margin-top: 16px;
+}
+
+/* ── Skeleton Loading ────────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.02) 25%,
+    rgba(0,255,136,0.05) 50%,
+    rgba(255,255,255,0.02) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--r-sm);
+}
+
+.skeleton-text {
+  height: 14px;
+  margin-bottom: 8px;
+}
+
+.skeleton-title {
+  height: 24px;
+  width: 60%;
+  margin-bottom: 12px;
+}
+
+.skeleton-card {
+  height: 120px;
+  border-radius: var(--r-lg);
+}
+
+.skeleton-table-row {
+  height: 48px;
+  margin-bottom: 4px;
+}
+
+/* ── Error States ────────────────────────────────────────────── */
+.error-container {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.error-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 20px;
+  border-radius: 50%;
+  background: rgba(255,61,87,0.1);
+  border: 2px solid rgba(255,61,87,0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  color: var(--red);
+  animation: scaleIn 0.3s var(--ease-spring);
+}
+
+.error-title {
+  font-family: var(--f-display);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.error-message {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.error-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* ── Toast Notifications ─────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  min-width: 300px;
+  max-width: 500px;
+  padding: 16px 20px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
+  z-index: 10000;
+  animation: slideInUp 0.3s var(--ease-spring);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.toast-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.toast-success .toast-icon {
+  background: rgba(0,255,136,0.15);
+  color: var(--green);
+}
+
+.toast-error .toast-icon {
+  background: rgba(255,61,87,0.15);
+  color: var(--red);
+}
+
+.toast-warning .toast-icon {
+  background: rgba(255,179,0,0.15);
+  color: var(--amber);
+}
+
+.toast-info .toast-icon {
+  background: rgba(0,229,255,0.15);
+  color: var(--cyan);
+}
+
+.toast-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-title {
+  font-family: var(--f-display);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.toast-message {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.toast-close {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  transition: color 0.2s;
+}
+
+.toast-close:hover {
+  color: var(--text-primary);
+}
+
+/* ── Progress Bar ────────────────────────────────────────────── */
+.progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(0,255,136,0.1);
+  z-index: 10001;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--green), var(--cyan));
+  box-shadow: 0 0 10px var(--green);
+  transition: width 0.3s var(--ease);
+}
+
+.progress-bar-indeterminate {
+  position: absolute;
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, var(--green), transparent);
+  animation: progressIndeterminate 1.5s infinite;
+}
+
+@keyframes progressIndeterminate {
+  0% { left: -30%; }
+  100% { left: 100%; }
+}
+
+/* ── Empty State ─────────────────────────────────────────────── */
+.empty-state {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.empty-state__icon {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 24px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.02);
+  border: 2px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+  color: var(--text-dim);
+}
+
+.empty-state__title {
+  font-family: var(--f-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.empty-state__text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-width: 400px;
+  margin: 0 auto 24px;
+}
+
+/* ── Retry Button ────────────────────────────────────────────── */
+.retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: rgba(0,255,136,0.08);
+  border: 1px solid rgba(0,255,136,0.25);
+  border-radius: var(--r-sm);
+  color: var(--green);
+  font-family: var(--f-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.25s var(--ease-smooth);
+}
+
+.retry-btn:hover {
+  background: rgba(0,255,136,0.15);
+  border-color: var(--green);
+  box-shadow: 0 0 20px rgba(0,255,136,0.2);
+  transform: translateY(-2px);
+}
+
+.retry-btn:active {
+  transform: translateY(0);
+}
+
+/* ── Animations ──────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Light Mode Overrides ────────────────────────────────────── */
+body.light .loading-overlay {
+  background: rgba(238,241,248,0.9);
+}
+
+body.light .skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(0,0,0,0.03) 25%,
+    rgba(0,168,85,0.08) 50%,
+    rgba(0,0,0,0.03) 75%
+  );
+  background-size: 200% 100%;
+}
+
+body.light .toast {
+  background: #FFFFFF;
+  border-color: rgba(0,0,0,0.1);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+}
+
+body.light .error-icon {
+  background: rgba(224,32,64,0.1);
+  border-color: rgba(224,32,64,0.3);
+}
+
+body.light .empty-state__icon {
+  background: rgba(0,0,0,0.02);
+  border-color: rgba(0,0,0,0.08);
+}
+
+/* ── Network Status Indicator ────────────────────────────────── */
+.network-status-indicator {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
+  color: #fff;
+  padding: 12px 20px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  transform: translateY(-100%);
+  transition: transform 0.3s var(--ease-smooth);
+}
+
+.network-status-indicator.visible {
+  transform: translateY(0);
+}
+
+.network-status-indicator.hidden {
+  transform: translateY(-100%);
+}
+
+.network-status-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.network-status-icon {
+  font-size: 18px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.network-status-text {
+  font-family: var(--f-mono);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.network-status-retry {
+  padding: 6px 16px;
+  background: rgba(255,255,255,0.2);
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 6px;
+  color: #fff;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.network-status-retry:hover {
+  background: rgba(255,255,255,0.3);
+  border-color: rgba(255,255,255,0.5);
+}
+
+.network-status-retry:active {
+  transform: scale(0.95);
+}
+
+/* Mobile adjustments */
+@media (max-width: 768px) {
+  .network-status-indicator {
+    padding: 10px 16px;
+  }
+
+  .network-status-content {
+    gap: 8px;
+  }
+
+  .network-status-icon {
+    font-size: 16px;
+  }
+
+  .network-status-text {
+    font-size: 11px;
+  }
+
+  .network-status-retry {
+    padding: 5px 12px;
+    font-size: 10px;
+  }
+}
+}

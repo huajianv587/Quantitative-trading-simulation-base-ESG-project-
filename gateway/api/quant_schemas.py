@@ -49,6 +49,18 @@ class QuantBacktestRequest(BaseModel):
     force_refresh: bool = False
 
 
+class QuantBacktestSweepRequest(BaseModel):
+    strategy_name: str = "ESG Multi-Factor Long-Only"
+    universe: list[str] = Field(default_factory=list)
+    benchmark: str = "SPY"
+    capital_base: float = 1_000_000
+    lookback_days: int = 126
+    market_data_provider: str | None = None
+    force_refresh: bool = False
+    parameter_grid: dict[str, list[Any]] = Field(default_factory=dict)
+    top_k: int = 5
+
+
 class QuantExecutionRequest(BaseModel):
     universe: list[str] = Field(default_factory=list)
     benchmark: str = "SPY"
@@ -114,6 +126,39 @@ class QuantFactorDiscoveryRequest(BaseModel):
     mode: str = "local"
     providers: list[str] = Field(default_factory=list)
     quota_guard: bool = True
+    required_data_tier: str = "l1"
+
+
+class QuantDatasetBuildRequest(BaseModel):
+    universe: list[str] = Field(default_factory=list)
+    query: str = "Build a reusable as-of dataset manifest for US equities research"
+    as_of_time: str | None = None
+    decision_time: str | None = None
+    mode: str = "local"
+    providers: list[str] = Field(default_factory=list)
+    quota_guard: bool = True
+    frequency: str = "daily"
+    include_intraday: bool = True
+    required_data_tier: str = "l1"
+    persist: bool = True
+
+
+class QuantResearchQualityRequest(BaseModel):
+    universe: list[str] = Field(default_factory=list)
+    query: str = "Run research protection checks"
+    decision_time: str | None = None
+    as_of_time: str | None = None
+    evidence_run_id: str | None = None
+    mode: str = "local"
+    providers: list[str] = Field(default_factory=list)
+    quota_guard: bool = True
+    frequency: str = "daily"
+    formulas: list[str] = Field(default_factory=list)
+    labels: list[dict[str, Any]] = Field(default_factory=list)
+    timestamps: list[str] = Field(default_factory=list)
+    current_constituents_only: bool = False
+    required_data_tier: str = "l1"
+    persist: bool = True
 
 
 class QuantDecisionExplainRequest(BaseModel):
@@ -142,6 +187,15 @@ class QuantSimulationScenarioRequest(BaseModel):
     regime: str = "neutral"
     event_id: str | None = None
     evidence_run_id: str | None = None
+    required_data_tier: str = "l1"
+
+
+class QuantMarketDepthReplayRequest(BaseModel):
+    symbol: str = "AAPL"
+    limit: int = 20
+    timestamps: list[str] = Field(default_factory=list)
+    required_data_tier: str = "l1"
+    persist: bool = True
 
 
 class QuantOutcomeEvaluateRequest(BaseModel):

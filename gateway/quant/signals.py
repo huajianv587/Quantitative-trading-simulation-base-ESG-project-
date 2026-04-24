@@ -34,11 +34,14 @@ class MovingAverageCrossSignalEngine:
         universe: list[UniverseMember],
         benchmark: str,
         research_question: str = "",
+        prefetched_bars: dict[str, MarketBarsResult] | None = None,
     ) -> list[ResearchSignal]:
         signals: list[ResearchSignal] = []
         for member in universe:
             try:
-                bars_result = self.market_data.get_daily_bars(member.symbol, limit=self.history_bars)
+                bars_result = (prefetched_bars or {}).get(member.symbol)
+                if bars_result is None:
+                    bars_result = self.market_data.get_daily_bars(member.symbol, limit=self.history_bars)
                 signal = self._build_signal(member, benchmark, research_question, bars_result)
                 if signal is not None:
                     signals.append(signal)

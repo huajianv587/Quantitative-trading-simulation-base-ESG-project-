@@ -193,6 +193,15 @@ class StrategyTemplate(BaseModel):
     display_name: str
     status: Literal["active", "paused", "draft"] = "active"
     factor_dependencies: list[str] = Field(default_factory=list)
+    required_frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    required_data_tier: Literal["l1", "l2"] = "l1"
+    registry_gate_status: Literal["pass", "review", "blocked"] = "review"
+    eligible_for_execution: bool = False
+    blocking_reasons: list[str] = Field(default_factory=list)
+    latest_dataset_id: str | None = None
+    latest_protection_status: Literal["pass", "review", "blocked"] = "review"
+    latest_l2_status: Literal["pass", "review", "blocked"] = "review"
+    bound_rl_run_id: str | None = None
     risk_profile: Literal["conservative", "balanced", "aggressive"] = "balanced"
     capital_allocation: float = Field(ge=0.0, le=1.0, default=0.0)
     allowed_symbols: list[str] = Field(default_factory=list)
@@ -203,6 +212,17 @@ class StrategyTemplate(BaseModel):
     lineage: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     updated_at: str
+
+
+class StrategyEligibilityReport(BaseModel):
+    generated_at: str
+    symbol: str | None = None
+    eligible_count: int = 0
+    blocked_count: int = 0
+    review_count: int = 0
+    market_depth_status: dict[str, Any] = Field(default_factory=dict)
+    strategies: list[dict[str, Any]] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
 
 
 class AutopilotPolicy(BaseModel):
@@ -272,6 +292,14 @@ class ExecutionIntent(BaseModel):
     signal_ttl_minutes: int = Field(ge=0, default=0)
     paper_only: bool | None = None
     guards: list[str] = Field(default_factory=list)
+    dataset_id: str | None = None
+    protection_status: Literal["pass", "review", "blocked"] = "review"
+    frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    data_tier: Literal["l1", "l2"] = "l1"
+    registry_gate_status: Literal["pass", "review", "blocked"] = "review"
+    blocking_reasons: list[str] = Field(default_factory=list)
+    market: str = "US"
+    lineage: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -287,6 +315,12 @@ class ExecutionResult(BaseModel):
     requested_action: TradingAction
     approved_action: TradingAction | None = None
     verdict: RiskVerdict = "halt"
+    dataset_id: str | None = None
+    protection_status: Literal["pass", "review", "blocked"] = "review"
+    frequency: Literal["daily", "intraday", "hybrid"] = "daily"
+    data_tier: Literal["l1", "l2"] = "l1"
+    registry_gate_status: Literal["pass", "review", "blocked"] = "review"
+    blocking_reasons: list[str] = Field(default_factory=list)
     order_payload: dict[str, Any] = Field(default_factory=dict)
     receipt: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -309,6 +343,7 @@ class FactorPipelineManifest(BaseModel):
     symbol: str | None = None
     strategy_slots: list[str] = Field(default_factory=list)
     factor_dependencies: list[str] = Field(default_factory=list)
+    market_depth_status: dict[str, Any] = Field(default_factory=dict)
     stages: list[FactorPipelineStage] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     next_action: str = ""

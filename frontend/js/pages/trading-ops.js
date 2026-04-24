@@ -1,10 +1,13 @@
-import { api } from '../qtapi.js?v=8';
+import { api, openMarketDepthWS } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
 import { getLang, onLangChange } from '../i18n.js?v=8';
 import {
   emptyState,
   esc,
   metric,
+  renderMarketDepthDiagnostics,
+  renderRegistryGate,
+  renderDegradedNotice,
   renderError,
   renderTokenPreview,
   setLoading,
@@ -15,6 +18,9 @@ import {
 let _container = null;
 let _langCleanup = null;
 let _snapshot = null;
+let _marketDepthWS = null;
+let _snapshotSavedAt = null;
+let _degradedMeta = null;
 const OPS_SNAPSHOT_CACHE_KEY = 'qt.trading.ops.snapshot.v1';
 const OPS_SNAPSHOT_CACHE_TTL_MS = 15 * 60 * 1000;
 
@@ -182,6 +188,23 @@ function isMounted() {
   return Boolean(_container && _container.isConnected);
 }
 
+function opsDegradedState(savedAt, reason) {
+  return {
+    tone: 'warning',
+    saved_at: savedAt || null,
+    title: getLang() === 'zh' ? '交易运维已切换到缓存快照' : 'Trading Ops is showing a cached snapshot',
+    reason: reason || (getLang() === 'zh'
+      ? '当前继续展示最近一次成功的运维快照，等待实时刷新恢复。'
+      : 'The latest successful ops snapshot is still visible while live refresh recovers.'),
+    detail: getLang() === 'zh'
+      ? '执行路径、策略门禁和盘口摘要都来自最近一次成功结果。'
+      : 'Execution path, strategy gate, and market-depth summary come from the latest successful snapshot.',
+    action: getLang() === 'zh'
+      ? '可以继续点击“刷新运维”重试。'
+      : 'Use Refresh Ops to retry.',
+  };
+}
+
 function humanMode(value) {
   return String(value || '').trim().toLowerCase() === 'live' ? c('liveMode') : c('paperMode');
 }
@@ -309,8 +332,14 @@ export async function render(container) {
 }
 
 export function destroy() {
+  if (_marketDepthWS) {
+    _marketDepthWS.close();
+    _marketDepthWS = null;
+  }
   _container = null;
   _snapshot = null;
+  _snapshotSavedAt = null;
+  _degradedMeta = null;
   _langCleanup?.();
   _langCleanup = null;
 }
@@ -418,20 +447,41 @@ async function refreshOps() {
     _snapshot = await api.trading.opsSnapshot();
     if (!isMounted()) return;
     persistSnapshot(_snapshot);
+    _degradedMeta = null;
     renderSnapshot();
+    startMarketDepthStream();
   } catch (err) {
     if (!isMounted()) return;
     if (!hadSnapshot) {
       ['#ops-kpi', '#ops-schedule', '#ops-watchlist', '#ops-alerts', '#ops-review'].forEach((selector) => {
         const host = _container?.querySelector(selector);
-        if (host) renderError(host, err);
+        if (host) renderError(host, err, { onRetry: refreshOps });
       });
     } else {
+      _degradedMeta = opsDegradedState(_snapshotSavedAt, err.message);
+      renderSnapshot();
       toast.error(c('refresh'), err.message || '');
     }
   } finally {
     setRefreshState(false);
   }
+}
+
+function startMarketDepthStream() {
+  if (!isMounted()) return;
+  if (_marketDepthWS) {
+    _marketDepthWS.close();
+    _marketDepthWS = null;
+  }
+  _marketDepthWS = openMarketDepthWS(universe(), false, function(payload) {
+    if (!_snapshot) return;
+    _snapshot.market_depth = payload;
+    _snapshot.strategy_eligibility = _snapshot.strategy_eligibility || {};
+    _snapshot.strategy_eligibility.market_depth_status = payload;
+    renderSnapshot();
+  }, function() {
+    _marketDepthWS = null;
+  });
 }
 
 async function addWatchlistSymbol() {
@@ -440,7 +490,7 @@ async function addWatchlistSymbol() {
     await refreshOps();
   } catch (err) {
     const host = _container?.querySelector('#ops-watchlist');
-    if (host) renderError(host, err);
+    if (host) renderError(host, err, { onRetry: addWatchlistSymbol });
   }
 }
 
@@ -480,15 +530,25 @@ function hydrateSnapshotFromCache() {
     if (!parsed?.payload || !parsed?.saved_at) return;
     if ((Date.now() - Number(parsed.saved_at)) > OPS_SNAPSHOT_CACHE_TTL_MS) return;
     _snapshot = parsed.payload;
+    _snapshotSavedAt = Number(parsed.saved_at);
+    _degradedMeta = opsDegradedState(
+      _snapshotSavedAt,
+      getLang() === 'zh'
+        ? '正在回填最近一次成功的运维快照，并在后台重连服务。'
+        : 'Rehydrating the latest successful ops snapshot while reconnecting.',
+    );
   } catch {
     _snapshot = null;
+    _snapshotSavedAt = null;
+    _degradedMeta = null;
   }
 }
 
 function persistSnapshot(snapshot) {
   try {
+    _snapshotSavedAt = Date.now();
     localStorage.setItem(OPS_SNAPSHOT_CACHE_KEY, JSON.stringify({
-      saved_at: Date.now(),
+      saved_at: _snapshotSavedAt,
       payload: snapshot,
     }));
   } catch {
@@ -517,7 +577,7 @@ async function runJob(jobName) {
     await api.trading.jobRun(jobName, {});
     await refreshOps();
   } catch (err) {
-    if (scheduleHost) renderError(scheduleHost, err);
+    if (scheduleHost) renderError(scheduleHost, err, { onRetry: () => runJob(jobName) });
   }
 }
 
@@ -541,7 +601,7 @@ async function runTradingCycle() {
     });
     await refreshOps();
   } catch (err) {
-    if (alertsHost) renderError(alertsHost, err);
+    if (alertsHost) renderError(alertsHost, err, { onRetry: runTradingCycle });
   }
 }
 
@@ -562,7 +622,7 @@ async function toggleAutopilot() {
     await refreshOps();
   } catch (err) {
     const host = _container?.querySelector('#ops-schedule');
-    if (host) renderError(host, err);
+    if (host) renderError(host, err, { onRetry: toggleAutopilot });
   }
 }
 
@@ -582,6 +642,8 @@ function renderSnapshot() {
   const factorPipeline = _snapshot.factor_pipeline || {};
   const strategiesPayload = _snapshot.strategies || {};
   const strategies = Array.isArray(strategiesPayload.strategies) ? strategiesPayload.strategies : [];
+  const strategyEligibility = _snapshot.strategy_eligibility || strategiesPayload.eligibility || {};
+  const marketDepth = _snapshot.market_depth || strategyEligibility.market_depth_status || {};
   const activeStrategies = strategies.filter((item) => String(item.status || '').toLowerCase() === 'active');
   const requestedMode = policy.requested_mode || policy.execution_mode || executionPath.requested_mode || executionPath.mode || 'paper';
   const effectiveMode = policy.effective_mode || executionPath.effective_mode || executionPath.mode || 'paper';
@@ -604,18 +666,21 @@ function renderSnapshot() {
   const alertsHost = _container?.querySelector('#ops-alerts');
   const reviewHost = _container?.querySelector('#ops-review');
   if (!kpiHost || !scheduleHost || !watchlistHost || !alertsHost || !reviewHost) return;
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
 
   kpiHost.innerHTML = `
     ${metric(c('requestedMode'), humanMode(requestedMode))}
     ${metric(c('effectiveMode'), humanMode(effectiveMode), effectiveMode === 'live' ? 'risk' : 'positive')}
     ${metric(c('brokerReadiness'), brokerReady ? c('statusReady') : c('statusBlocked'), brokerReady ? 'positive' : 'risk')}
     ${metric(c('gateStatus'), gateStatus, blockReason ? 'risk' : 'positive')}
+    ${metric('L2', marketDepth.data_tier || 'l1', (marketDepth.data_tier || 'l1') === 'l2' ? 'positive' : 'risk')}
     ${metric(c('watchCount'), watchlist.length || 0, watchlist.length ? 'positive' : 'risk')}
     ${metric(c('alertCount'), alerts.length || 0, alerts.length ? 'risk' : 'positive')}
     ${metric(c('latestReviewCount'), review ? c('clear') : c('statusPending'), review ? 'positive' : 'risk')}
   `;
 
   scheduleHost.innerHTML = `
+    ${degradedBanner}
     <div class="workbench-metric-grid">
       ${metric(c('requestedMode'), humanMode(requestedMode))}
       ${metric(c('effectiveMode'), humanMode(effectiveMode), effectiveMode === 'live' ? 'risk' : 'positive')}
@@ -631,6 +696,7 @@ function renderSnapshot() {
       <div class="ops-timeline-grid">
         ${timelineStep(c('pathScan'), stageLookup.get('scan') || 'pending')}
         ${timelineStep(c('pathFactor'), stageLookup.get('factors') || 'pending')}
+        ${timelineStep('L2', stageLookup.get('l2_ready') || ((marketDepth.data_tier || 'l1') === 'l2' ? 'ready' : 'guarded'))}
         ${timelineStep(c('pathDebate'), stageLookup.get('debate') || 'review')}
         ${timelineStep(c('pathJudge'), stageLookup.get('judge') || (executionPath.judge_passed ? 'passed' : 'review'))}
         ${timelineStep(c('pathRisk'), stageLookup.get('risk') || (latestApproval?.verdict || 'review'))}
@@ -675,14 +741,24 @@ function renderSnapshot() {
       <div class="factor-checklist">
         ${guardRow(c('brokerReadiness'), brokerReady ? 'is-pass' : 'is-watch', brokerReady ? c('statusReady') : humanReason(blockReason))}
         ${guardRow(c('monitor'), monitor.running ? 'is-pass' : 'is-watch', monitor.running ? (monitor.stream_mode || c('on')) : c('off'))}
+        ${guardRow('Registry gate', strategyEligibility.blocked_count ? 'is-watch' : 'is-pass', `${strategyEligibility.eligible_count || 0} pass / ${strategyEligibility.blocked_count || 0} blocked`)}
         ${guardRow(c('blockReason'), blockReason ? 'is-watch' : 'is-pass', humanReason(blockReason))}
         ${guardRow(c('nextAction'), nextActions.length ? 'is-watch' : 'is-pass', nextActions.map(humanNextAction).join(' / ') || c('clear'))}
         ${guardRow(c('notifier'), notifier.telegram_configured ? 'is-pass' : 'is-watch', notifier.telegram_configured ? 'telegram' : c('uiOnly'))}
       </div>
     </section>
+    ${renderMarketDepthDiagnostics(marketDepth)}
+    ${renderRegistryGate({
+      registry_gate_status: strategyEligibility.blocked_count ? 'blocked' : (strategyEligibility.review_count ? 'review' : 'pass'),
+      eligible_for_execution: (strategyEligibility.eligible_count || 0) > 0,
+      required_frequency: factorPipeline?.strategy_slots?.length ? 'mixed' : '-',
+      required_data_tier: marketDepth.data_tier || 'l1',
+      blocking_reasons: marketDepth.blocking_reasons || [],
+    })}
   `;
 
   watchlistHost.innerHTML = watchlist.length ? `
+    ${degradedBanner}
     <div class="workbench-list workbench-scroll-list ops-watchlist-scroll">
       ${watchlist.map((item) => `
         <article class="workbench-item">
@@ -698,9 +774,10 @@ function renderSnapshot() {
           </div>
         </article>
       `).join('')}
-    </div>` : emptyState(c('noWatchlist'));
+    </div>` : `${degradedBanner}${emptyState(c('noWatchlist'))}`;
 
   alertsHost.innerHTML = alerts.length ? `
+    ${degradedBanner}
     <div class="workbench-list workbench-scroll-list ops-alerts-scroll">
       ${alerts.map((item) => `
         <article class="workbench-item">
@@ -716,9 +793,10 @@ function renderSnapshot() {
           </div>
         </article>
       `).join('')}
-    </div>` : emptyState(c('noAlerts'), c('noAlertsHint'));
+    </div>` : `${degradedBanner}${emptyState(c('noAlerts'), c('noAlertsHint'))}`;
 
   reviewHost.innerHTML = review ? `
+    ${degradedBanner}
     <div class="workbench-metric-grid">
       ${metric(c('alertCount'), alerts.length || 0, alerts.length ? 'risk' : 'positive')}
       ${metric(c('watchCount'), watchlist.length || 0, watchlist.length ? 'positive' : 'risk')}
@@ -731,7 +809,7 @@ function renderSnapshot() {
         <div class="factor-check-row"><span>${esc(flag)}</span><strong class="${flag === c('clear') ? 'is-pass' : 'is-watch'}">${flag === c('clear') ? c('clear') : c('nextAction')}</strong></div>
       `).join('')}
     </div>
-  ` : emptyState(c('noReview'), c('noReviewHint'));
+  ` : `${degradedBanner}${emptyState(c('noReview'), c('noReviewHint'))}`;
 }
 
 function autoSubmitLabel(policy) {

@@ -64,6 +64,7 @@ class MarketDataGateway:
         provider_order_override: list[str] | None = None,
         cache_only: bool = False,
         allow_stale_cache: bool = True,
+        timeout_override: int | None = None,
     ) -> MarketBarsResult:
         normalized_symbol = str(symbol or "").upper().strip()
         if not normalized_symbol:
@@ -101,12 +102,21 @@ class MarketDataGateway:
 
         errors: list[str] = []
         provider_order = provider_order_override or self.provider_order
+        request_timeout = max(1, int(timeout_override or self.timeout or 1))
         for provider in provider_order:
             try:
                 if provider == "twelvedata":
-                    bars = self._fetch_twelvedata_daily_bars(normalized_symbol, limit=max(limit, self.history_days))
+                    bars = self._fetch_twelvedata_daily_bars(
+                        normalized_symbol,
+                        limit=max(limit, self.history_days),
+                        timeout_seconds=request_timeout,
+                    )
                 elif provider == "alpaca":
-                    bars = self._fetch_alpaca_daily_bars(normalized_symbol, limit=max(limit, self.history_days))
+                    bars = self._fetch_alpaca_daily_bars(
+                        normalized_symbol,
+                        limit=max(limit, self.history_days),
+                        timeout_seconds=request_timeout,
+                    )
                 elif provider == "yfinance":
                     bars = self._fetch_yfinance_daily_bars(normalized_symbol, limit=max(limit, self.history_days))
                 else:
@@ -248,7 +258,7 @@ class MarketDataGateway:
             )
             connection.commit()
 
-    def _fetch_alpaca_daily_bars(self, symbol: str, limit: int) -> pd.DataFrame:
+    def _fetch_alpaca_daily_bars(self, symbol: str, limit: int, *, timeout_seconds: int | None = None) -> pd.DataFrame:
         if not (self.alpaca_key and self.alpaca_secret):
             raise RuntimeError("Alpaca market data credentials are not configured")
 
@@ -277,7 +287,7 @@ class MarketDataGateway:
                 "https://data.alpaca.markets/v2/stocks/bars",
                 headers=headers,
                 params=params,
-                timeout=self.timeout,
+                timeout=max(1, int(timeout_seconds or self.timeout or 1)),
             )
             if response.status_code >= 400:
                 raise RuntimeError(f"Alpaca market data {response.status_code}: {response.text[:400]}")
@@ -309,7 +319,7 @@ class MarketDataGateway:
         )
         return self._finalize_bars(frame).tail(limit)
 
-    def _fetch_twelvedata_daily_bars(self, symbol: str, limit: int) -> pd.DataFrame:
+    def _fetch_twelvedata_daily_bars(self, symbol: str, limit: int, *, timeout_seconds: int | None = None) -> pd.DataFrame:
         if not self.twelvedata_key:
             raise RuntimeError("Twelve Data API key is not configured")
 
@@ -321,7 +331,7 @@ class MarketDataGateway:
                 "outputsize": min(max(limit, 30), 5000),
                 "apikey": self.twelvedata_key,
             },
-            timeout=self.timeout,
+            timeout=max(1, int(timeout_seconds or self.timeout or 1)),
         )
         if response.status_code >= 400:
             raise RuntimeError(f"Twelve Data {response.status_code}: {response.text[:400]}")

@@ -1,7 +1,43 @@
 /* Quant Terminal - API Client */
 
-var BASE = window.__ESG_API_BASE_URL__ || '';
+function _normalizedApiBase() {
+  var raw = window.__ESG_API_BASE_URL__ || window.__ESG_APP_ORIGIN__ || window.location.origin || '';
+  return String(raw || '').replace(/\/+$/, '');
+}
+
+var BASE = _normalizedApiBase();
 var Q = '/api/v1/quant';
+
+function _isReadMethod(method) {
+  var normalized = String(method || 'GET').toUpperCase();
+  return normalized === 'GET' || normalized === 'HEAD';
+}
+
+export function getApiBaseUrl() {
+  BASE = _normalizedApiBase();
+  return BASE;
+}
+
+export function getApiEndpointLabel() {
+  try {
+    var resolved = new URL(getApiBaseUrl(), window.location.origin);
+    return resolved.host || resolved.origin || getApiBaseUrl();
+  } catch (_ignore) {
+    return getApiBaseUrl();
+  }
+}
+
+// 生成trace_id
+function _generateTraceId() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0;
+    var v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+// 存储最后的trace_id
+var _lastTraceId = null;
 
 function _apiKeyForScope(scope) {
   if (scope === 'admin') return window.__ESG_ADMIN_API_KEY__ || window.__ESG_API_KEY__ || '';
@@ -10,10 +46,19 @@ function _apiKeyForScope(scope) {
   return window.__ESG_API_KEY__ || '';
 }
 
-function _mergeHeaders(scope, extraHeaders) {
-  var headers = { 'Content-Type': 'application/json' };
+function _mergeHeaders(method, scope, body, extraHeaders) {
+  var headers = {};
   var apiKey = _apiKeyForScope(scope);
   if (apiKey) headers['x-api-key'] = apiKey;
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  // 添加trace_id
+  if (!_isReadMethod(method)) {
+    headers['X-Trace-ID'] = _generateTraceId();
+  }
+
   if (extraHeaders) {
     Object.keys(extraHeaders).forEach(function(key) {
       headers[key] = extraHeaders[key];
@@ -26,15 +71,40 @@ function _req(method, path, body, opts) {
   var options = opts || {};
   var requestOptions = {
     method: method,
-    headers: _mergeHeaders(options.scope, options.headers),
+    headers: _mergeHeaders(method, options.scope, body, options.headers),
   };
   if (body !== undefined) requestOptions.body = JSON.stringify(body);
 
-  return fetch(BASE + path, requestOptions).then(function(res) {
+  return fetch(getApiBaseUrl() + path, requestOptions).then(function(res) {
+    // 保存响应中的trace_id
+    var traceId = res.headers.get('X-Trace-ID');
+    if (traceId) _lastTraceId = traceId;
+
     if (res.status === 204) return null;
     if (!res.ok) {
-      return res.json().catch(function() { return { detail: res.statusText }; }).then(function(err) {
-        throw new Error(err.detail || ('HTTP ' + res.status));
+      return res.json().catch(function() {
+        return {
+          success: false,
+          error: {
+            code: 'HTTP_' + res.status,
+            message: res.statusText,
+            trace_id: traceId
+          }
+        };
+      }).then(function(err) {
+        // 处理新的错误响应格式
+        if (err.success === false && err.error) {
+          var error = new Error(err.error.message || ('HTTP ' + res.status));
+          error.code = err.error.code;
+          error.trace_id = err.error.trace_id || traceId;
+          error.details = err.error.details;
+          error.retryable = err.error.retryable;
+          throw error;
+        }
+        // 向后兼容旧格式
+        var error = new Error(err.detail || ('HTTP ' + res.status));
+        error.trace_id = traceId;
+        throw error;
       });
     }
     return res.json();
@@ -47,21 +117,21 @@ function _put(path, body, opts) { return _req('PUT', path, body, opts); }
 function _del(path, opts) { return _req('DELETE', path, undefined, opts); }
 
 export var api = {
-  health: function() { return _get('/health'); },
+  health: function() { return _get('/api/health'); },
 
   // ── Auth ─────────────────────────────────────
   auth: {
-    register:     function(payload) { return _post('/auth/register', payload); },
-    login:        function(payload) { return _post('/auth/login', payload); },
-    verify:       function(token)   { return _get('/auth/verify?token=' + encodeURIComponent(token)); },
-    resetRequest: function(payload) { return _post('/auth/reset-password/request', payload); },
-    resetConfirm: function(payload) { return _post('/auth/reset-password/confirm', payload); },
+    register:     function(payload) { return _post('/api/auth/register', payload); },
+    login:        function(payload) { return _post('/api/auth/login', payload); },
+    verify:       function(token)   { return _get('/api/auth/verify?token=' + encodeURIComponent(token)); },
+    resetRequest: function(payload) { return _post('/api/auth/reset-password/request', payload); },
+    resetConfirm: function(payload) { return _post('/api/auth/reset-password/confirm', payload); },
   },
 
   // ── Market data ──────────────────────────────
   market: {
     ohlcv: function(symbol, timeframe, limit) {
-      return _get('/market/ohlcv?symbol=' + encodeURIComponent(symbol || 'NVDA')
+      return _get('/api/market/ohlcv?symbol=' + encodeURIComponent(symbol || 'NVDA')
         + '&timeframe=' + encodeURIComponent(timeframe || '1D')
         + '&limit=' + encodeURIComponent(limit || 120));
     },
@@ -69,6 +139,14 @@ export var api = {
 
   platform: {
     overview: function() { return _get(Q + '/platform/overview'); },
+    dashboardSummary: function(provider) {
+      var query = provider ? ('?provider=' + encodeURIComponent(provider)) : '';
+      return _get(Q + '/platform/dashboard-summary' + query);
+    },
+    dashboardSecondary: function(provider) {
+      var query = provider ? ('?provider=' + encodeURIComponent(provider)) : '';
+      return _get(Q + '/platform/dashboard-secondary' + query);
+    },
     dashboardChart: function(symbol, timeframe, provider) {
       var query = '?timeframe=' + encodeURIComponent(timeframe || '1D');
       if (symbol) query += '&symbol=' + encodeURIComponent(symbol);
@@ -82,13 +160,13 @@ export var api = {
     newSession: function(sessionId, userId) {
       var query = '?session_id=' + encodeURIComponent(sessionId || '');
       if (userId) query += '&user_id=' + encodeURIComponent(userId);
-      return _post('/session' + query, undefined);
+      return _post('/api/session' + query, undefined);
     },
     history: function(sessionId, limit) {
-      return _get('/history/' + encodeURIComponent(sessionId) + '?limit=' + encodeURIComponent(limit || 20));
+      return _get('/api/history/' + encodeURIComponent(sessionId) + '?limit=' + encodeURIComponent(limit || 20));
     },
-    analyze: function(payload) { return _post('/agent/analyze', payload); },
-    esgScore: function(payload) { return _post('/agent/esg-score', payload); },
+    analyze: function(payload) { return _post('/api/agent/analyze', payload); },
+    esgScore: function(payload) { return _post('/api/agent/esg-score', payload); },
   },
 
   research: {
@@ -98,6 +176,9 @@ export var api = {
       return _get(Q + '/research/context' + query);
     },
     run: function(payload) { return _post(Q + '/research/run', payload); },
+    buildDataset: function(payload) { return _post(Q + '/research/datasets/build', payload || {}); },
+    datasets: function(limit) { return _get(Q + '/research/datasets?limit=' + encodeURIComponent(limit || 20)); },
+    qualityChecks: function(payload) { return _post(Q + '/research/quality/checks', payload || {}); },
   },
   portfolio: { optimize: function(payload) { return _post(Q + '/portfolio/optimize', payload); } },
 
@@ -115,6 +196,12 @@ export var api = {
     list: function() { return _get(Q + '/backtests'); },
     get: function(id) { return _get(Q + '/backtests/' + id); },
     run: function(payload) { return _post(Q + '/backtests/run', payload); },
+    sweep: function(payload) { return _post(Q + '/backtests/sweep', payload || {}); },
+    getSweep: function(id) { return _get(Q + '/backtests/sweep/' + id); },
+  },
+
+  reports: {
+    tearsheet: function(backtestId) { return _get(Q + '/reports/tearsheet/' + encodeURIComponent(backtestId)); },
   },
 
   execution: {
@@ -184,6 +271,7 @@ export var api = {
     buildDemoDataset: function(payload) { return _post(Q + '/rl/datasets/demo', payload); },
     train: function(payload) { return _post(Q + '/rl/train', payload); },
     backtest: function(payload) { return _post(Q + '/rl/backtest', payload); },
+    promote: function(payload) { return _post(Q + '/rl/promote', payload || {}); },
   },
 
   experiments: {
@@ -202,6 +290,17 @@ export var api = {
   factors: {
     discover: function(payload) { return _post(Q + '/factors/discover', payload || {}); },
     registry: function(limit) { return _get(Q + '/factors/registry?limit=' + encodeURIComponent(limit || 50)); },
+  },
+
+  marketDepth: {
+    status: function(symbols, requireL2) {
+      var query = '?require_l2=' + encodeURIComponent(requireL2 ? 'true' : 'false');
+      if (symbols && symbols.length) query += '&symbols=' + encodeURIComponent(Array.isArray(symbols) ? symbols.join(',') : symbols);
+      return _get(Q + '/market-depth/status' + query);
+    },
+    replay: function(payload) { return _post(Q + '/market-depth/replay', payload || {}); },
+    getReplay: function(sessionId) { return _get(Q + '/market-depth/replay/' + encodeURIComponent(sessionId)); },
+    latest: function(symbol) { return _get(Q + '/market-depth/latest?symbol=' + encodeURIComponent(symbol || 'AAPL')); },
   },
 
   factorLab: {
@@ -279,6 +378,10 @@ export var api = {
     autopilotArm: function(payload) { return _post('/api/v1/trading/autopilot/arm', payload || { armed: true }, { scope: 'execution' }); },
     autopilotDisarm: function(payload) { return _post('/api/v1/trading/autopilot/disarm', payload || { armed: false }, { scope: 'execution' }); },
     strategies: function() { return _get('/api/v1/trading/strategies'); },
+    strategyEligibility: function(symbol) {
+      var query = symbol ? ('?symbol=' + encodeURIComponent(symbol)) : '';
+      return _get('/api/v1/trading/strategies/eligibility' + query);
+    },
     toggleStrategy: function(strategyId, payload) {
       return _post('/api/v1/trading/strategies/' + encodeURIComponent(strategyId) + '/toggle', payload || {}, { scope: 'execution' });
     },
@@ -341,8 +444,13 @@ export var api = {
   },
 };
 
+// 获取最后的trace_id
+export function getLastTraceId() {
+  return _lastTraceId;
+}
+
 export function openExecutionWS(broker, executionId, limit, onMsg, onClose, mode) {
-  var wsBase = (window.__ESG_API_BASE_URL__ || window.location.origin).replace(/^https?/, 'ws');
+  var wsBase = getApiBaseUrl().replace(/^https?/, 'ws');
   var url = wsBase + '/api/v1/quant/execution/live/ws?broker=' + encodeURIComponent(broker || 'alpaca')
     + '&limit=' + encodeURIComponent(limit || 20)
     + '&mode=' + encodeURIComponent(mode || 'paper');
@@ -351,6 +459,20 @@ export function openExecutionWS(broker, executionId, limit, onMsg, onClose, mode
   var apiKey = _apiKeyForScope('execution');
   if (apiKey) url += '&api_key=' + encodeURIComponent(apiKey);
 
+  var ws = new WebSocket(url);
+  ws.onmessage = function(event) {
+    try { onMsg(JSON.parse(event.data)); } catch (_ignore) {}
+  };
+  ws.onclose = function() { if (onClose) onClose(); };
+  ws.onerror = function() { if (onClose) onClose(); };
+  return ws;
+}
+
+export function openMarketDepthWS(symbols, requireL2, onMsg, onClose) {
+  var wsBase = getApiBaseUrl().replace(/^https?/, 'ws');
+  var url = wsBase + '/api/v1/quant/market-depth/live/ws?symbols=' + encodeURIComponent(
+    Array.isArray(symbols) ? symbols.join(',') : (symbols || 'AAPL')
+  ) + '&require_l2=' + encodeURIComponent(requireL2 ? 'true' : 'false');
   var ws = new WebSocket(url);
   ws.onmessage = function(event) {
     try { onMsg(JSON.parse(event.data)); } catch (_ignore) {}

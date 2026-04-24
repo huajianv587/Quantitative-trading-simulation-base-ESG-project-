@@ -19,13 +19,17 @@ router = APIRouter()
 def _product_site_entry() -> Path | None:
     project_root = Path(__file__).resolve().parents[3]
     candidates = [
-        project_root / "esg_quant_landing_v2.html",
         project_root / "dist" / "index.html",
+        project_root / "esg_quant_landing_v2.html",
     ]
     for candidate in candidates:
         if candidate.exists():
             return candidate
     return None
+
+
+def _app_base_url(request: Request) -> str:
+    return str(request.base_url).rstrip("/")
 
 
 def _module_status(request: Request) -> dict[str, bool]:
@@ -259,12 +263,21 @@ def _build_event_monitor(recent_signals: list[dict[str, Any]], generated_at: dat
 
 
 @router.get("/health")
+@router.get("/api/health", include_in_schema=False)
 def health(request: Request):
     modules = _module_status(request)
+    base_url = _app_base_url(request)
 
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
+        "app_id": getattr(request.app.state, "app_id", "quant-terminal"),
+        "service_name": getattr(request.app.state, "service_name", "Quant Terminal"),
+        "landing_entry": f"{base_url}{getattr(request.app.state, 'landing_entry', '/')}",
+        "ui_entry": f"{base_url}{getattr(request.app.state, 'ui_entry', '/app/')}",
+        "api_base_url": base_url,
+        "frontend_source": getattr(request.app.state, "frontend_source", "unknown"),
+        "frontend_path": getattr(request.app.state, "frontend_path", None),
         "app_mode": settings.APP_MODE,
         "runtime": get_runtime_backend_status(),
         "ready": all(modules.values()),
@@ -273,6 +286,7 @@ def health(request: Request):
 
 
 @router.get("/health/ready")
+@router.get("/api/health/ready", include_in_schema=False)
 def health_ready(request: Request):
     payload = health(request)
     if payload["ready"]:

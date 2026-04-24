@@ -300,18 +300,11 @@ export function createDashboardKlineRenderer(options) {
 
     const pad = { left: 60, right: 108, top: 24, bottom: 40 };
     const innerWidth = width - pad.left - pad.right;
-    const projectionWidth = innerWidth * preset.projectionWidthRatio;
-    const candleAreaWidth = innerWidth - projectionWidth;
     const mainHeight = Math.floor((height - pad.top - pad.bottom) * 0.72);
     const volumeGap = 14;
     const volumeHeight = Math.max(76, Math.floor((height - pad.top - pad.bottom) * 0.18));
     const volumeTop = pad.top + mainHeight + volumeGap;
     const candles = state.candles.slice(-preset.visibleCount);
-    const visibleCount = Math.max(1, candles.length);
-    const slotWidth = candleAreaWidth / Math.max(visibleCount, 1);
-    const candleWidth = Math.max(3.5, slotWidth * preset.candleBodyRatio);
-    const projectionStartX = pad.left + candleAreaWidth;
-    const projectionEndX = pad.left + candleAreaWidth + projectionWidth;
     const predictionScenarios = state.signal?.projection_scenarios || {};
     state.predictionEnabled = Boolean(
       state.signal
@@ -321,6 +314,13 @@ export function createDashboardKlineRenderer(options) {
       && predictionScenarios.center
       && predictionScenarios.lower
     );
+    const projectionWidth = state.predictionEnabled ? innerWidth * preset.projectionWidthRatio : 0;
+    const candleAreaWidth = innerWidth - projectionWidth;
+    const visibleCount = Math.max(1, candles.length);
+    const slotWidth = candleAreaWidth / Math.max(visibleCount, 1);
+    const candleWidth = Math.max(3.5, slotWidth * preset.candleBodyRatio);
+    const projectionStartX = pad.left + candleAreaWidth;
+    const projectionEndX = pad.left + candleAreaWidth + projectionWidth;
 
     if (!candles.length) {
       ctx.fillStyle = 'rgba(155,176,210,0.82)';

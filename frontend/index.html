@@ -10,11 +10,21 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
-  <script src="/app/vendor/echarts/echarts.min.js?v=1"></script>
-  <link rel="stylesheet" href="/app/css/app.css?v=8">
-  <script>window.__APP_VER__ = 'v8';</script>
+  <script src="/app/vendor/echarts/echarts.min.js?v=20260424222239"></script>
+  <link rel="stylesheet" href="/app/css/app.css?v=20260424222239">
+  <link rel="stylesheet" href="/app/css/layout-system.css?v=20260424222239">
+  <link rel="stylesheet" href="/app/css/workbench-layout.css?v=20260424222239">
+  <link rel="stylesheet" href="/app/css/trading-ops.css?v=20260424222239">
+  <link rel="stylesheet" href="/app/css/loading-error.css?v=20260424222239">
+  <link rel="stylesheet" href="/app/css/responsive.css?v=20260424222239">
+  <link rel="stylesheet" href="/app/css/accessibility.css?v=20260424222239">
+  <link rel="stylesheet" href="/app/css/performance.css?v=20260424222239">
+  <link rel="stylesheet" href="/app/css/error-ui.css?v=20260424222239">
+  <script>window.__APP_VER__ = 'v20260424222239';</script>
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
   <div id="c-dot"></div>
   <div id="c-ring"></div>
 
@@ -60,7 +70,7 @@
         </div>
         <div class="topbar-right" id="header-actions"></div>
       </header>
-      <main class="app-content" id="app-root"></main>
+      <main class="app-content" id="app-root" role="main" aria-label="Main content"></main>
     </div>
   </div>
 
@@ -94,7 +104,8 @@
     })();
   </script>
 
-  <script src="/app/app-config.js?v=5"></script>
+  <script src="/app/app-config.js?v=20260424222239"></script>
+  <script type="module" src="/app/js/utils/lazy-load.js?v=20260424222239"></script>
   <script>
     window.addEventListener('error', function(event) {
       const root = document.getElementById('app-root');
@@ -108,6 +119,6 @@
       `;
     });
   </script>
-  <script type="module" src="/app/js/app.js?v=8"></script>
+  <script type="module" src="/app/js/app.js?v=20260424222239"></script>
 </body>
 </html>

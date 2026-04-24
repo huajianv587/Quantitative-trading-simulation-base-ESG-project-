@@ -3,11 +3,14 @@ import { toast } from '../components/toast.js?v=8';
 import { getLang, onLangChange } from '../i18n.js?v=8';
 import {
   esc,
+  loadPayloadSnapshot,
   metric,
   num,
   pathChip,
+  persistPayloadSnapshot,
   readSymbol,
   readUniverse,
+  renderDegradedNotice,
   renderError,
   renderSimulationResult,
   setLoading,
@@ -17,6 +20,10 @@ let _container = null;
 let _langCleanup = null;
 let _latest = null;
 let _selectedPreset = 'base';
+let _degradedMeta = null;
+
+const SIMULATION_CACHE_KEY = 'qt.simulation.snapshot.v1';
+const SIMULATION_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const COPY = {
   en: {
@@ -103,10 +110,42 @@ const PRESETS = {
   positive: { scenario_name: 'positive_event_replay', regime: 'risk_on', shock_bps: 110, event_assumption: 'Positive disclosure or improving ESG evidence event.' },
 };
 
+function simulationDegradedState(savedAt, reason) {
+  return {
+    tone: 'warning',
+    saved_at: savedAt || null,
+    title: getLang() === 'zh' ? '情景模拟已切换到缓存快照' : 'Simulation is showing a cached snapshot',
+    reason: reason || (getLang() === 'zh'
+      ? '当前继续展示最近一次成功的模拟结果，等待实时重跑恢复。'
+      : 'The latest successful simulation result is still visible while rerun requests recover.'),
+    detail: getLang() === 'zh'
+      ? '回放、微结构诊断和保护报告都来自最近一次成功结果。'
+      : 'Replay, microstructure diagnostics, and protection reports come from the latest successful result.',
+    action: getLang() === 'zh'
+      ? '可以继续点击“运行模拟”重试。'
+      : 'Use Run Simulation to retry.',
+  };
+}
+
+function hydrateSimulationSnapshot(container) {
+  const cached = loadPayloadSnapshot(SIMULATION_CACHE_KEY, SIMULATION_CACHE_TTL_MS);
+  if (!cached?.payload) return false;
+  _latest = cached.payload;
+  _degradedMeta = simulationDegradedState(
+    cached.saved_at,
+    getLang() === 'zh'
+      ? '正在回填最近一次成功的模拟快照，并在后台尝试重连服务。'
+      : 'Rehydrating the latest successful simulation snapshot while reconnecting.',
+  );
+  renderResult(container, _latest);
+  return true;
+}
+
 export async function render(container) {
   _container = container;
   container.innerHTML = buildShell();
   bindEvents(container);
+  hydrateSimulationSnapshot(container);
   _langCleanup ||= onLangChange(() => {
     if (_container?.isConnected) {
       _container.innerHTML = buildShell();
@@ -121,6 +160,7 @@ export function destroy() {
   _container = null;
   _latest = null;
   _selectedPreset = 'base';
+  _degradedMeta = null;
   _langCleanup?.();
   _langCleanup = null;
 }
@@ -315,20 +355,35 @@ async function runSimulation(container) {
   setLoading(container.querySelector('#simulation-panel'), c('loading'));
   try {
     _latest = await api.simulate.scenario(scenario);
+    persistPayloadSnapshot(SIMULATION_CACHE_KEY, _latest, { symbol: scenario.symbol, scenario_name: scenario.scenario_name });
+    _degradedMeta = null;
     renderResult(container, _latest);
     toast.success(c('run'), `${scenario.symbol} / ${scenario.scenario_name}`);
   } catch (err) {
-    renderError(container.querySelector('#simulation-panel'), err);
+    const cached = loadPayloadSnapshot(SIMULATION_CACHE_KEY, SIMULATION_CACHE_TTL_MS);
+    if (cached?.payload) {
+      _latest = cached.payload;
+      _degradedMeta = simulationDegradedState(cached.saved_at, err.message);
+      renderResult(container, _latest);
+      toast.error(c('run'), err.message);
+      return;
+    }
+    renderError(container.querySelector('#simulation-panel'), err, { onRetry: () => runSimulation(container) });
     toast.error(c('run'), err.message);
   }
 }
 
 function renderResult(container, result) {
   const scenario = result?.scenario || readScenario(container);
+  const dataset = result?.dataset_manifest || {};
+  const protection = result?.protection_report || {};
+  const replay = result?.order_book_replay || {};
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   container.querySelector('#simulation-panel').innerHTML = result
-    ? renderSimulationResult(result)
+    ? `${degradedBanner}${renderSimulationResult(result)}`
     : renderSimulationPreview(scenario);
   container.querySelector('#simulation-manifest').innerHTML = `
+    ${degradedBanner}
     <div class="workbench-kv-list simulation-manifest-list">
       <div class="workbench-kv-row"><span>Simulation ID</span><strong>${pathChip(result?.simulation_id || 'not-run')}</strong></div>
       <div class="workbench-kv-row"><span>${c('symbol')}</span><strong>${esc(scenario.symbol || '')}</strong></div>
@@ -337,6 +392,10 @@ function renderResult(container, result) {
       <div class="workbench-kv-row"><span>${c('shock')}</span><strong>${esc(scenario.shock_bps || 0)} bps</strong></div>
       <div class="workbench-kv-row"><span>${c('paths')}</span><strong>${esc(scenario.paths || '')}</strong></div>
       <div class="workbench-kv-row"><span>${c('seed')}</span><strong>${esc(scenario.seed || '')}</strong></div>
+      <div class="workbench-kv-row"><span>Dataset</span><strong>${pathChip(dataset.dataset_id || 'dataset-pending')}</strong></div>
+      <div class="workbench-kv-row"><span>Tier</span><strong>${esc(dataset.data_tier || result?.data_tier || 'l1')}</strong></div>
+      <div class="workbench-kv-row"><span>Protection</span><strong>${esc(protection.protection_status || 'review')}</strong></div>
+      <div class="workbench-kv-row"><span>L2 Replay</span><strong>${pathChip(replay.session_id || 'not-run')}</strong></div>
     </div>
     <div class="simulation-manifest-state">${result ? c('output') : c('beforeRun')}</div>`;
 }

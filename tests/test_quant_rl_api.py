@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.routes_quant_rl import service as rl_service
 from api.include_quant_rl import register_quant_rl
+from quant_rl.infrastructure.types import RunInfo
 
 
 def test_quant_rl_routes_smoke():
@@ -25,3 +27,30 @@ def test_quant_rl_routes_smoke():
     search_payload = search.json()
     assert search_payload['best_trial'] == 0
     assert search_payload['best_params']
+
+    demo = rl_service.generate_demo_dataset()
+    report_path = rl_service.artifact_store.save_text('test-promote-run', 'report.txt', 'ok')
+    rl_service.repo.save(
+        RunInfo(
+            run_id='test-promote-run',
+            algorithm='hybrid_frontier',
+            phase='evaluation_backtest',
+            status='backtested',
+            config={
+                'dataset_path': demo['dataset_path'],
+                'dataset_id': 'rl-demo-market',
+                'protection_status': 'pass',
+                'required_data_tier': 'l1',
+            },
+            metrics={'sharpe': 1.0},
+            artifacts={'report_path': report_path},
+        )
+    )
+    promote = client.post(
+        '/api/v1/quant/rl/promote',
+        json={'run_id': 'test-promote-run', 'strategy_id': 'rl_timing_overlay', 'required_data_tier': 'l2'},
+    )
+    assert promote.status_code == 200
+    promote_payload = promote.json()
+    assert promote_payload['run_id'] == 'test-promote-run'
+    assert promote_payload['promotion_status'] in {'promoted', 'research_only'}

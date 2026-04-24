@@ -181,6 +181,11 @@ def trading_strategies() -> dict[str, Any]:
     return _trading_service().list_strategies()
 
 
+@router.get("/api/v1/trading/strategies/eligibility")
+def trading_strategy_eligibility(symbol: str | None = None) -> dict[str, Any]:
+    return _trading_service().list_strategy_eligibility(symbol=symbol)
+
+
 @router.post("/api/v1/trading/strategies/{strategy_id}/toggle")
 def trading_strategy_toggle(strategy_id: str, req: StrategyToggleRequest) -> dict[str, Any]:
     return _trading_service().toggle_strategy(strategy_id=strategy_id, status=req.status)

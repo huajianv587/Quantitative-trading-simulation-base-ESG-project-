@@ -1,160 +1,269 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 title ESG Quant Terminal
+
 set "LAUNCH_LOG=%~dp0start-launch.log"
+set "API_OUT_LOG=%~dp0runtime-api.out.log"
+set "API_ERR_LOG=%~dp0runtime-api.err.log"
+set "PS_BIN=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+set "DEFAULT_PORT=1002"
+set "PORT_CANDIDATES=%DEFAULT_PORT%"
+set "PORT_RANGE_START=%DEFAULT_PORT%"
+set "PORT_RANGE_END=%DEFAULT_PORT%"
+set "PORT_SCAN_SUMMARY=%DEFAULT_PORT%"
+set "SELECTED_PORT="
+set "LAUNCH_API=1"
+set "API_URL="
+set "APP_URL="
+set "DOCS_URL="
+set "API_HEALTH_URL="
+set "UI_HEALTH_URL="
+
 > "%LAUNCH_LOG%" echo [%date% %time%] Launcher started in %CD%
 
 echo ============================================
-echo   ESG Quant Terminal  --  Launcher
+echo   ESG Quant Terminal -- Launcher
 echo ============================================
 echo.
 
-:: Step 1: Stop any running servers first so the rebuild never keeps stale UI files alive
-echo [1/5] Stopping stale UI/API servers...
+echo [0/4] Checking runtime...
+call :require_python
+if errorlevel 1 goto err_python
+call :require_powershell
+if errorlevel 1 goto err_powershell
+echo       OK
+
+echo [1/4] Stopping stale Quant Terminal processes...
 call :kill_runtime_processes
-call :kill_port 9000
-call :kill_port 8000
 echo       OK
 
-:: Step 2: Rebuild static bundle from the current repo state
-echo [2/5] Rebuilding static bundle...
-set "ESG_API_BASE_URL=http://127.0.0.1:8000"
-call npm.cmd run build:static
+echo [2/4] Preparing static bundle...
+call :prepare_static_bundle
+if errorlevel 2 goto err_static_missing
 if errorlevel 1 goto err_build
-echo       OK
-
-:: Step 3: Restart UI server on port 9000
-echo [3/5] Restarting UI server (port 9000)...
-echo [%date% %time%] Launching UI server window >> "%LAUNCH_LOG%"
-start "UI :9000" "%ComSpec%" /k ""%~dp0_ui_server.cmd""
-timeout /t 3 /nobreak >nul
-
-:: Step 4: Restart API server on port 8000
-echo [4/5] Restarting API server (port 8000)...
-echo [%date% %time%] Launching API server window >> "%LAUNCH_LOG%"
-start "API :8000" "%ComSpec%" /k ""%~dp0_api_server.cmd""
-timeout /t 4 /nobreak >nul
-
-:: Step 5: Wait for both servers to be ready
-echo [5/5] Verifying static bundle config...
 call :verify_app_config
 if errorlevel 1 goto err_config
 echo       OK
 
-echo       Waiting for API health endpoint...
-call :wait_http_200 http://127.0.0.1:8000/health 25
-if errorlevel 1 goto err_timeout_api
-echo       OK
-
-echo       Waiting for UI shell...
-call :wait_http_200 http://127.0.0.1:9000/app/ 25
-if errorlevel 1 goto err_timeout_ui
-echo       OK
-
-:open_browser
-echo.
-echo   Landing  --  http://127.0.0.1:9000/
-echo   App      --  http://127.0.0.1:9000/app/
-echo   API      --  http://127.0.0.1:8000
-echo   Docs     --  http://127.0.0.1:8000/docs
-echo.
-set "LAUNCH_URL=http://127.0.0.1:9000/?v=%RANDOM%%RANDOM%"
-call :open_url "%LAUNCH_URL%"
-if errorlevel 1 (
-  echo   WARNING: Browser auto-open failed.
-  echo   Please open this URL manually:
-  echo   %LAUNCH_URL%
-  echo [%date% %time%] Browser auto-open failed for %LAUNCH_URL% >> "%LAUNCH_LOG%"
-) else (
-  echo   Browser opened.
-  echo [%date% %time%] Browser auto-open succeeded for %LAUNCH_URL% >> "%LAUNCH_LOG%"
+echo [3/4] Resolving backend port...
+set "SELECTED_PORT="
+set "LAUNCH_API=1"
+set "LAUNCH_MODE="
+set "PORT_PROBE_FILE=%TEMP%\esg-quant-port-%RANDOM%%RANDOM%.tmp"
+if exist "%PORT_PROBE_FILE%" del /f /q "%PORT_PROBE_FILE%" >nul 2>&1
+"%PS_BIN%" -NoProfile -ExecutionPolicy Bypass -Command "$priorityRaw = $env:PORT_CANDIDATES; $rangeStart = [int]$env:PORT_RANGE_START; $rangeEnd = [int]$env:PORT_RANGE_END; $ports = New-Object 'System.Collections.Generic.List[int]'; foreach ($token in $priorityRaw.Split(' ')) { if ($token) { $port = [int]$token; if (-not $ports.Contains($port)) { [void]$ports.Add($port) } } }; foreach ($port in $rangeStart..$rangeEnd) { if (-not $ports.Contains($port)) { [void]$ports.Add($port) } }; function Test-PortFree([int]$port) { $listener = $null; try { $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port); $listener.Start(); return $true } catch { return $false } finally { if ($listener -ne $null) { $listener.Stop() } } }; function Test-QuantHealth([int]$port) { try { $response = Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 ('http://127.0.0.1:{0}/health' -f $port); return ($response.app_id -eq 'quant-terminal' -and $response.service_name -eq 'Quant Terminal') } catch { return $false } }; foreach ($port in $ports) { if (Test-QuantHealth $port) { Write-Output ('reuse|' + $port); exit 0 }; if (Test-PortFree $port) { Write-Output ('launch|' + $port); exit 0 } }; exit 1" > "%PORT_PROBE_FILE%"
+if not errorlevel 1 (
+  for /f "usebackq tokens=1,2 delims=|" %%A in ("%PORT_PROBE_FILE%") do (
+    set "LAUNCH_MODE=%%A"
+    set "SELECTED_PORT=%%B"
+  )
 )
+if exist "%PORT_PROBE_FILE%" del /f /q "%PORT_PROBE_FILE%" >nul 2>&1
+if not defined SELECTED_PORT goto err_ports
+if /i "%LAUNCH_MODE%"=="reuse" (
+  set "LAUNCH_API=0"
+) else (
+  set "LAUNCH_API=1"
+)
+set "API_URL=http://127.0.0.1:%SELECTED_PORT%"
+set "APP_URL=%API_URL%/"
+set "DOCS_URL=%API_URL%/docs"
+set "API_HEALTH_URL=%API_URL%/health"
+set "UI_HEALTH_URL=%API_URL%/app/index.html"
+if /i "%LAUNCH_API%"=="1" (
+  echo       Using free port %SELECTED_PORT%
+  echo [%date% %time%] Launching API server on %SELECTED_PORT% >> "%LAUNCH_LOG%"
+  call :launch_api_server "%SELECTED_PORT%"
+  if errorlevel 1 goto err_api_launch
+) else (
+  echo       Reusing existing Quant Terminal service on %SELECTED_PORT%
+  echo [%date% %time%] Reusing existing Quant Terminal service on %SELECTED_PORT% >> "%LAUNCH_LOG%"
+)
+echo       OK
+
+echo [4/4] Verifying readiness...
+"%PS_BIN%" -NoProfile -ExecutionPolicy Bypass -Command "for ($i = 0; $i -lt 40; $i++) { try { $response = Invoke-RestMethod -UseBasicParsing -TimeoutSec 3 '%API_HEALTH_URL%'; if ($response.app_id -eq 'quant-terminal' -and $response.service_name -eq 'Quant Terminal') { exit 0 } } catch {}; Start-Sleep -Seconds 1 }; exit 1"
+if errorlevel 1 goto err_timeout_api
+echo       API fingerprint OK
+"%PS_BIN%" -NoProfile -ExecutionPolicy Bypass -Command "for ($i = 0; $i -lt 40; $i++) { try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 '%UI_HEALTH_URL%'; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300) { exit 0 } } catch {}; Start-Sleep -Seconds 1 }; exit 1"
+if errorlevel 1 goto err_timeout_ui
+echo       UI shell OK
+
+echo.
+echo   Landing  -- %APP_URL%
+echo   Console  -- %API_URL%/app/#/dashboard
+echo   API      -- %API_URL%
+echo   Docs     -- %DOCS_URL%
+echo.
+
+if /i "%ESG_START_SKIP_BROWSER%"=="1" (
+  echo   Browser auto-open skipped because ESG_START_SKIP_BROWSER=1.
+  echo [%date% %time%] Browser auto-open skipped for %APP_URL% >> "%LAUNCH_LOG%"
+) else (
+  call :open_url "%APP_URL%"
+  if errorlevel 1 (
+    echo   WARNING: Browser auto-open failed.
+    echo   Please open this URL manually:
+    echo   %APP_URL%
+    echo [%date% %time%] Browser auto-open failed for %APP_URL% >> "%LAUNCH_LOG%"
+  ) else (
+    echo   Browser opened.
+    echo [%date% %time%] Browser auto-open succeeded for %APP_URL% >> "%LAUNCH_LOG%"
+  )
+)
+
 echo   Launch log: %LAUNCH_LOG%
+
+if /i "%ESG_START_NO_PAUSE%"=="1" exit /b 0
+
 echo   Press any key to close this window.
 pause >nul
 exit /b 0
 
-:kill_port
-for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%~1" ^| findstr "LISTENING"') do (
-    taskkill /PID %%p /F >nul 2>&1
+:require_python
+python --version >nul 2>&1
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:require_powershell
+if not exist "%PS_BIN%" exit /b 1
+exit /b 0
+
+:prepare_static_bundle
+if /i "%ESG_SKIP_STATIC_BUILD%"=="1" (
+  echo       Using existing dist bundle because ESG_SKIP_STATIC_BUILD=1.
+  goto prepare_existing_dist
 )
-timeout /t 1 /nobreak >nul
+
+where npm.cmd >nul 2>&1
+if errorlevel 1 (
+  echo       npm.cmd not found, trying existing dist bundle.
+  goto prepare_existing_dist
+)
+
+set "ESG_API_BASE_URL="
+call npm.cmd run build:static
+if errorlevel 1 exit /b 1
 exit /b 0
 
-:kill_runtime_processes
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$patterns = @('*uvicorn gateway.main:app*', '*_api_server.cmd*', '*python -m http.server 9000*', '*_ui_server.cmd*');" ^
-  "Get-CimInstance Win32_Process | Where-Object { $cmd = $_.CommandLine; $cmd -and (($patterns | Where-Object { $cmd -like $_ }) | Measure-Object).Count -gt 0 } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }"
-timeout /t 1 /nobreak >nul
+:prepare_existing_dist
+if not exist "dist\app\index.html" exit /b 2
 exit /b 0
-
-:wait_port
-set "WAIT_PORT=%~1"
-set "WAIT_MAX=%~2"
-set /a WAIT_TRY=0
-:wait_port_loop
-netstat -ano | findstr ":%WAIT_PORT%" | findstr "LISTENING" >nul 2>&1
-if %errorlevel%==0 exit /b 0
-set /a WAIT_TRY+=1
-if %WAIT_TRY% geq %WAIT_MAX% exit /b 1
-timeout /t 1 /nobreak >nul
-goto wait_port_loop
 
 :verify_app_config
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Join-Path (Get-Location) 'dist\\app\\app-config.js'; if (!(Test-Path $p)) { Write-Host 'dist/app/app-config.js missing'; exit 1 }; $c = Get-Content -Raw $p; if ($c -notmatch 'http://127\\.0\\.0\\.1:8000') { Write-Host ('Unexpected app-config.js: ' + $c.Trim()); exit 1 }"
+if not exist "dist\app\app-config.js" exit /b 1
+findstr /c:"window.__ESG_API_BASE_URL__" "dist\app\app-config.js" >nul 2>&1
 exit /b %errorlevel%
 
-:wait_http_200
-set "WAIT_URL=%~1"
-set "WAIT_MAX=%~2"
-set /a WAIT_TRY=0
-:wait_http_200_loop
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 '%WAIT_URL%'; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300) { exit 0 } ; exit 1 } catch { exit 1 }"
-if %errorlevel%==0 exit /b 0
-set /a WAIT_TRY+=1
-if %WAIT_TRY% geq %WAIT_MAX% exit /b 1
+:kill_runtime_processes
+"%PS_BIN%" -NoProfile -ExecutionPolicy Bypass -Command "$patterns = @('*uvicorn gateway.main:app*', '*python -m uvicorn gateway.main:app*', '*python -m http.server 9000*', '*_ui_server.cmd*', '*_api_server.cmd*'); Get-CimInstance Win32_Process | Where-Object { $cmd = $_.CommandLine; $cmd -and (($patterns | Where-Object { $cmd -like $_ }) | Measure-Object).Count -gt 0 } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }"
 timeout /t 1 /nobreak >nul
-goto wait_http_200_loop
+exit /b 0
+
+:launch_api_server
+if exist "%API_OUT_LOG%" del /f /q "%API_OUT_LOG%" >nul 2>&1
+if exist "%API_ERR_LOG%" del /f /q "%API_ERR_LOG%" >nul 2>&1
+if /i "%ESG_DEV_RELOAD%"=="1" (
+  "%PS_BIN%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'python' -ArgumentList '-m','uvicorn','gateway.main:app','--host','127.0.0.1','--port','%~1','--reload' -WorkingDirectory (Resolve-Path '.') -RedirectStandardOutput '%API_OUT_LOG%' -RedirectStandardError '%API_ERR_LOG%' | Out-Null"
+) else (
+  "%PS_BIN%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'python' -ArgumentList '-m','uvicorn','gateway.main:app','--host','127.0.0.1','--port','%~1' -WorkingDirectory (Resolve-Path '.') -RedirectStandardOutput '%API_OUT_LOG%' -RedirectStandardError '%API_ERR_LOG%' | Out-Null"
+)
+exit /b %errorlevel%
 
 :open_url
 set "TARGET_URL=%~1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "try { Start-Process '%TARGET_URL%' -ErrorAction Stop; exit 0 } catch { try { Start-Process explorer.exe '%TARGET_URL%' -ErrorAction Stop; exit 0 } catch { exit 1 } }"
+"%PS_BIN%" -NoProfile -ExecutionPolicy Bypass -Command "try { Start-Process '%TARGET_URL%' -ErrorAction Stop; exit 0 } catch { try { Start-Process explorer.exe '%TARGET_URL%' -ErrorAction Stop; exit 0 } catch { exit 1 } }"
 exit /b %errorlevel%
+
+:pause_if_needed
+if /i "%ESG_START_NO_PAUSE%"=="1" exit /b 0
+pause >nul
+exit /b 0
+
+:err_python
+echo.
+echo   ERROR: Python was not found in PATH.
+echo   Install Python or add it to PATH, then double-click start.cmd again.
+echo [%date% %time%] ERROR python missing >> "%LAUNCH_LOG%"
+echo.
+call :pause_if_needed
+exit /b 1
+
+:err_powershell
+echo.
+echo   ERROR: Windows PowerShell was not found at:
+echo   %PS_BIN%
+echo   Check your Windows installation, then double-click start.cmd again.
+echo [%date% %time%] ERROR powershell missing >> "%LAUNCH_LOG%"
+echo.
+call :pause_if_needed
+exit /b 1
 
 :err_build
 echo.
-echo   ERROR: Static bundle rebuild failed.
-echo   Check the output above for the failing build step.
+echo   ERROR: Static bundle build failed.
+echo   Check the output above for the failing npm step.
 echo [%date% %time%] ERROR build step failed >> "%LAUNCH_LOG%"
 echo.
-pause >nul
+call :pause_if_needed
+exit /b 1
+
+:err_static_missing
+echo.
+echo   ERROR: dist\app\index.html is missing and no fresh build was produced.
+echo   Run npm install first, then double-click start.cmd again.
+echo [%date% %time%] ERROR dist bundle missing >> "%LAUNCH_LOG%"
+echo.
+call :pause_if_needed
 exit /b 1
 
 :err_config
 echo.
-echo   ERROR: dist/app/app-config.js does not point to http://127.0.0.1:8000
+echo   ERROR: dist\app\app-config.js was not generated correctly.
 echo   Rebuild was aborted before opening the browser.
-echo [%date% %time%] ERROR invalid dist/app/app-config.js >> "%LAUNCH_LOG%"
+echo [%date% %time%] ERROR invalid dist\app\app-config.js >> "%LAUNCH_LOG%"
 echo.
-pause >nul
+call :pause_if_needed
 exit /b 1
 
 :err_timeout_ui
 echo.
-echo   ERROR: UI shell http://127.0.0.1:9000/app/ did not respond within 25 seconds.
-echo   Check the "UI :9000" console window for errors.
+echo   ERROR: UI shell %UI_HEALTH_URL% did not respond within 40 seconds.
+echo   Check this log for details:
+echo   %API_ERR_LOG%
 echo [%date% %time%] ERROR UI shell readiness timeout >> "%LAUNCH_LOG%"
 echo.
-pause >nul
+call :pause_if_needed
 exit /b 1
 
 :err_timeout_api
 echo.
-echo   ERROR: API health http://127.0.0.1:8000/health did not respond within 25 seconds.
-echo   Check the "API :8000" console window for errors.
+echo   ERROR: API health %API_HEALTH_URL% did not expose the Quant Terminal fingerprint within 40 seconds.
+echo   Check these logs for details:
+echo   %API_OUT_LOG%
+echo   %API_ERR_LOG%
 echo [%date% %time%] ERROR API health readiness timeout >> "%LAUNCH_LOG%"
 echo.
-pause >nul
+call :pause_if_needed
+exit /b 1
+
+:err_api_launch
+echo.
+echo   ERROR: API server process could not be launched.
+echo   Check these logs for details:
+echo   %API_OUT_LOG%
+echo   %API_ERR_LOG%
+echo [%date% %time%] ERROR API launch failed >> "%LAUNCH_LOG%"
+echo.
+call :pause_if_needed
+exit /b 1
+
+:err_ports
+echo.
+echo   ERROR: No usable Quant Terminal port was found in %PORT_SCAN_SUMMARY%.
+echo   Another service may already be occupying every scanned port.
+echo [%date% %time%] ERROR no available port in %PORT_SCAN_SUMMARY% >> "%LAUNCH_LOG%"
+echo.
+call :pause_if_needed
 exit /b 1

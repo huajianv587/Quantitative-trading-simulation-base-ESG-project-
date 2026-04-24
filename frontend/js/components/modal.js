@@ -1,6 +1,11 @@
 /**
  * 模态框（弹窗）组件
+ * 支持焦点管理、键盘导航和ARIA可访问性
  */
+
+// 焦点管理状态
+let focusStack = [];
+let modalStack = [];
 
 /**
  * 显示确认对话框
@@ -217,6 +222,9 @@ function createModalElement(title, content, buttons = [], options = {}) {
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'modal-title-' + Date.now());
 
   const modalContent = document.createElement('div');
   modalContent.className = 'modal-content';
@@ -224,9 +232,10 @@ function createModalElement(title, content, buttons = [], options = {}) {
   // 标题
   const header = document.createElement('div');
   header.className = 'modal-header';
+  const titleId = 'modal-title-' + Date.now();
   header.innerHTML = `
-    <h2 class="modal-title">${escapeHtml(title)}</h2>
-    ${dismissible ? '<button class="modal-close">&times;</button>' : ''}
+    <h2 class="modal-title" id="${titleId}">${escapeHtml(title)}</h2>
+    ${dismissible ? '<button class="modal-close" aria-label="关闭对话框">&times;</button>' : ''}
   `;
   if (dismissible) {
     header.querySelector('.modal-close').onclick = () => closeModal(overlay);
@@ -265,18 +274,57 @@ function createModalElement(title, content, buttons = [], options = {}) {
     };
   }
 
+  // 键盘导航支持
+  overlay.addEventListener('keydown', (e) => handleModalKeydown(e, overlay, dismissible));
+
   return overlay;
 }
 
 function showModal(modal) {
+  // 保存当前焦点元素
+  const activeElement = document.activeElement;
+  focusStack.push(activeElement);
+  modalStack.push(modal);
+
   const container = document.getElementById('modal-container');
   if (container) {
     container.appendChild(modal);
   }
+
+  // 添加body类以防止滚动
+  document.body.classList.add('modal-open');
+
+  // 设置焦点陷阱
+  requestAnimationFrame(() => {
+    trapFocus(modal);
+    // 聚焦到第一个可聚焦元素
+    const firstFocusable = getFocusableElements(modal)[0];
+    if (firstFocusable) {
+      firstFocusable.focus();
+    }
+  });
 }
 
 function closeModal(modal) {
   modal.style.opacity = '0';
+
+  // 从栈中移除
+  const index = modalStack.indexOf(modal);
+  if (index > -1) {
+    modalStack.splice(index, 1);
+    const previousFocus = focusStack.splice(index, 1)[0];
+
+    // 恢复焦点
+    if (previousFocus && typeof previousFocus.focus === 'function') {
+      setTimeout(() => previousFocus.focus(), 250);
+    }
+  }
+
+  // 如果没有其他模态框，移除body类
+  if (modalStack.length === 0) {
+    document.body.classList.remove('modal-open');
+  }
+
   setTimeout(() => {
     modal.remove();
   }, 200);
@@ -286,4 +334,52 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+/**
+ * 获取模态框内所有可聚焦元素
+ */
+function getFocusableElements(container) {
+  const selector = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  return Array.from(container.querySelectorAll(selector));
+}
+
+/**
+ * 焦点陷阱 - 限制Tab键在模态框内循环
+ */
+function trapFocus(modal) {
+  const focusableElements = getFocusableElements(modal);
+  if (focusableElements.length === 0) return;
+
+  const firstElement = focusableElements[0];
+  const lastElement = focusableElements[focusableElements.length - 1];
+
+  modal.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+
+    if (e.shiftKey) {
+      // Shift + Tab
+      if (document.activeElement === firstElement) {
+        e.preventDefault();
+        lastElement.focus();
+      }
+    } else {
+      // Tab
+      if (document.activeElement === lastElement) {
+        e.preventDefault();
+        firstElement.focus();
+      }
+    }
+  });
+}
+
+/**
+ * 处理模态框键盘事件
+ */
+function handleModalKeydown(e, modal, dismissible) {
+  // Esc键关闭
+  if (e.key === 'Escape' && dismissible) {
+    e.preventDefault();
+    closeModal(modal);
+  }
 }

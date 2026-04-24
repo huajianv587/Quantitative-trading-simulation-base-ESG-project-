@@ -4,13 +4,19 @@ import { getLang, onLangChange } from '../i18n.js?v=8';
 import {
   emptyState,
   esc,
+  loadPayloadSnapshot,
   metric,
   num,
   pct,
+  persistPayloadSnapshot,
+  renderDegradedNotice,
   readSymbol,
   readUniverse,
   renderError,
   renderFactorCards,
+  renderMarketDepthDiagnostics,
+  renderProtectionReport,
+  renderRegistryGate,
   renderTokenPreview,
   setLoading,
   splitTokens,
@@ -21,6 +27,10 @@ let _container = null;
 let _langCleanup = null;
 let _latest = { cards: [], payload: null };
 let _view = { page: 1, pageSize: 10, status: '' };
+let _degradedMeta = null;
+
+const FACTOR_LAB_CACHE_KEY = 'qt.factor-lab.snapshot.v1';
+const FACTOR_LAB_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const STATUS_FILTERS = [
   { value: '', key: 'all' },
@@ -134,6 +144,7 @@ export async function render(container) {
   container.innerHTML = buildShell();
   bindEvents(container);
   renderConfigPreview();
+  hydrateFactorSnapshot(container);
   _langCleanup ||= onLangChange(() => {
     if (_container?.isConnected) {
       _container.innerHTML = buildShell();
@@ -149,6 +160,7 @@ export function destroy() {
   _container = null;
   _latest = { cards: [], payload: null };
   _view = { page: 1, pageSize: 10, status: '' };
+  _degradedMeta = null;
   _langCleanup?.();
   _langCleanup = null;
 }
@@ -156,6 +168,40 @@ export function destroy() {
 function c(key) {
   const current = getLang() === 'zh' ? 'zh' : 'en';
   return COPY[current][key] || COPY.en[key] || key;
+}
+
+function factorLabDegradedState(savedAt, reason) {
+  return {
+    tone: 'warning',
+    saved_at: savedAt || null,
+    title: getLang() === 'zh' ? '因子实验室已切换到缓存快照' : 'Factor Lab is showing a cached snapshot',
+    reason: reason || (getLang() === 'zh'
+      ? '当前继续展示最近一次成功的因子结果，等待注册表或发现任务恢复。'
+      : 'The latest successful factor payload is still visible while registry or discovery requests recover.'),
+    detail: getLang() === 'zh'
+      ? '保护报告、数据集清单和注册表门禁都会继续跟随这份快照展示。'
+      : 'Protection reports, dataset lineage, and registry gate status remain visible from the snapshot.',
+    action: getLang() === 'zh'
+      ? '可以继续点“刷新注册表”或“发现因子”重试。'
+      : 'Use Refresh Registry or Discover Factors to retry.',
+  };
+}
+
+function hydrateFactorSnapshot(container) {
+  const cached = loadPayloadSnapshot(FACTOR_LAB_CACHE_KEY, FACTOR_LAB_CACHE_TTL_MS);
+  if (!cached?.payload) return false;
+  _latest = {
+    cards: cached.payload.factor_cards || cached.payload.factors || [],
+    payload: cached.payload,
+  };
+  _degradedMeta = factorLabDegradedState(
+    cached.saved_at,
+    getLang() === 'zh'
+      ? '正在回填最近一次成功的因子快照，并在后台重连服务。'
+      : 'Rehydrating the latest successful factor snapshot while the page reconnects.',
+  );
+  renderResults(container, _latest.cards, _latest.payload);
+  return true;
 }
 
 function buildShell() {
@@ -320,11 +366,23 @@ async function refreshRegistry(container, showToast) {
   try {
     const data = await api.factors.registry(50);
     _latest = { cards: data.factors || data.factor_cards || [], payload: data };
+    persistPayloadSnapshot(FACTOR_LAB_CACHE_KEY, data, { source: 'registry' });
+    _degradedMeta = null;
     _view.page = 1;
     renderResults(container, _latest.cards, _latest.payload);
     if (showToast) toast.success(c('refresh'), `${_latest.cards.length} cards`);
   } catch (err) {
-    renderError(container.querySelector('#factor-card-panel'), err);
+    const cached = loadPayloadSnapshot(FACTOR_LAB_CACHE_KEY, FACTOR_LAB_CACHE_TTL_MS);
+    if (cached?.payload) {
+      _latest = {
+        cards: cached.payload.factor_cards || cached.payload.factors || [],
+        payload: cached.payload,
+      };
+      _degradedMeta = factorLabDegradedState(cached.saved_at, err.message);
+      renderResults(container, _latest.cards, _latest.payload);
+      return;
+    }
+    renderError(container.querySelector('#factor-card-panel'), err, { onRetry: () => refreshRegistry(container, showToast) });
   }
 }
 
@@ -341,11 +399,24 @@ async function runDiscover(container) {
       quota_guard: true,
     });
     _latest = { cards: payload.factor_cards || [], payload };
+    persistPayloadSnapshot(FACTOR_LAB_CACHE_KEY, payload, { source: 'discover' });
+    _degradedMeta = null;
     _view.page = 1;
     renderResults(container, _latest.cards, _latest.payload);
     toast.success(c('discover'), `${_latest.cards.length} cards`);
   } catch (err) {
-    renderError(container.querySelector('#factor-card-panel'), err);
+    const cached = loadPayloadSnapshot(FACTOR_LAB_CACHE_KEY, FACTOR_LAB_CACHE_TTL_MS);
+    if (cached?.payload) {
+      _latest = {
+        cards: cached.payload.factor_cards || cached.payload.factors || [],
+        payload: cached.payload,
+      };
+      _degradedMeta = factorLabDegradedState(cached.saved_at, err.message);
+      renderResults(container, _latest.cards, _latest.payload);
+      toast.error(c('discover'), err.message);
+      return;
+    }
+    renderError(container.querySelector('#factor-card-panel'), err, { onRetry: () => runDiscover(container) });
     toast.error(c('discover'), err.message);
   }
 }
@@ -357,8 +428,10 @@ function renderResults(container, cards, payload) {
   const pageCount = Math.max(1, Math.ceil(visible.length / _view.pageSize));
   _view.page = Math.min(Math.max(1, _view.page), pageCount);
   const pageItems = visible.slice((_view.page - 1) * _view.pageSize, _view.page * _view.pageSize);
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
 
   container.querySelector('#factor-card-panel').innerHTML = `
+    ${degradedBanner}
     <div class="workbench-metric-grid factor-card-metrics">
       ${metric(getLang() === 'zh' ? '因子数' : 'Factors', num(visible.length, 0))}
       ${metric(c('promoted'), num(visible.filter((card) => normalizeStatus(card.status) === 'promoted').length, 0), 'positive')}
@@ -379,12 +452,14 @@ function renderRunSummary(container, cards, visible, payload) {
   const avgAbsIc = avg(visible.map((card) => Math.abs(Number(card.ic || 0))));
   const sampleAvg = avg(visible.map((card) => Number(card.sample_count || 0)));
   const lastRun = payload?.run_id || payload?.registry_id || payload?.generated_at || 'registry';
+  const dataset = payload?.dataset_manifest || payload?.latest_dataset_manifest || {};
+  const protection = payload?.protection_report || payload?.latest_protection_report || {};
   const checks = [
-    { label: c('asofSafe'), value: c('pass') },
+    { label: c('asofSafe'), value: String(protection?.checks?.as_of_leakage?.passed) === 'true' ? c('pass') : c('review') },
     { label: c('sampleSize'), value: sampleAvg >= 3 ? c('pass') : c('review') },
     { label: c('icGate'), value: avgAbsIc > 0 ? c('pass') : c('review') },
     { label: c('costGate'), value: visible.some((card) => String(card.transaction_cost_sensitivity || '').includes('high')) ? c('review') : c('pass') },
-    { label: c('corrGate'), value: c('review') },
+    { label: c('corrGate'), value: protection?.protection_status === 'blocked' ? c('review') : c('pass') },
   ];
   container.querySelector('#factor-run-summary').innerHTML = `
     <div class="factor-summary-block">
@@ -398,7 +473,12 @@ function renderRunSummary(container, cards, visible, payload) {
       <div class="factor-summary-meta">
         <span>${esc(cfg.universe.join(', '))}</span>
         <span>${esc(cfg.horizon_days)}d</span>
+        <span>${esc((dataset.frequency || 'daily') + ' / ' + (dataset.data_tier || 'l1'))}</span>
         <span title="${esc(lastRun)}">${esc(String(lastRun).slice(0, 36))}</span>
+      </div>
+      <div class="factor-summary-meta">
+        <span>${esc(dataset.dataset_id || 'dataset-pending')}</span>
+        <span>${esc((dataset.provider_chain || []).join(' > ') || 'provider-chain-pending')}</span>
       </div>
     </div>
     <div class="factor-summary-block">
@@ -450,17 +530,21 @@ function renderTable(container, statusBase, cards, pageItems, pageCount) {
           <div class="factor-gate-cell"><span>Cost</span><strong>${esc(card.transaction_cost_sensitivity || 'medium')}</strong></div>
         </div>
         <div class="factor-gate-detail">
+          <span>tier ${esc(card.data_tier || 'l1')}</span>
+          <span>gate ${esc(card.registry_gate_status || card.protection_status || 'review')}</span>
           <span>turnover ${num(card.turnover_estimate)}</span>
           <span>missing ${pct(card.missing_rate)}</span>
           <span>samples ${num(card.sample_count, 0)}</span>
-          <span>${esc((card.failure_modes || [])[0] || 'gate passed or pending review')}</span>
+          <span>${esc((card.blocking_reasons || [])[0] || (card.failure_modes || [])[0] || 'gate passed or pending review')}</span>
         </div>
       </article>`;
   }).join('');
 
   const start = (Math.max(1, _view.page) - 1) * _view.pageSize + 1;
   const end = Math.min(cards.length, _view.page * _view.pageSize);
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   container.querySelector('#factor-table-panel').innerHTML = `
+    ${degradedBanner}
     ${statusTabs}
     <div class="factor-gate-table factor-gate-table--browser" data-page-size="${_view.pageSize}">
       ${rows}
@@ -490,7 +574,20 @@ function renderLineage(container, payload, cards) {
       ];
   const failures = Array.from(new Set(cards.flatMap((card) => card.failure_modes || []))).slice(0, 4);
   const counts = statusCounts(cards);
+  const dataset = payload?.dataset_manifest || payload?.latest_dataset_manifest || {};
+  const protection = payload?.protection_report || payload?.latest_protection_report || {};
+  const registryGate = {
+    registry_gate_status: protection?.protection_status === 'blocked'
+      ? 'blocked'
+      : (cards.some((card) => String(card.registry_gate_status || '').toLowerCase() === 'pass') ? 'pass' : 'review'),
+    required_frequency: dataset.frequency || 'daily',
+    required_data_tier: dataset.data_tier || 'l1',
+    eligible_for_execution: cards.some((card) => String(card.registry_gate_status || '').toLowerCase() === 'pass'),
+    blocking_reasons: protection?.blocking_reasons || [],
+  };
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   container.querySelector('#factor-lineage-panel').innerHTML = `
+    ${degradedBanner}
     <div class="workbench-metric-grid factor-lineage-metrics">
       ${metric(c('promoted'), num(counts.promoted || 0, 0), 'positive')}
       ${metric(c('researchOnly'), num(counts.research_only || 0, 0))}
@@ -502,6 +599,9 @@ function renderLineage(container, payload, cards) {
         <div class="workbench-section__title">${c('policy')}</div>
         <div class="workbench-report-text">${esc(typeof policy === 'string' ? policy : JSON.stringify(policy, null, 2))}</div>
       </section>
+      ${renderRegistryGate(registryGate)}
+      ${renderProtectionReport(protection)}
+      ${renderMarketDepthDiagnostics(dataset.market_depth_status)}
       <section class="workbench-section">
         <div class="workbench-section__title">${c('lineageSteps')}</div>
         <div class="factor-lineage-steps">

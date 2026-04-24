@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,10 @@ import pandas as pd
 import torch
 
 from gateway.quant.market_data import MarketDataGateway
+from gateway.quant.market_depth import MarketDepthGateway
 from gateway.scheduler.data_sources import DataSourceManager
+from gateway.trading.models import StrategyTemplate
+from gateway.trading.store import TradingStore
 from quant_rl.agents.dqn_agent import DQNAgent, DQNConfig
 from quant_rl.agents.ppo_agent import PPOAgent, PPOConfig
 from quant_rl.agents.sac_agent import SACAgent, SACConfig
@@ -116,6 +120,8 @@ class QuantRLService:
         self.repo = get_run_repository()
         self.recorder = ExperimentRecorder(self.settings.experiment_root)
         self.market_data = MarketDataGateway()
+        self.market_depth = MarketDepthGateway(storage_root=Path(__file__).resolve().parents[2] / "storage", market_data=self.market_data)
+        self.trading_store = TradingStore()
         self.data_sources = self._build_data_sources()
         self.esg_scorer = self._build_esg_scorer()
 
@@ -412,6 +418,9 @@ class QuantRLService:
 
         config = {
             "dataset_path": str(self._resolve_dataset_file(Path(dataset_path))),
+            "dataset_id": self._dataset_id_for_path(dataset_path),
+            "protection_status": "pass",
+            "required_data_tier": "l1",
             "action_type": action_type,
             "episodes": int(episodes),
             "total_steps": int(total_steps),
@@ -540,6 +549,9 @@ class QuantRLService:
 
         config = {
             "dataset_path": str(self._resolve_dataset_file(Path(dataset_path))),
+            "dataset_id": self._dataset_id_for_path(dataset_path),
+            "protection_status": "pass",
+            "required_data_tier": "l1",
             "action_type": action_type,
             "checkpoint_path": resolved_checkpoint,
             "experiment_group": resolved_group,
@@ -565,8 +577,77 @@ class QuantRLService:
             "config": config,
         }
 
+    @staticmethod
+    def _dataset_id_for_path(dataset_path: str | Path) -> str:
+        target = Path(dataset_path)
+        stem = target.stem or "dataset"
+        return f"rl-{stem.lower().replace('_', '-').replace(' ', '-')}"
+
+    def _strategy_binding_lookup(self) -> dict[str, str]:
+        rows = self.trading_store.list_strategies()
+        bindings: dict[str, str] = {}
+        for row in rows:
+            bound_run_id = str(row.get("bound_rl_run_id") or "").strip()
+            strategy_id = str(row.get("strategy_id") or "").strip()
+            if bound_run_id and strategy_id:
+                bindings[bound_run_id] = strategy_id
+        return bindings
+
+    def _run_symbols(self, run: dict[str, Any]) -> list[str]:
+        config = run.get("config") or {}
+        explicit = [str(item).upper() for item in config.get("symbols") or [] if str(item).strip()]
+        if explicit:
+            return explicit
+        dataset_path = str(config.get("dataset_path") or "")
+        if dataset_path:
+            name = Path(dataset_path).stem.upper()
+            if name and name not in {"MARKET", "MERGED_MARKET"}:
+                return [name]
+        return ["AAPL"]
+
+    def _run_eligibility(self, run: dict[str, Any], *, required_data_tier: str | None = None) -> dict[str, Any]:
+        config = dict(run.get("config") or {})
+        artifacts = dict(run.get("artifacts") or {})
+        dataset_path = Path(str(config.get("dataset_path") or ""))
+        dataset_id = str(config.get("dataset_id") or self._dataset_id_for_path(dataset_path or "dataset"))
+        required_tier = str(required_data_tier or config.get("required_data_tier") or "l1").lower()
+        protection_status = str(config.get("protection_status") or artifacts.get("protection_status") or "pass").lower()
+        market_depth_status = self.market_depth.status(symbols=self._run_symbols(run), require_l2=required_tier == "l2")
+        report_path = artifacts.get("report_path") or artifacts.get("workbook_path") or artifacts.get("metrics_path")
+        backtest_ready = bool(report_path)
+        blocking_reasons: list[str] = []
+        if not dataset_path.exists():
+            blocking_reasons.append("dataset_missing")
+        if protection_status != "pass":
+            blocking_reasons.append("protection_not_pass")
+        if required_tier == "l2" and str(market_depth_status.get("data_tier") or "l1") != "l2":
+            blocking_reasons.append("l2_required_but_unavailable")
+        if not backtest_ready:
+            blocking_reasons.append("latest_backtest_report_missing")
+        eligibility_status = "pass" if not blocking_reasons else "blocked"
+        return {
+            "dataset_id": dataset_id,
+            "protection_status": protection_status,
+            "required_data_tier": required_tier,
+            "eligibility_status": eligibility_status,
+            "blocking_reasons": blocking_reasons,
+            "market_depth_status": market_depth_status,
+            "latest_backtest_report": report_path or "",
+        }
+
+    def _enrich_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(run)
+        payload["config"] = dict(run.get("config") or {})
+        payload["artifacts"] = dict(run.get("artifacts") or {})
+        eligibility = self._run_eligibility(payload)
+        payload.update(eligibility)
+        bound_lookup = self._strategy_binding_lookup()
+        payload["promotion_status"] = "bound" if payload.get("run_id") in bound_lookup else str(payload["artifacts"].get("promotion_status") or "research_only")
+        payload["bound_strategy_id"] = bound_lookup.get(str(payload.get("run_id") or ""))
+        return payload
+
     def overview(self) -> dict:
-        runs = self.repo.list_runs()
+        runs = [self._enrich_run(run) for run in self.repo.list_runs()]
         protocol = self.recorder.protocol()
         latest_dataset = self._latest_dataset_descriptor(runs)
         latest_checkpoint = self._latest_checkpoint_descriptor(runs)
@@ -599,6 +680,7 @@ class QuantRLService:
                 "/api/v1/quant/rl/train",
                 "/api/v1/quant/rl/backtest",
                 "/api/v1/quant/rl/runs",
+                "/api/v1/quant/rl/promote",
                 "/app/#/rl-lab",
             ],
             "runs": runs,
@@ -711,7 +793,70 @@ class QuantRLService:
         return self._artifact_descriptor(latest, label="report")
 
     def list_runs(self) -> list[dict]:
-        return self.repo.list_runs()
+        return [self._enrich_run(run) for run in self.repo.list_runs()]
+
+    def promote_run(self, run_id: str, *, strategy_id: str = "rl_timing_overlay", required_data_tier: str = "l2") -> dict[str, Any]:
+        run = self.repo.get(run_id)
+        if run is None:
+            raise ValueError(f"Unknown RL run: {run_id}")
+        enriched = self._enrich_run(run)
+        eligibility = self._run_eligibility(enriched, required_data_tier=required_data_tier)
+        promotion_status = "promoted" if eligibility.get("eligibility_status") == "pass" else "research_only"
+        report = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "run_id": run_id,
+            "strategy_id": strategy_id,
+            "dataset_id": eligibility.get("dataset_id"),
+            "protection_status": eligibility.get("protection_status"),
+            "required_data_tier": eligibility.get("required_data_tier"),
+            "eligibility_status": eligibility.get("eligibility_status"),
+            "blocking_reasons": list(eligibility.get("blocking_reasons") or []),
+            "latest_backtest_report": eligibility.get("latest_backtest_report"),
+            "market_depth_status": eligibility.get("market_depth_status", {}),
+            "promotion_status": promotion_status,
+        }
+
+        run_artifacts = dict(enriched.get("artifacts") or {})
+        run_artifacts["promotion_report"] = report
+        run_artifacts["promotion_status"] = promotion_status
+        run_config = dict(enriched.get("config") or {})
+        run_config["required_data_tier"] = eligibility.get("required_data_tier", required_data_tier)
+        run_config["dataset_id"] = eligibility.get("dataset_id")
+        run_config["protection_status"] = eligibility.get("protection_status", "pass")
+        self.repo.save(
+            RunInfo(
+                run_id=run_id,
+                algorithm=str(enriched.get("algorithm") or ""),
+                phase=str(enriched.get("phase") or ""),
+                status=str(enriched.get("status") or ""),
+                config=run_config,
+                metrics=dict(enriched.get("metrics") or {}),
+                artifacts=run_artifacts,
+            )
+        )
+
+        rows = self.trading_store.list_strategies()
+        current = next((row for row in rows if row.get("strategy_id") == strategy_id), None)
+        if current is None:
+            raise ValueError(f"Unknown strategy: {strategy_id}")
+        metadata = dict(current.get("metadata") or {})
+        metadata["rl_promotion"] = report
+        updated = StrategyTemplate.model_validate(
+            {
+                **current,
+                "bound_rl_run_id": run_id if promotion_status == "promoted" else current.get("bound_rl_run_id"),
+                "required_data_tier": eligibility.get("required_data_tier", current.get("required_data_tier", "l2")),
+                "latest_dataset_id": eligibility.get("dataset_id"),
+                "latest_protection_status": eligibility.get("protection_status", "review"),
+                "latest_l2_status": "pass" if str((eligibility.get("market_depth_status") or {}).get("data_tier") or "l1") == "l2" else "blocked",
+                "registry_gate_status": "pass" if promotion_status == "promoted" else "blocked",
+                "blocking_reasons": list(eligibility.get("blocking_reasons") or []),
+                "metadata": metadata,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        self.trading_store.save_strategy(updated)
+        return report
 
     @staticmethod
     def default_symbols() -> list[str]:

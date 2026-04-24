@@ -1,0 +1,308 @@
+.error-state-container {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  min-height: 180px;
+  width: 100%;
+  padding: 8px 0;
+}
+
+.error-state-container--compact {
+  min-height: 0;
+  justify-content: flex-start;
+  padding: 0;
+}
+
+.error-state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 14px;
+  width: min(100%, 920px);
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 90, 110, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 82, 110, 0.08), rgba(255, 82, 110, 0.04)),
+    rgba(12, 10, 20, 0.94);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.error-state--compact {
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+}
+
+.error-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(255, 82, 110, 0.14);
+  border: 1px solid rgba(255, 82, 110, 0.28);
+  color: #ff8d9b;
+  font: 700 20px/1 var(--f-display, monospace);
+  flex-shrink: 0;
+}
+
+.error-state--compact .error-icon {
+  width: 30px;
+  height: 30px;
+  font-size: 13px;
+}
+
+.error-copy {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.error-title {
+  color: #ffe8ec;
+  font: 600 13px/1.55 var(--f-mono, monospace);
+}
+
+.error-state--compact .error-title {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.error-details {
+  color: rgba(255, 226, 232, 0.78);
+  font: 500 10px/1.6 var(--f-mono, monospace);
+  word-break: break-word;
+}
+
+.error-suggestions {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.error-state--compact .error-suggestions {
+  padding: 8px 10px;
+  gap: 4px;
+}
+
+.suggestions-title {
+  color: var(--text-primary, #f5f7ff);
+  font: 600 11px/1.45 var(--f-display, monospace);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.error-suggestions ul {
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.error-suggestions li {
+  color: var(--text-secondary, rgba(200, 210, 255, 0.72));
+  font: 500 10px/1.55 var(--f-mono, monospace);
+}
+
+.error-suggestions li::before {
+  content: '->';
+  margin-right: 6px;
+  color: var(--green, #00ff88);
+}
+
+.error-retry-btn {
+  align-self: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff3f5;
+  font: 600 10px/1 var(--f-display, monospace);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.error-retry-btn:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
+}
+
+.degraded-notice {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 179, 0, 0.16);
+  background: rgba(255, 179, 0, 0.07);
+  color: rgba(255, 236, 208, 0.92);
+}
+
+.degraded-notice--error {
+  border-color: rgba(255, 82, 110, 0.18);
+  background: rgba(255, 82, 110, 0.08);
+  color: rgba(255, 226, 232, 0.92);
+}
+
+.degraded-notice__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.degraded-notice__header strong {
+  color: var(--text-primary, #f5f7ff);
+  font: 700 10px/1 var(--f-display, monospace);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.degraded-notice__header span,
+.degraded-notice__body span {
+  color: inherit;
+  font: 500 10px/1.55 var(--f-mono, monospace);
+}
+
+.degraded-notice__body {
+  display: grid;
+  gap: 4px;
+}
+
+.backend-disconnected-banner {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 10000;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 82, 110, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 82, 110, 0.14), rgba(255, 82, 110, 0.08)),
+    rgba(12, 10, 20, 0.94);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.34);
+  animation: slideInUp 0.28s ease;
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.backend-disconnected-banner .banner-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 20px;
+}
+
+.backend-disconnected-banner .banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 82, 110, 0.18);
+  color: #ffced6;
+  font: 700 12px/1 var(--f-display, monospace);
+  flex-shrink: 0;
+}
+
+.backend-disconnected-banner .banner-title {
+  color: var(--text-primary, #f5f7ff);
+  font: 700 11px/1.2 var(--f-display, monospace);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.backend-disconnected-banner .banner-message {
+  color: rgba(255, 232, 236, 0.9);
+  font: 500 11px/1.6 var(--f-mono, monospace);
+}
+
+.backend-disconnected-banner .banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.backend-disconnected-banner button {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff2f4;
+  font: 600 10px/1 var(--f-display, monospace);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.backend-disconnected-banner button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.backend-disconnected-banner .close-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 14px;
+}
+
+.backend-disconnected-banner .close-btn:hover {
+  color: #fff;
+  background: transparent;
+}
+
+@media (max-width: 760px) {
+  .error-state,
+  .error-state--compact {
+    grid-template-columns: 1fr;
+  }
+
+  .error-icon,
+  .error-state--compact .error-icon {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+
+  .error-retry-btn {
+    width: 100%;
+  }
+
+  .backend-disconnected-banner {
+    right: 12px;
+    bottom: 12px;
+    width: min(100vw - 24px, 360px);
+  }
+}

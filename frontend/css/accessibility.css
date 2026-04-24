@@ -1,0 +1,400 @@
+/* ═══════════════════════════════════════════════════════════════
+   Accessibility & Focus Management
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Skip Link ─────────────────────────────────────────────────── */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100000;
+  padding: 12px 24px;
+  background: var(--green);
+  color: #000;
+  font-family: var(--f-mono);
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  text-decoration: none;
+  box-shadow: 0 4px 20px rgba(0,255,136,0.4);
+  transition: top 0.3s var(--ease-smooth);
+}
+
+.skip-link:focus {
+  top: 20px;
+  outline: 3px solid rgba(0,255,136,0.6);
+  outline-offset: 4px;
+}
+
+/* ── Focus Visible (Modern Focus Styles) ───────────────────────── */
+/* Remove default outline for mouse users */
+*:focus {
+  outline: none;
+}
+
+/* Show enhanced focus for keyboard users */
+*:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+  border-radius: 4px;
+  animation: focusPulse 2s ease-in-out infinite;
+}
+
+@keyframes focusPulse {
+  0%, 100% { outline-color: var(--green); }
+  50% { outline-color: rgba(0,255,136,0.5); }
+}
+
+/* ── Button Focus Styles ───────────────────────────────────────── */
+.btn:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
+  box-shadow:
+    0 0 0 4px rgba(0,255,136,0.15),
+    0 4px 12px rgba(0,0,0,0.3);
+}
+
+.btn-primary:focus-visible {
+  outline-color: rgba(255,255,255,0.8);
+  box-shadow:
+    0 0 0 4px rgba(0,255,136,0.25),
+    0 6px 20px rgba(0,255,136,0.4),
+    0 2px 8px rgba(0,0,0,0.3);
+}
+
+.btn-ghost:focus-visible {
+  outline: 2px solid var(--green);
+  background: rgba(0,255,136,0.08);
+  border-color: var(--green);
+}
+
+.btn-danger:focus-visible {
+  outline: 2px solid #ff4757;
+  outline-offset: 4px;
+  box-shadow:
+    0 0 0 4px rgba(255,71,87,0.15),
+    0 4px 12px rgba(255,71,87,0.3);
+}
+
+/* ── Input Focus Styles ────────────────────────────────────────── */
+.form-input:focus-visible,
+.form-select:focus-visible,
+.form-textarea:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+  border-color: var(--green);
+  box-shadow:
+    0 0 0 4px rgba(0,255,136,0.12),
+    0 2px 8px rgba(0,255,136,0.15);
+}
+
+input[type="text"]:focus-visible,
+input[type="email"]:focus-visible,
+input[type="password"]:focus-visible,
+input[type="number"]:focus-visible,
+input[type="search"]:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+  border-color: var(--green);
+  box-shadow:
+    0 0 0 4px rgba(0,255,136,0.12),
+    0 2px 8px rgba(0,255,136,0.15);
+}
+
+/* ── Link Focus Styles ─────────────────────────────────────────── */
+a:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+  border-radius: 3px;
+  text-decoration: underline;
+  text-decoration-color: var(--green);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+/* ── Interactive Element Focus ─────────────────────────────────── */
+.nav-item:focus-visible,
+.tab:focus-visible,
+.tf-tab:focus-visible,
+.symbol-chip:focus-visible,
+.filter-chip:focus-visible,
+.ind-btn:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 4px rgba(0,255,136,0.15),
+    0 2px 8px rgba(0,255,136,0.2);
+}
+
+/* ── Card & Panel Focus ────────────────────────────────────────── */
+.card:focus-visible,
+.panel:focus-visible,
+.modal:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 4px;
+  box-shadow:
+    0 0 0 6px rgba(0,255,136,0.12),
+    0 8px 24px rgba(0,255,136,0.2);
+}
+
+/* ── Focus Trap (for modals and dialogs) ───────────────────────── */
+.focus-trap {
+  position: relative;
+}
+
+.focus-trap::before,
+.focus-trap::after {
+  content: '';
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Prevent focus from leaving modal */
+.modal-open {
+  overflow: hidden;
+}
+
+.modal-open .app-container > *:not(.modal-overlay) {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Keyboard Navigation Indicators ────────────────────────────── */
+.keyboard-nav-active *:focus {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+
+/* Show keyboard shortcuts hint */
+[data-keyboard-shortcut]::after {
+  content: attr(data-keyboard-shortcut);
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%) scale(0.9);
+  padding: 4px 8px;
+  background: rgba(0,0,0,0.9);
+  color: var(--green);
+  font-size: 10px;
+  font-family: var(--f-mono);
+  border-radius: 4px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+  z-index: 1000;
+}
+
+[data-keyboard-shortcut]:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+/* ── Focus Within Enhancements ─────────────────────────────────── */
+.form-group:focus-within {
+  position: relative;
+}
+
+.form-group:focus-within::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border: 2px solid rgba(0,255,136,0.2);
+  border-radius: 12px;
+  pointer-events: none;
+  animation: focusGroupPulse 2s ease-in-out infinite;
+}
+
+@keyframes focusGroupPulse {
+  0%, 100% {
+    border-color: rgba(0,255,136,0.2);
+    box-shadow: 0 0 0 0 rgba(0,255,136,0.1);
+  }
+  50% {
+    border-color: rgba(0,255,136,0.4);
+    box-shadow: 0 0 0 4px rgba(0,255,136,0.05);
+  }
+}
+
+/* ── High Contrast Mode Support ────────────────────────────────── */
+@media (prefers-contrast: high) {
+  *:focus-visible {
+    outline-width: 3px;
+    outline-offset: 4px;
+  }
+
+  .btn:focus-visible {
+    outline-width: 3px;
+    box-shadow:
+      0 0 0 6px rgba(0,255,136,0.3),
+      0 4px 12px rgba(0,0,0,0.5);
+  }
+
+  .form-input:focus-visible,
+  .form-select:focus-visible,
+  .form-textarea:focus-visible {
+    outline-width: 3px;
+    box-shadow:
+      0 0 0 6px rgba(0,255,136,0.2),
+      0 2px 8px rgba(0,255,136,0.3);
+  }
+}
+
+/* ── Reduced Motion Support ────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *:focus-visible {
+    animation: none;
+  }
+
+  .skip-link {
+    transition: none;
+  }
+
+  .form-group:focus-within::before {
+    animation: none;
+    border-color: rgba(0,255,136,0.4);
+  }
+
+  [data-keyboard-shortcut]::after {
+    transition: none;
+  }
+}
+
+/* ── Screen Reader Only ────────────────────────────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.sr-only-focusable:focus,
+.sr-only-focusable:active {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* ── Focus Lock (prevent focus outside container) ──────────────── */
+.focus-lock {
+  isolation: isolate;
+}
+
+.focus-lock-active {
+  position: relative;
+  z-index: 10000;
+}
+
+.focus-lock-active ~ * {
+  pointer-events: none;
+  user-select: none;
+  filter: blur(2px);
+  opacity: 0.5;
+}
+
+/* ── Keyboard Navigation Hints ─────────────────────────────────── */
+.keyboard-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: rgba(0,255,136,0.1);
+  border: 1px solid rgba(0,255,136,0.3);
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: var(--f-mono);
+  color: var(--green);
+  font-weight: 600;
+}
+
+.keyboard-hint kbd {
+  padding: 2px 4px;
+  background: rgba(0,255,136,0.15);
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+/* ── Focus Indicator for Custom Components ─────────────────────── */
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+[role="checkbox"]:focus-visible,
+[role="radio"]:focus-visible,
+[role="switch"]:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 4px rgba(0,255,136,0.15);
+}
+
+/* ── Light Mode Adjustments ────────────────────────────────────── */
+body.light *:focus-visible {
+  outline-color: rgba(0,168,85,1);
+}
+
+body.light .btn:focus-visible {
+  outline-color: rgba(0,168,85,1);
+  box-shadow:
+    0 0 0 4px rgba(0,168,85,0.15),
+    0 4px 12px rgba(0,0,0,0.2);
+}
+
+body.light .form-input:focus-visible,
+body.light .form-select:focus-visible,
+body.light .form-textarea:focus-visible {
+  outline-color: rgba(0,168,85,1);
+  border-color: rgba(0,168,85,1);
+  box-shadow:
+    0 0 0 4px rgba(0,168,85,0.12),
+    0 2px 8px rgba(0,168,85,0.15);
+}
+
+body.light .keyboard-hint {
+  background: rgba(0,168,85,0.08);
+  border-color: rgba(0,168,85,0.25);
+  color: rgba(0,168,85,1);
+}
+
+/* ── Focus Management Utilities ────────────────────────────────── */
+.focus-visible-only:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+.no-focus-outline {
+  outline: none !important;
+}
+
+.focus-ring {
+  position: relative;
+}
+
+.focus-ring::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid transparent;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: border-color 0.2s;
+}
+
+.focus-ring:focus-visible::after {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(0,255,136,0.15);
+}

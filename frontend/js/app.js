@@ -1,9 +1,10 @@
 import { router, getAuthUser, clearAuth } from './router.js?v=8';
-import { api } from './qtapi.js?v=8';
+import { api, getApiEndpointLabel } from './qtapi.js?v=8';
 import { initNav, updateHealth } from './components/nav.js?v=8';
 import { toast, initErrorListener, clearAllToasts } from './components/toast.js?v=8';
 import { t, setLang, getLang, onLangChange } from './i18n.js?v=8';
 import { ensureUiAuditLog } from './modules/ui-audit.js?v=8';
+import { errorHandler } from './utils/error-handler.js?v=1';
 
 function getTheme() {
   return localStorage.getItem('qt-theme') || 'dark';
@@ -78,13 +79,55 @@ async function updateBackendHealth(showToast = false) {
     await api.health();
     updateHealth(true);
     if (showToast) toast.success(t('common.backend_online'));
+
+    const banner = document.querySelector('.backend-disconnected-banner');
+    if (banner) banner.remove();
+
     return true;
   } catch (error) {
     updateHealth(false);
     console.warn('API health check failed during init', error);
-    if (showToast) toast.error(t('common.backend_offline'), t('common.features_limited'));
+
+    if (showToast) {
+      const errorInfo = errorHandler.parseError(error, { context: 'backend_health' });
+      toast.error(errorInfo.message, errorInfo.details || t('common.features_limited'));
+    }
+
+    showBackendDisconnectedBanner();
     return false;
   }
+}
+
+function showBackendDisconnectedBanner() {
+  if (document.querySelector('.backend-disconnected-banner')) return;
+
+  const lang = getLang();
+  const endpoint = getApiEndpointLabel();
+  const banner = document.createElement('div');
+  banner.className = 'backend-disconnected-banner';
+  banner.innerHTML = `
+    <button class="close-btn" aria-label="Close">×</button>
+    <div class="banner-header">
+      <span class="banner-icon">!</span>
+      <span class="banner-title">${lang === 'zh' ? '后端服务未连接' : 'Backend disconnected'}</span>
+    </div>
+    <div class="banner-message">
+      ${lang === 'zh'
+        ? `后端服务（${endpoint}）暂时不可用，部分功能将回退到缓存或降级视图。`
+        : `Backend service (${endpoint}) is unavailable. Some features are falling back to cached or degraded views.`}
+    </div>
+    <div class="banner-actions">
+      <button class="retry-btn">${lang === 'zh' ? '重试连接' : 'Retry'}</button>
+    </div>
+  `;
+
+  document.body.appendChild(banner);
+
+  banner.querySelector('.close-btn')?.addEventListener('click', () => banner.remove());
+  banner.querySelector('.retry-btn')?.addEventListener('click', async () => {
+    const success = await updateBackendHealth(true);
+    if (success) banner.remove();
+  });
 }
 
 async function init() {

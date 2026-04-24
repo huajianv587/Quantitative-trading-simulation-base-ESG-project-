@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-04-23 16:53:32",
+  "summary": {
+    "total": 2,
+    "passed": 0,
+    "failed": 2,
+    "warnings": 0,
+    "pass_rate": 0.0
+  },
+  "results": {
+    "passed": [],
+    "failed": [
+      {
+        "test": "后端健康检查",
+        "error": "状态码: 404"
+      },
+      {
+        "test": "测试中止",
+        "error": "后端服务不可用"
+      }
+    ],
+    "warnings": []
+  }
+}

@@ -7,6 +7,8 @@ from api.schemas_quant_rl import (
     QuantRLBacktestResponse,
     QuantRLDatasetBuildRequest,
     QuantRLDemoDatasetRequest,
+    QuantRLPromoteRequest,
+    QuantRLPromoteResponse,
     QuantRLRecipeBuildRequest,
     QuantRLResponse,
     QuantRLSearchRequest,
@@ -118,4 +120,17 @@ def backtest(request: QuantRLBacktestRequest) -> QuantRLBacktestResponse:
         )
         return QuantRLBacktestResponse(**payload)
     except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/promote", response_model=QuantRLPromoteResponse)
+def promote(request: QuantRLPromoteRequest) -> QuantRLPromoteResponse:
+    try:
+        payload = service.promote_run(
+            request.run_id,
+            strategy_id=request.strategy_id,
+            required_data_tier=request.required_data_tier,
+        )
+        return QuantRLPromoteResponse(**payload)
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -27,6 +27,7 @@ from gateway.trading.models import (
     RiskApproval,
     SentimentSnapshot,
     StrategyAllocation,
+    StrategyEligibilityReport,
     StrategyTemplate,
     TradingAction,
     TradingDecisionBundle,
@@ -203,6 +204,8 @@ class TradingAgentService:
         }
 
     def trading_ops_snapshot(self) -> dict[str, Any]:
+        strategies = self.list_strategies()
+        eligibility = strategies.get("eligibility") or self.strategy_eligibility()
         return {
             "generated_at": utc_now(),
             "schedule": self.schedule_status(),
@@ -213,9 +216,11 @@ class TradingAgentService:
             "debates": self.debate_runs(limit=10),
             "risk": self.risk_board(limit=10),
             "autopilot_policy": self.get_autopilot_policy(),
-            "strategies": self.list_strategies(),
+            "strategies": strategies,
+            "strategy_eligibility": eligibility,
+            "market_depth": eligibility.get("market_depth_status", {}),
             "execution_path": self.execution_path_status(),
-            "factor_pipeline": self.factor_pipeline_manifest(),
+            "factor_pipeline": self.factor_pipeline_manifest(strategy_eligibility_snapshot=eligibility),
             "fusion_manifest": self.fusion_reference_manifest(),
             "notifier": {
                 "telegram_configured": bool(
@@ -275,27 +280,140 @@ class TradingAgentService:
             current_stage="blocked" if live_blocked else ("armed" if armed else "disarmed"),
             judge_passed=False,
             risk_passed=False,
+            l2_ready=str((self.strategy_eligibility().get("market_depth_status") or {}).get("data_tier") or "l1") == "l2",
         )
         self.store.save_execution_path_status(path)
         return self._with_policy_runtime(saved)
 
-    def list_strategies(self) -> dict[str, Any]:
+    @staticmethod
+    def _strategy_defaults(strategy_id: str) -> tuple[str, str]:
+        defaults = {
+            "esg_multifactor_long_only": ("daily", "l1"),
+            "regime_rotation": ("daily", "l1"),
+            "sentiment_overlay": ("hybrid", "l1"),
+            "event_driven_overlay": ("intraday", "l2"),
+            "rl_timing_overlay": ("intraday", "l2"),
+        }
+        return defaults.get(strategy_id, ("daily", "l1"))
+
+    @staticmethod
+    def _frequency_satisfies_requirement(required: str, actual: str) -> bool:
+        normalized_required = str(required or "daily").lower()
+        normalized_actual = str(actual or "daily").lower()
+        if normalized_required == "hybrid":
+            return normalized_actual == "hybrid"
+        if normalized_required == "daily":
+            return normalized_actual in {"daily", "hybrid"}
+        if normalized_required == "intraday":
+            return normalized_actual in {"intraday", "hybrid"}
+        return normalized_required == normalized_actual
+
+    def _latest_factor_run(self) -> dict[str, Any]:
+        try:
+            payload = self.intelligence.factor_registry(limit=1)
+            dataset_manifest = payload.get("latest_dataset_manifest", {})
+            protection_report = payload.get("latest_protection_report", {})
+            return {
+                "dataset_manifest": dataset_manifest,
+                "protection_report": protection_report,
+                "factor_cards": payload.get("factors", []),
+            }
+        except Exception:
+            return {"dataset_manifest": {}, "protection_report": {}, "factor_cards": []}
+
+    def strategy_eligibility(
+        self,
+        *,
+        symbol: str | None = None,
+        factor_run: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         rows = self.store.list_strategies()
         allocations = {row["strategy_id"]: row for row in self.store.list_strategy_allocations()}
-        enriched = []
+        factor_context = factor_run or self._latest_factor_run()
+        dataset_manifest = dict(factor_context.get("dataset_manifest") or {})
+        protection_report = dict(factor_context.get("protection_report") or {})
+        reference_symbol = str(symbol or (dataset_manifest.get("universe") or self._active_watchlist_symbols() or ["AAPL"])[0]).upper()
+        market_depth_status = self.intelligence.market_depth_status(
+            symbols=[reference_symbol],
+            require_l2=any(
+                str((row.get("required_data_tier") or self._strategy_defaults(row.get("strategy_id") or "")[1])).lower() == "l2"
+                for row in rows
+            ),
+        )
+        enriched: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
             allocation = allocations.get(item["strategy_id"])
             item["allocation"] = allocation
+            required_frequency, required_data_tier = self._strategy_defaults(item.get("strategy_id") or "")
+            required_frequency = str(item.get("required_frequency") or required_frequency)
+            required_data_tier = str(item.get("required_data_tier") or required_data_tier)
+            protection_status = str(protection_report.get("protection_status") or "review")
+            actual_frequency = str(dataset_manifest.get("frequency") or "daily")
+            actual_data_tier = str(dataset_manifest.get("data_tier") or market_depth_status.get("data_tier") or "l1")
+            blocking_reasons: list[str] = []
+            if dataset_manifest and not self._frequency_satisfies_requirement(required_frequency, actual_frequency):
+                blocking_reasons.append("frequency_requirement_not_met")
+            if protection_status == "blocked":
+                blocking_reasons.append("research_protection_blocked")
+            if required_data_tier == "l2" and str(market_depth_status.get("data_tier") or "l1") != "l2":
+                blocking_reasons.append("l2_required_but_unavailable")
+            if item.get("strategy_id") == "rl_timing_overlay" and not item.get("bound_rl_run_id"):
+                blocking_reasons.append("rl_promotion_missing")
+            if not dataset_manifest:
+                blocking_reasons.append("dataset_manifest_missing")
+            registry_gate_status = "pass"
+            if blocking_reasons:
+                registry_gate_status = "blocked"
+            elif protection_status == "review" or actual_data_tier == "l1" and required_data_tier == "l1" and not dataset_manifest:
+                registry_gate_status = "review"
+            item["required_frequency"] = required_frequency
+            item["required_data_tier"] = required_data_tier
+            item["registry_gate_status"] = registry_gate_status
+            item["blocking_reasons"] = list(dict.fromkeys(blocking_reasons))
+            item["latest_dataset_id"] = dataset_manifest.get("dataset_id")
+            item["latest_protection_status"] = protection_status
+            item["latest_l2_status"] = "pass" if required_data_tier == "l1" or str(market_depth_status.get("data_tier") or "l1") == "l2" else "blocked"
+            item["eligible_for_execution"] = bool(
+                str(item.get("status") or "").lower() == "active"
+                and (not allocation or str((allocation or {}).get("status") or "active").lower() == "active")
+                and registry_gate_status == "pass"
+            )
             enriched.append(item)
+        report = StrategyEligibilityReport(
+            generated_at=utc_now(),
+            symbol=reference_symbol if symbol else None,
+            eligible_count=sum(1 for row in enriched if row.get("eligible_for_execution")),
+            blocked_count=sum(1 for row in enriched if row.get("registry_gate_status") == "blocked"),
+            review_count=sum(1 for row in enriched if row.get("registry_gate_status") == "review"),
+            market_depth_status=market_depth_status,
+            strategies=enriched,
+            lineage=[
+                "strategy_registry",
+                "dataset_manifest",
+                "protection_report",
+                "market_depth_status",
+                "registry_gate",
+            ],
+        )
+        return report.model_dump(mode="json")
+
+    def list_strategies(self, *, symbol: str | None = None, factor_run: dict[str, Any] | None = None) -> dict[str, Any]:
+        eligibility = self.strategy_eligibility(symbol=symbol, factor_run=factor_run)
+        enriched = list(eligibility.get("strategies") or [])
         return {
             "generated_at": utc_now(),
             "count": len(enriched),
             "strategies": enriched,
+            "eligibility": eligibility,
         }
+
+    def list_strategy_eligibility(self, *, symbol: str | None = None) -> dict[str, Any]:
+        return self.strategy_eligibility(symbol=symbol)
 
     def toggle_strategy(self, *, strategy_id: str, status: str) -> dict[str, Any]:
         rows = self.store.list_strategies()
+        allocations = {row["strategy_id"]: row for row in self.store.list_strategy_allocations()}
         current = next((row for row in rows if row.get("strategy_id") == strategy_id), None)
         if not current:
             raise ValueError(f"Unknown strategy: {strategy_id}")
@@ -323,6 +441,8 @@ class TradingAgentService:
         return {"generated_at": utc_now(), "allocation": saved}
 
     def execution_path_status(self) -> dict[str, Any]:
+        eligibility = self.strategy_eligibility()
+        l2_ready = str((eligibility.get("market_depth_status") or {}).get("data_tier") or "l1") == "l2"
         latest = self.store.latest_execution_path_status()
         if latest:
             return self._build_execution_path_status(
@@ -330,59 +450,40 @@ class TradingAgentService:
                 current_stage=latest.get("current_stage", "idle"),
                 judge_passed=bool(latest.get("judge_passed")),
                 risk_passed=bool(latest.get("risk_passed")),
+                l2_ready=l2_ready,
             ).model_dump(mode="json")
         seeded = self._build_execution_path_status(
             policy=self.store.get_autopilot_policy(),
             current_stage="idle",
             judge_passed=False,
             risk_passed=False,
+            l2_ready=l2_ready,
         )
         return self.store.save_execution_path_status(seeded)
 
     def dashboard_state(self, *, provider: str = "auto") -> dict[str, Any]:
-        signal = None
         try:
-            signal = self.quant_system.build_dashboard_chart(provider=provider)
+            return self.quant_system.build_dashboard_state(provider=provider)
         except Exception:
-            signal = {}
-        chart = signal if isinstance(signal, dict) else {}
-        source = chart.get("source")
-        provider_status = chart.get("provider_status") or {}
-        degraded_from = chart.get("degraded_from")
-        provider_chain = chart.get("data_source_chain") or chart.get("provider_chain") or []
-        candles = chart.get("candles") or []
-        symbol = chart.get("symbol") or (self._active_watchlist_symbols()[0] if self._active_watchlist_symbols() else None)
-        phase = "ready" if candles and source not in {"unknown", "loading", None, ""} else "degraded"
-        reason = chart.get("warning") or chart.get("detail") or chart.get("market_data_warnings") or []
-        if isinstance(reason, str):
-            reason = [reason]
-        if not reason:
-            if provider_status.get("available") and not candles:
-                reason = ["provider_connected_but_no_payload"]
-            elif degraded_from:
-                reason = [f"provider_degraded_from_{degraded_from}"]
-            else:
-                reason = ["chart_data_unavailable"]
-        fallback_preview = {
-            "symbol": symbol,
-            "source": source or "unknown",
-            "source_chain": provider_chain or ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
-            "last_snapshot": candles[-1] if candles else None,
-            "reason": reason or ["chart_data_unavailable"],
-            "next_actions": ["refresh_dashboard", "switch_symbol", "open_market_radar", "open_backtest"],
-        }
-        return {
-            "generated_at": utc_now(),
-            "phase": phase,
-            "ready": phase == "ready",
-            "symbol": symbol,
-            "source": source or "unknown",
-            "selected_provider": provider,
-            "source_chain": provider_chain or ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
-            "provider_status": provider_status,
-            "degraded_from": degraded_from,
-            "fallback_preview": fallback_preview,
-        }
+            return {
+                "generated_at": utc_now(),
+                "phase": "degraded",
+                "ready": False,
+                "symbol": (self._active_watchlist_symbols()[0] if self._active_watchlist_symbols() else None),
+                "source": "unknown",
+                "selected_provider": provider,
+                "source_chain": ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
+                "provider_status": {"available": False, "provider": "unavailable", "selected_provider": provider},
+                "degraded_from": None,
+                "fallback_preview": {
+                    "symbol": (self._active_watchlist_symbols()[0] if self._active_watchlist_symbols() else None),
+                    "source": "unknown",
+                    "source_chain": ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
+                    "last_snapshot": None,
+                    "reason": ["chart_data_unavailable"],
+                    "next_actions": ["refresh_dashboard", "switch_symbol", "open_market_radar", "open_backtest"],
+                },
+            }
 
     def fusion_reference_manifest(self) -> dict[str, Any]:
         manifest = dict(self.store.get_fusion_manifest())
@@ -396,8 +497,10 @@ class TradingAgentService:
         *,
         symbol: str | None = None,
         strategy_ids: list[str] | None = None,
+        factor_payload: dict[str, Any] | None = None,
+        strategy_eligibility_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        strategy_snapshot = self.list_strategies()
+        strategy_snapshot = strategy_eligibility_snapshot or self.strategy_eligibility(symbol=symbol, factor_run=factor_payload)
         strategy_rows = strategy_snapshot.get("strategies", [])
         strategy_lookup = {row.get("strategy_id"): row for row in strategy_rows}
         selected_rows = []
@@ -406,8 +509,7 @@ class TradingAgentService:
         if not selected_rows:
             selected_rows = [
                 row for row in strategy_rows
-                if str(row.get("status") or "").lower() == "active"
-                and (not row.get("allocation") or str((row.get("allocation") or {}).get("status") or "active").lower() == "active")
+                if bool(row.get("eligible_for_execution"))
             ]
         factor_dependencies = list(dict.fromkeys(
             dependency
@@ -420,6 +522,7 @@ class TradingAgentService:
             warnings.append("no_strategy_slot")
         if not factor_dependencies:
             warnings.append("no_factor_dependencies")
+        market_depth_status = dict(strategy_snapshot.get("market_depth_status") or {})
         stages = [
             FactorPipelineStage(
                 stage="feature_build",
@@ -439,6 +542,12 @@ class TradingAgentService:
                 detail="Route promoted factors into active strategy slots before execution.",
                 factors=[row.get("strategy_id") for row in selected_rows if row.get("strategy_id")],
             ),
+            FactorPipelineStage(
+                stage="registry_gate",
+                status="ready" if selected_rows else "guarded",
+                detail="Only strategies with pass-level registry gates may become runtime slots.",
+                factors=[row.get("strategy_id") for row in strategy_rows if row.get("registry_gate_status") == "pass"],
+            ),
         ]
         next_action = (
             "Choose an active strategy slot or expand the factor allowlist before execution."
@@ -454,6 +563,7 @@ class TradingAgentService:
             stages=stages,
             warnings=warnings,
             next_action=next_action,
+            market_depth_status=market_depth_status,
             lineage=["qlib_factor_pipeline", "factor_gate", "strategy_slot", "execution_control_plane"],
         )
         return manifest.model_dump(mode="json")
@@ -803,6 +913,7 @@ class TradingAgentService:
                 current_stage="blocked",
                 judge_passed=False,
                 risk_passed=False,
+                l2_ready=False,
             )
             execution_path_payload = self.store.save_execution_path_status(execution_path)
             return {
@@ -816,19 +927,22 @@ class TradingAgentService:
                 "policy_gate_warnings": [mode_state["block_reason"]],
                 "next_actions": list(mode_state["next_actions"]),
             }
-        strategy_snapshot = self.list_strategies()
-        strategy_rows = strategy_snapshot.get("strategies", [])
-        enabled_strategies = [
-            row["strategy_id"]
-            for row in strategy_rows
-            if str(row.get("status") or "").lower() == "active"
-            and (not row.get("allocation") or str((row.get("allocation") or {}).get("status") or "active").lower() == "active")
-        ]
         policy_gate_warnings: list[str] = []
         if policy.get("allowed_universe") and str(symbol or "").upper() not in {
             str(item or "").upper() for item in policy.get("allowed_universe") or []
         }:
             policy_gate_warnings.append("symbol_outside_allowed_universe")
+        prepared = self._prepare_inputs(
+            symbol=symbol,
+            universe=universe,
+            query=query,
+            mode=mode,
+            providers=providers,
+            quota_guard=quota_guard,
+        )
+        strategy_snapshot = self.strategy_eligibility(symbol=symbol, factor_run=prepared["factors"])
+        strategy_rows = list(strategy_snapshot.get("strategies") or [])
+        enabled_strategies = [row["strategy_id"] for row in strategy_rows if row.get("eligible_for_execution")]
         if policy.get("allowed_strategies"):
             allowed = {
                 str(item or "").strip()
@@ -838,15 +952,12 @@ class TradingAgentService:
             enabled_strategies = [strategy_id for strategy_id in enabled_strategies if strategy_id in allowed]
         if not enabled_strategies:
             policy_gate_warnings.append("no_active_strategy_slot")
-        auto_submit_allowed = bool(auto_submit) and self._autopilot_ready(policy) and not policy_gate_warnings
-        factor_pipeline = self.factor_pipeline_manifest(symbol=symbol, strategy_ids=enabled_strategies)
-        prepared = self._prepare_inputs(
+        auto_submit_allowed = bool(auto_submit) and self._autopilot_ready(policy) and not policy_gate_warnings and bool(enabled_strategies)
+        factor_pipeline = self.factor_pipeline_manifest(
             symbol=symbol,
-            universe=universe,
-            query=query,
-            mode=mode,
-            providers=providers,
-            quota_guard=quota_guard,
+            strategy_ids=enabled_strategies,
+            factor_payload=prepared["factors"],
+            strategy_eligibility_snapshot=strategy_snapshot,
         )
         sentiment = SentimentSnapshot.model_validate(prepared["sentiment"])
         debate = self._build_debate_report(
@@ -870,6 +981,8 @@ class TradingAgentService:
             strategy_slots=enabled_strategies,
             factor_pipeline=factor_pipeline,
             policy_warnings=policy_gate_warnings,
+            factor_run=prepared["factors"],
+            strategy_eligibility=strategy_snapshot,
         )
         execution_result = self._execute_approved_trade(
             symbol=symbol,
@@ -903,6 +1016,7 @@ class TradingAgentService:
             current_stage=execution.get("status", "blocked"),
             judge_passed=debate.judge_verdict in {"long", "short"},
             risk_passed=risk.verdict in {"approve", "reduce"},
+            l2_ready=str((strategy_snapshot.get("market_depth_status") or {}).get("data_tier") or "l1") == "l2",
         )
         execution_path_payload = self.store.save_execution_path_status(execution_path)
         bundle = TradingDecisionBundle(
@@ -920,6 +1034,8 @@ class TradingAgentService:
         payload = bundle.model_dump(mode="json")
         payload["evidence"] = prepared["evidence"]
         payload["factor_run"] = prepared["factors"]
+        payload["market_depth_status"] = strategy_snapshot.get("market_depth_status", {})
+        payload["strategy_eligibility"] = strategy_snapshot
         payload["factor_pipeline_manifest"] = factor_pipeline
         payload["debate"] = debate_payload
         payload["risk"] = risk_payload
@@ -1228,6 +1344,12 @@ class TradingAgentService:
             requested_action=debate.recommended_action,
             approved_action=approval.approved_action,
             verdict=approval.verdict,
+            dataset_id=execution_intent.dataset_id,
+            protection_status=execution_intent.protection_status,
+            frequency=execution_intent.frequency,
+            data_tier=execution_intent.data_tier,
+            registry_gate_status=execution_intent.registry_gate_status,
+            blocking_reasons=list(execution_intent.blocking_reasons or []),
             order_payload={},
             receipt=None,
             warnings=list(approval.risk_flags),
@@ -1247,6 +1369,16 @@ class TradingAgentService:
                 "requested_mode": mode_state["requested_mode"],
                 "effective_mode": mode_state["effective_mode"],
             })
+            return payload
+        if execution_intent.protection_status == "blocked" or execution_intent.registry_gate_status == "blocked":
+            payload.status = "blocked"
+            payload.warnings.extend(list(execution_intent.blocking_reasons or []))
+            payload.next_action = "clear_registry_gate_before_submit"
+            return payload
+        if execution_intent.registry_gate_status == "review":
+            payload.status = "guarded"
+            payload.warnings.extend(list(execution_intent.blocking_reasons or []))
+            payload.next_action = "resolve_review_gates_before_submit"
             return payload
         if not auto_submit:
             return payload
@@ -1418,6 +1550,7 @@ class TradingAgentService:
         current_stage: str,
         judge_passed: bool,
         risk_passed: bool,
+        l2_ready: bool,
     ) -> ExecutionPathStatus:
         mode_state = self._mode_runtime_state(policy.get("execution_mode"))
         submit_ready = bool(risk_passed and self._autopilot_ready(policy))
@@ -1425,6 +1558,7 @@ class TradingAgentService:
         stages = [
             {"stage": "scan", "status": "ready"},
             {"stage": "factors", "status": "ready"},
+            {"stage": "l2_ready", "status": "ready" if l2_ready else "guarded"},
             {"stage": "debate", "status": "ready"},
             {"stage": "judge", "status": "passed" if judge_passed else "pending"},
             {"stage": "risk", "status": "passed" if risk_passed else "pending"},
@@ -1451,7 +1585,7 @@ class TradingAgentService:
             kill_switch=bool(policy.get("kill_switch")),
             current_stage=current_stage,
             stages=stages,
-            lineage=["scan", "factors", "debate", "judge", "risk", "submit", "monitor", "review"],
+            lineage=["scan", "factors", "l2_ready", "debate", "judge", "risk", "submit", "monitor", "review"],
             warnings=self._autopilot_warnings(policy),
         )
 
@@ -1465,7 +1599,40 @@ class TradingAgentService:
         strategy_slots: list[str],
         factor_pipeline: dict[str, Any],
         policy_warnings: list[str],
+        factor_run: dict[str, Any] | None = None,
+        strategy_eligibility: dict[str, Any] | None = None,
     ) -> ExecutionIntent:
+        factor_context = factor_run or {}
+        strategy_context = strategy_eligibility or {}
+        dataset_manifest = dict(factor_context.get("dataset_manifest") or {})
+        protection_report = dict(factor_context.get("protection_report") or {})
+        eligible_rows = [
+            row for row in strategy_context.get("strategies", [])
+            if row.get("strategy_id") in strategy_slots
+        ]
+        registry_gate_status = "pass" if eligible_rows else "blocked"
+        if protection_report.get("protection_status") == "blocked":
+            registry_gate_status = "blocked"
+        elif protection_report.get("protection_status") == "review" and registry_gate_status == "pass":
+            registry_gate_status = "review"
+        strategy_blocking_reasons = [
+            reason
+            for row in eligible_rows
+            for reason in row.get("blocking_reasons") or []
+        ] or (
+            [
+                reason
+                for row in strategy_context.get("strategies", [])
+                for reason in row.get("blocking_reasons") or []
+            ]
+            if not eligible_rows
+            else []
+        )
+        blocking_reasons = list(dict.fromkeys([
+            *list(protection_report.get("blocking_reasons") or []),
+            *list(policy_warnings or []),
+            *strategy_blocking_reasons,
+        ]))
         return ExecutionIntent(
             intent_id=f"intent-{symbol.upper()}-{uuid.uuid4().hex[:10]}",
             created_at=utc_now(),
@@ -1483,10 +1650,17 @@ class TradingAgentService:
                 "risk_gate",
                 *list(policy_warnings or []),
             ],
+            dataset_id=dataset_manifest.get("dataset_id"),
+            protection_status=protection_report.get("protection_status", "review"),  # type: ignore[arg-type]
+            frequency=dataset_manifest.get("frequency", "daily"),  # type: ignore[arg-type]
+            data_tier=dataset_manifest.get("data_tier", "l1"),  # type: ignore[arg-type]
+            registry_gate_status=registry_gate_status,  # type: ignore[arg-type]
+            blocking_reasons=blocking_reasons,
             metadata={
                 "debate_id": debate.debate_id,
                 "approval_id": approval.approval_id,
                 "factor_pipeline_manifest": factor_pipeline.get("manifest_id"),
+                "market_depth_status": strategy_context.get("market_depth_status", {}),
             },
         )
 
@@ -1506,6 +1680,11 @@ class TradingAgentService:
             recommended_notional=5000.0,
             signal_ttl_minutes=180,
             guards=["judge_gate", "risk_gate", "auto_submit"],
+            dataset_id="dataset-sample",
+            protection_status="pass",
+            frequency="daily",
+            data_tier="l1",
+            registry_gate_status="pass",
             metadata={"sample": True},
         )
 
@@ -1522,6 +1701,11 @@ class TradingAgentService:
             requested_action="long",
             approved_action="long",
             verdict="approve",
+            dataset_id="dataset-sample",
+            protection_status="pass",
+            frequency="daily",
+            data_tier="l1",
+            registry_gate_status="pass",
             order_payload={},
             receipt=None,
             warnings=[],

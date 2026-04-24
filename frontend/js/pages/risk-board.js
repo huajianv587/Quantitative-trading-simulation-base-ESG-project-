@@ -4,9 +4,12 @@ import { getLang, onLangChange } from '../i18n.js?v=8';
 import {
   emptyState,
   esc,
+  loadPayloadSnapshot,
   metric,
   num,
+  persistPayloadSnapshot,
   pct,
+  renderDegradedNotice,
   renderError,
   renderTokenPreview,
   setLoading,
@@ -17,6 +20,10 @@ let _container = null;
 let _langCleanup = null;
 let _board = null;
 let _actionState = { tone: 'pending', text: '' };
+let _degradedMeta = null;
+
+const RISK_BOARD_CACHE_KEY = 'qt.risk-board.snapshot.v1';
+const RISK_BOARD_CACHE_TTL_MS = 20 * 60 * 1000;
 
 const COPY = {
   en: {
@@ -176,6 +183,37 @@ function signalSymbol() {
   return String(_container?.querySelector('#risk-symbol')?.value || 'AAPL').trim().toUpperCase();
 }
 
+function riskBoardDegradedState(savedAt, reason) {
+  return {
+    tone: 'warning',
+    saved_at: savedAt || null,
+    title: getLang() === 'zh' ? '风控板已切换到缓存快照' : 'Risk Board is showing a cached snapshot',
+    reason: reason || (getLang() === 'zh'
+      ? '当前继续展示最近一次成功的风控审批结果，等待实时刷新恢复。'
+      : 'The latest successful approval snapshot is still visible while the live refresh recovers.'),
+    detail: getLang() === 'zh'
+      ? '审批快照、控制项、台账和告警都来自最近一次成功结果。'
+      : 'Approval snapshot, controls, ledger, and alerts come from the latest successful payload.',
+    action: getLang() === 'zh'
+      ? '可以继续点击“刷新风控板”或“评估风控”重试。'
+      : 'Use Refresh Board or Evaluate Risk to retry.',
+  };
+}
+
+function hydrateRiskSnapshot() {
+  const cached = loadPayloadSnapshot(RISK_BOARD_CACHE_KEY, RISK_BOARD_CACHE_TTL_MS);
+  if (!cached?.payload) return false;
+  _board = cached.payload;
+  _degradedMeta = riskBoardDegradedState(
+    cached.saved_at,
+    getLang() === 'zh'
+      ? '正在回填最近一次成功的风控快照，并在后台重连服务。'
+      : 'Rehydrating the latest successful risk snapshot while reconnecting.',
+  );
+  renderBoard();
+  return true;
+}
+
 function setState(tone, text) {
   _actionState = { tone, text };
   const host = _container?.querySelector('#risk-board-state');
@@ -194,6 +232,7 @@ export async function render(container) {
   renderShell();
   wire();
   renderPreview();
+  hydrateRiskSnapshot();
   _langCleanup = onLangChange(() => {
     if (!_container?.isConnected) return;
     renderShell();
@@ -209,6 +248,7 @@ export function destroy() {
   _langCleanup = null;
   _container = null;
   _board = null;
+  _degradedMeta = null;
 }
 
 function renderShell() {
@@ -250,15 +290,12 @@ function renderShell() {
         </article>
       </section>
 
-      <section class="grid-1 workbench-main-grid" style="margin-top:16px">
-        <article class="card">
+      <section class="grid-2 workbench-main-grid risk-board-lower-grid" style="margin-top:16px">
+        <article class="card risk-board-ledger-card">
           <div class="card-header"><span class="card-title">${c('ledger')}</span></div>
           <div class="card-body" id="risk-ledger">${emptyState(c('loading'))}</div>
         </article>
-      </section>
-
-      <section class="grid-1 workbench-main-grid" style="margin-top:16px">
-        <article class="card">
+        <article class="card risk-board-alerts-card">
           <div class="card-header"><span class="card-title">${c('alerts')}</span></div>
           <div class="card-body" id="risk-alerts">${emptyState(c('loading'))}</div>
         </article>
@@ -286,12 +323,22 @@ async function refreshBoard() {
   setState('pending', c('loading'));
   try {
     _board = await api.trading.riskBoard(signalSymbol(), 12);
+    persistPayloadSnapshot(RISK_BOARD_CACHE_KEY, _board, { symbol: signalSymbol() });
+    _degradedMeta = null;
     setState('success', c('refreshed'));
     renderBoard();
   } catch (error) {
+    const cached = loadPayloadSnapshot(RISK_BOARD_CACHE_KEY, RISK_BOARD_CACHE_TTL_MS);
+    if (cached?.payload) {
+      _board = cached.payload;
+      _degradedMeta = riskBoardDegradedState(cached.saved_at, error.message);
+      setState('warning', error.message || c('failed'));
+      renderBoard();
+      return;
+    }
     setState('error', error.message || c('failed'));
     ['#risk-latest', '#risk-controls', '#risk-ledger', '#risk-alerts'].forEach((selector) => {
-      renderError(_container.querySelector(selector), error);
+      renderError(_container.querySelector(selector), error, { onRetry: refreshBoard });
     });
   }
 }
@@ -312,8 +359,17 @@ async function evaluateRisk() {
     toast.success(c('evaluated'));
     await refreshBoard();
   } catch (error) {
+    const cached = loadPayloadSnapshot(RISK_BOARD_CACHE_KEY, RISK_BOARD_CACHE_TTL_MS);
+    if (cached?.payload) {
+      _board = cached.payload;
+      _degradedMeta = riskBoardDegradedState(cached.saved_at, error.message);
+      setState('warning', error.message || c('failed'));
+      renderBoard();
+      toast.error(c('failed'), error.message || '');
+      return;
+    }
     setState('error', error.message || c('failed'));
-    renderError(_container.querySelector('#risk-latest'), error);
+    renderError(_container.querySelector('#risk-latest'), error, { onRetry: evaluateRisk });
     toast.error(c('failed'), error.message || '');
   } finally {
     if (button) {
@@ -334,12 +390,14 @@ function renderBoard() {
 function renderLatestApproval() {
   const host = _container.querySelector('#risk-latest');
   const latest = _board.latest_approval;
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!latest) {
     host.innerHTML = emptyState(c('noApproval'), c('noApprovalHint'));
     return;
   }
 
   host.innerHTML = `
+    ${degradedBanner}
     <div class="workbench-metric-grid">
       ${metric(c('approval'), verdictLabel(latest.verdict), String(latest.verdict || '').toLowerCase() === 'approve' ? 'positive' : 'risk')}
       ${metric(c('action'), verdictLabel(latest.approved_action))}
@@ -368,7 +426,9 @@ function renderControls() {
   const host = _container.querySelector('#risk-controls');
   const controls = _board.controls || {};
   const latest = _board.latest_approval || {};
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   host.innerHTML = `
+    ${degradedBanner}
     <div class="workbench-metric-grid">
       ${metric(c('killSwitch'), controls.kill_switch_enabled ? c('open') : c('closed'), controls.kill_switch_enabled ? 'risk' : 'positive')}
       ${metric(c('broker'), controls.default_broker || 'alpaca')}
@@ -396,12 +456,14 @@ function renderControls() {
 function renderLedger() {
   const host = _container.querySelector('#risk-ledger');
   const approvals = Array.isArray(_board.approvals) ? _board.approvals : [];
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!approvals.length) {
     host.innerHTML = emptyState(c('noLedger'), c('noLedgerHint'));
     return;
   }
 
   host.innerHTML = `
+    ${degradedBanner}
     <div class="workbench-section">
       <div class="workbench-section__title">${c('ledger')}</div>
       <p class="workbench-section__hint">${c('ledgerHint')}</p>
@@ -429,23 +491,25 @@ function renderLedger() {
 function renderAlerts() {
   const host = _container.querySelector('#risk-alerts');
   const alerts = Array.isArray(_board.alerts) ? _board.alerts : [];
+  const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!alerts.length) {
     host.innerHTML = emptyState(c('noAlerts'), c('noAlertsHint'));
     return;
   }
 
   host.innerHTML = `
-    <div class="workbench-section">
+    ${degradedBanner}
+    <div class="workbench-section risk-alerts-summary">
       <div class="workbench-section__title">${c('alerts')}</div>
       <p class="workbench-section__hint">${c('alertsHint')}</p>
     </div>
-    <div class="workbench-metric-grid">
+    <div class="workbench-metric-grid risk-alerts-metrics">
       ${metric(c('duplicate'), countAlert(alerts, 'duplicate'), countAlert(alerts, 'duplicate') ? 'risk' : 'positive')}
       ${metric(c('drawdown'), countAlert(alerts, 'drawdown'), countAlert(alerts, 'drawdown') ? 'risk' : 'positive')}
       ${metric(c('stale'), countAlert(alerts, 'stale'), countAlert(alerts, 'stale') ? 'risk' : 'positive')}
       ${metric(c('budget'), countAlert(alerts, 'budget'), countAlert(alerts, 'budget') ? 'risk' : 'positive')}
     </div>
-    <div class="workbench-list workbench-scroll-list">
+    <div class="workbench-list workbench-scroll-list risk-alerts-list">
       ${alerts.map((item) => `
         <article class="workbench-item">
           <div class="workbench-item__head">

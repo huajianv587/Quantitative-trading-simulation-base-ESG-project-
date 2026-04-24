@@ -136,16 +136,17 @@ function normalizeReport(payload) {
 
 function buildShell() {
   return `
-    <div class="page-header">
-      <div>
-        <div class="page-header__title">${c('title')}</div>
-        <div class="page-header__sub">${c('subtitle')}</div>
+    <div class="workbench-page reports-page" data-no-autotranslate="true">
+      <div class="page-header">
+        <div>
+          <div class="page-header__title">${c('title')}</div>
+          <div class="page-header__sub">${c('subtitle')}</div>
+        </div>
       </div>
-    </div>
 
-    <div class="grid-sidebar" style="align-items:start">
-      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
-        <section class="run-panel">
+      <div class="grid-sidebar reports-layout">
+        <div class="reports-sidebar">
+          <section class="run-panel reports-run-panel">
           <div class="run-panel__header">
             <div class="run-panel__title">${c('generateTitle')}</div>
             <div class="run-panel__sub">${c('generateSub')}</div>
@@ -170,27 +171,28 @@ function buildShell() {
           </div>
         </section>
 
-        <section class="card">
+          <section class="card reports-sidebar-card">
           <div class="card-header">
             <span class="card-title">${c('archive')}</span>
             <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${c('archiveSub')}</span>
           </div>
-          <div class="card-body" id="report-history">
+            <div class="card-body reports-archive-body" id="report-history">
             ${emptyState('Loading reports...')}
           </div>
         </section>
-      </div>
+        </div>
 
-      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
-        <section class="card">
+        <div class="reports-workspace-column">
+          <section class="card report-workspace-card">
           <div class="card-header">
             <span class="card-title">${c('bodyTitle')}</span>
             <span style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono)">${c('bodySub')}</span>
           </div>
-          <div class="card-body" id="report-body">
+            <div class="card-body reports-workspace-body" id="report-body">
             ${emptyState(c('noReport'), c('noReportHint'))}
           </div>
         </section>
+        </div>
       </div>
     </div>`;
 }
@@ -265,7 +267,11 @@ function renderArchive() {
     return;
   }
   target.innerHTML = _history.map((report) => `
-    <button class="workbench-item" data-load-report="${esc(report.report_id || '')}" style="text-align:left">
+    <button
+      class="workbench-item report-archive-item${report.report_id && report.report_id === _currentReport?.report_id ? ' workbench-item--active' : ''}"
+      data-load-report="${esc(report.report_id || '')}"
+      type="button"
+    >
       <div class="workbench-item__head">
         <strong>${esc(report.title || report.report_type || '-')}</strong>
         ${statusBadge('ready')}
@@ -336,10 +342,10 @@ function renderReport() {
   const alerts = Array.isArray(report.risk_alerts) ? report.risk_alerts : [];
 
   target.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:18px">
-      <div>
-        <div style="font-family:var(--f-display);font-size:16px;font-weight:700;color:var(--text-primary)">${esc(report.title || report.report_type || 'Report')}</div>
-        <div style="font-size:10px;color:var(--text-dim);font-family:var(--f-mono);margin-top:4px">${esc(report.report_id || '-')} / ${c('generatedAt')}: ${esc(formatTimestamp(report.generated_at))}</div>
+    <div class="report-workspace">
+      <div class="report-workspace__header">
+        <div class="report-workspace__title">${esc(report.title || report.report_type || 'Report')}</div>
+        <div class="report-workspace__meta">${esc(report.report_id || '-')} / ${c('generatedAt')}: ${esc(formatTimestamp(report.generated_at))}</div>
       </div>
 
       <div class="workbench-metric-grid">
@@ -350,33 +356,37 @@ function renderReport() {
       </div>
 
       ${(report.executive_summary || report.summary) ? `
-        <section class="functional-empty" style="padding:14px 16px">
+        <section class="functional-empty report-summary-card" style="padding:14px 16px">
           <div class="functional-empty__eyebrow">${c('summary')}</div>
           <div style="font-size:12px;line-height:1.7;color:var(--text-secondary)">${esc(report.executive_summary || report.summary)}</div>
         </section>
       ` : ''}
 
-      <section class="workbench-kv-list">
+      <section class="workbench-kv-list report-kv-list">
         <div class="workbench-kv-row"><span>${c('reportType')}</span><strong>${esc(report.report_type || '-')}</strong></div>
         <div class="workbench-kv-row"><span>${c('generatedAt')}</span><strong>${esc(formatTimestamp(report.generated_at))}</strong></div>
         <div class="workbench-kv-row"><span>${c('totalCompanies')}</span><strong>${esc(String(analyses.length))}</strong></div>
         <div class="workbench-kv-row"><span>${c('confidence')}</span><strong>${esc(String(report.confidence_score ?? evidenceSummary.average_grounding_confidence ?? '-'))}</strong></div>
       </section>
 
-      <section>
+      <section class="report-detail-section">
         <div class="workbench-section__title">${c('findings')}</div>
-        ${findings.length ? findings.map((item) => `<div class="workbench-item"><div class="workbench-item__summary">${esc(String(item))}</div></div>`).join('') : emptyState(c('findings'), '-')}
+        <div class="report-note-list">
+          ${findings.length ? findings.map((item) => `<div class="workbench-item"><div class="workbench-item__summary">${esc(String(item))}</div></div>`).join('') : emptyState(c('findings'), '-')}
+        </div>
       </section>
 
-      <section>
+      <section class="report-detail-section">
         <div class="workbench-section__title">${c('alerts')}</div>
-        ${alerts.length ? alerts.map((item) => `<div class="workbench-item"><div class="workbench-item__summary">${esc(String(item))}</div></div>`).join('') : emptyState(c('alerts'), '-')}
+        <div class="report-note-list">
+          ${alerts.length ? alerts.map((item) => `<div class="workbench-item"><div class="workbench-item__summary">${esc(String(item))}</div></div>`).join('') : emptyState(c('alerts'), '-')}
+        </div>
       </section>
 
-      <section>
+      <section class="report-detail-section">
         <div class="workbench-section__title">${c('analyses')}</div>
         ${analyses.length ? `
-          <div class="tbl-wrap">
+          <div class="tbl-wrap report-analyses-wrap">
             <table>
               <thead>
                 <tr>
