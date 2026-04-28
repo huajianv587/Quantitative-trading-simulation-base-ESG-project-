@@ -3,10 +3,14 @@ import { toast } from '../components/toast.js?v=8';
 import { router } from '../router.js?v=8';
 import { getLang, onLangChange } from '../i18n.js?v=8';
 import { ensureUiAuditLog, recordUiAuditEvent } from '../modules/ui-audit.js?v=8';
+import { setVersionedStorageValue } from '../utils.js?v=8';
 
 let _container = null;
 let _state = null;
 let _langCleanup = null;
+
+const WORKFLOW_LATEST_STORAGE_KEY = 'qt.workflow.latest';
+const WORKFLOW_LATEST_SCHEMA_VERSION = 1;
 
 const RL_COPY = {
   en: {
@@ -85,6 +89,7 @@ function resetState() {
     lastTrain: null,
     lastBacktest: null,
     lastSearch: null,
+    lastWorkflow: null,
     selectedRecipeKey: 'L1_price_tech',
   };
 }
@@ -96,6 +101,8 @@ function updateAuditState() {
     lastDatasetPath: (_state?.lastDataset || {}).merged_dataset_path || (_state?.lastDataset || {}).primary_dataset_path || '',
     lastTrainRunId: (_state?.lastTrain || {}).run_id || '',
     lastBacktestRunId: (_state?.lastBacktest || {}).run_id || '',
+    lastWorkflowId: (_state?.lastWorkflow || {}).workflow_id || '',
+    lastWorkflowStatus: (_state?.lastWorkflow || {}).status || '',
     lastSearchRecipe: (_state?.lastSearch || {}).recipe_key || '',
     lastSearchBackend: (_state?.lastSearch || {}).search_backend || '',
     bestParams: (_state?.lastSearch || {}).best_params || {},
@@ -197,6 +204,59 @@ function buildShell() {
         <div class="metric-value rl-lab-stat__value rl-lab-stat__value--path">${c('awaiting')}</div>
         <div class="rl-lab-stat__detail">${c('latestDatasetPending')}</div>
       </article>
+    </section>
+
+    <section class="card" id="hybrid-paper-workflow-panel">
+      <div class="card-header">
+        <div>
+          <span class="card-title">Run Hybrid Paper Workflow</span>
+          <div class="run-panel__sub">P1/P2 decision, RL checkpoint validation, backtest, tearsheet, paper gate, and Alpaca paper routing.</div>
+        </div>
+      </div>
+      <div class="card-body rl-lab-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Universe</label>
+            <input class="form-input" id="workflow-universe" placeholder="Blank uses default pool">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Capital</label>
+            <input class="form-input" id="workflow-capital" type="number" min="1" value="1000000">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Max Orders</label>
+            <input class="form-input" id="workflow-max-orders" type="number" min="1" max="10" value="2">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Per-Order Notional</label>
+            <input class="form-input" id="workflow-notional" type="number" min="0.01" step="0.01" value="1.00">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label class="rl-lab-checkbox">
+            <input id="workflow-force-refresh" type="checkbox">
+            <span>Force refresh market data</span>
+          </label>
+          <label class="rl-lab-checkbox">
+            <input id="workflow-submit-orders" type="checkbox" checked>
+            <span>Submit paper orders</span>
+          </label>
+        </div>
+
+        <div class="rl-lab-actions">
+          <button class="btn btn-primary" id="rl-run-hybrid-workflow">Run Hybrid Paper Workflow</button>
+          <button class="btn btn-ghost" id="rl-open-workflow-execution">Open Execution Monitor</button>
+        </div>
+
+        <div class="rl-lab-output" id="rl-workflow-output">
+          <div class="rl-lab-output__title">Workflow ready</div>
+          <div class="rl-lab-output__body">Default route submits at most 2 paper orders with 1.00 USD notional only after gates pass.</div>
+        </div>
+      </div>
     </section>
 
     <div class="grid-2 rl-lab-main-grid">
@@ -430,6 +490,11 @@ function bindEvents() {
   query('#rl-search-recipe')?.addEventListener('click', () => handleSearchRecipe());
   query('#rl-run-train')?.addEventListener('click', () => handleTrain());
   query('#rl-run-backtest')?.addEventListener('click', () => handleBacktest());
+  query('#rl-run-hybrid-workflow')?.addEventListener('click', () => handleHybridWorkflow());
+  query('#rl-open-workflow-execution')?.addEventListener('click', async () => {
+    recordUiAuditEvent('rl_open_workflow_execution', '#rl-open-workflow-execution', { route: '/rl-lab' }, { route: '/execution' });
+    await router.navigate('/execution');
+  });
   query('#rl-runs-body')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-promote-run]');
     if (!button) return;
@@ -929,6 +994,64 @@ async function handleBacktest() {
   }
 }
 
+async function handleHybridWorkflow() {
+  const button = query('#rl-run-hybrid-workflow');
+  const universe = readSymbols(query('#workflow-universe')?.value);
+  const payload = {
+    universe,
+    benchmark: 'SPY',
+    capital_base: Number(query('#workflow-capital')?.value || 1000000),
+    strategy_mode: 'hybrid_p1_p2_rl',
+    rl_algorithm: 'sac',
+    rl_action_type: 'continuous',
+    submit_orders: Boolean(query('#workflow-submit-orders')?.checked),
+    mode: 'paper',
+    broker: 'alpaca',
+    max_orders: Number(query('#workflow-max-orders')?.value || 2),
+    per_order_notional: parseMaybeNumber(query('#workflow-notional')?.value) ?? 1.0,
+    allow_synthetic_execution: false,
+    force_refresh: Boolean(query('#workflow-force-refresh')?.checked),
+  };
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Running...';
+  }
+  renderWorkflowOutput({ status: 'running', workflow_id: 'pending', steps: {}, blockers: [], warnings: ['Workflow is running.'] });
+
+  try {
+    const result = await api.workflows.runPaperStrategy(payload);
+    _state.lastWorkflow = result;
+    _state.lastPayload = result;
+    persistWorkflowShortcut(result);
+    renderWorkflowOutput(result);
+    renderLatestPayload();
+    updateAuditState();
+    const submitted = Number(result.submitted_count || 0);
+    if (result.status === 'submitted') {
+      toast.success('Hybrid workflow submitted', `${submitted} paper orders routed`);
+    } else if (result.status === 'blocked') {
+      toast.warning('Hybrid workflow blocked', (result.blockers || [])[0] || 'Review workflow blockers');
+    } else {
+      toast.success('Hybrid workflow planned', result.workflow_id || '');
+    }
+    recordUiAuditEvent('rl_hybrid_paper_workflow', '#rl-run-hybrid-workflow', payload, {
+      workflow_id: result.workflow_id,
+      status: result.status,
+      execution_id: result.execution_id,
+      submitted_count: result.submitted_count,
+    });
+  } catch (error) {
+    renderWorkflowOutput({ status: 'failed', workflow_id: 'request_failed', blockers: [error.message || 'Unknown error'], steps: {} });
+    toast.error('Hybrid workflow failed', error.message || 'Unknown error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Run Hybrid Paper Workflow';
+    }
+  }
+}
+
 async function handlePromote(runId) {
   if (!runId) return;
   const payload = {
@@ -981,6 +1104,97 @@ function setInputValue(selector, value) {
   if (input) input.value = String(value);
 }
 
+function persistWorkflowShortcut(result) {
+  try {
+    setVersionedStorageValue(window.localStorage, WORKFLOW_LATEST_STORAGE_KEY, {
+      workflow_id: result.workflow_id || '',
+      status: result.status || '',
+      execution_id: result.execution_id || '',
+      submitted_count: Number(result.submitted_count || 0),
+      generated_at: result.generated_at || new Date().toISOString(),
+    }, WORKFLOW_LATEST_SCHEMA_VERSION);
+  } catch (_ignore) {
+    // Local storage can be unavailable in private contexts.
+  }
+}
+
+function renderWorkflowOutput(payload) {
+  const node = query('#rl-workflow-output');
+  if (!node) return;
+  const steps = payload.steps || {};
+  const blockers = payload.blockers || [];
+  const warnings = payload.warnings || [];
+  const actions = payload.next_actions || [];
+  const gate = payload.gate_snapshot || {};
+  const model = payload.model_status || {};
+  const orders = payload.order_summary || [];
+
+  const stepRows = [
+    ['Model status', 'model_status'],
+    ['P1 report', 'p1_report'],
+    ['P2 decision', 'p2_report'],
+    ['RL backtest', 'rl_backtest'],
+    ['Quant backtest', 'quant_backtest'],
+    ['Tearsheet', 'tearsheet'],
+    ['Paper gate', 'paper_gate'],
+    ['Paper execution', 'paper_execution'],
+  ].map(([label, key]) => {
+    const step = steps[key] || {};
+    return `<div class="rl-lab-kv"><span>${escapeHtml(label)}</span><span>${escapeHtml(step.status || 'pending')}</span><span>${escapeHtml(step.report_id || step.run_id || step.backtest_id || step.execution_id || step.broker_status || '')}</span></div>`;
+  }).join('');
+
+  const modelRows = [
+    ['Alpha Ranker', model.alpha_ranker],
+    ['P1 Suite', model.p1_suite],
+    ['P2 Stack', model.p2_stack],
+  ].map(([label, item]) => `<span class="rl-lab-protocol__chip">${escapeHtml(label)}: ${escapeHtml(modelReadyLabel(item))}</span>`).join('');
+
+  const orderRows = orders.length
+    ? orders.map((order) => `<div class="rl-lab-kv"><span>${escapeHtml(order.symbol || '--')}</span><span>${escapeHtml(order.status || '--')}</span><span>${escapeHtml(order.notional || order.qty || '--')}</span></div>`).join('')
+    : '<div class="rl-lab-empty">No submitted order summary yet</div>';
+
+  node.innerHTML = `
+    <div class="rl-lab-output__title">${escapeHtml(payload.workflow_id || 'Workflow')} / ${escapeHtml(payload.status || 'pending')}</div>
+    <div class="rl-lab-output__body">
+      <div class="rl-lab-chip-list">${modelRows}</div>
+      <div class="rl-lab-kv-list">${stepRows}</div>
+      <div class="rl-lab-state-card__grid">
+        <div>
+          <div class="rl-lab-protocol__label">Gate snapshot</div>
+          <pre class="rl-lab-codeblock">${escapeHtml(JSON.stringify(gate, null, 2))}</pre>
+        </div>
+        <div>
+          <div class="rl-lab-protocol__label">Execution</div>
+          <div>Submitted: ${escapeHtml(payload.submitted_count || 0)}</div>
+          <div class="rl-lab-path">${escapeHtml(payload.execution_id || 'No execution id')}</div>
+          <div class="rl-lab-kv-list">${orderRows}</div>
+        </div>
+      </div>
+      ${renderWorkflowList('Blockers', blockers)}
+      ${renderWorkflowList('Warnings', warnings)}
+      ${renderWorkflowList('Next actions', actions)}
+    </div>
+  `;
+}
+
+function renderWorkflowList(title, items) {
+  if (!items || !items.length) return '';
+  return `
+    <div class="rl-lab-protocol__section">
+      <div class="rl-lab-protocol__label">${escapeHtml(title)}</div>
+      <ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+    </div>
+  `;
+}
+
+function modelReadyLabel(item) {
+  if (!item || typeof item !== 'object') return 'unknown';
+  if (item.available === true || item.ready === true || item.loaded === true) return 'ready';
+  if (item.available === false || item.ready === false) return 'blocked';
+  if (item.backend || item.models || item.selector) return 'ready';
+  return 'unknown';
+}
+
 function renderActionOutput(selector, payload) {
   const node = query(selector);
   if (!node) return;
@@ -997,6 +1211,9 @@ function renderLatestPayload() {
 }
 
 function compactSummary(payload) {
+  if (payload.workflow_id) {
+    return `${payload.workflow_id} / ${payload.status || 'workflow'} / submitted ${payload.submitted_count || 0}`;
+  }
   if (payload.run_id) {
     return `${payload.run_id} · ${payload.algorithm || 'run'} · ${Object.keys(payload.metrics || {}).length} metric fields`;
   }

@@ -1,6 +1,7 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
 import { getLang, getLocale, onLangChange } from '../i18n.js?v=8';
+import { setVersionedStorageValue } from '../utils.js?v=8';
 
 let _result = null;
 let _context = null;
@@ -8,6 +9,8 @@ let _watchlist = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'NEE', 'AMZN', 'GOOGL', 'META'
 let _selected = 'AAPL';
 let _resultTimeframe = '1D';
 let _disposeLang = null;
+const PORTFOLIO_PREFILL_STORAGE_KEY = 'qt.portfolio.prefill';
+const PORTFOLIO_PREFILL_SCHEMA_VERSION = 1;
 
 const COPY = {
   en: {
@@ -399,9 +402,18 @@ function bindEvents(container) {
 
     if (event.target.closest('#btn-export-portfolio') && _result) {
       const signals = _result.signals || [];
-      window.sessionStorage.setItem('qt.portfolio.prefill', JSON.stringify({
-        signals: signals.map((signal) => ({ symbol: signal.symbol, action: signal.action, weight: 1 / Math.max(signals.length, 1) })),
-      }));
+      setVersionedStorageValue(
+        window.sessionStorage,
+        PORTFOLIO_PREFILL_STORAGE_KEY,
+        {
+          signals: signals.map((signal) => ({
+            symbol: signal.symbol,
+            action: signal.action,
+            weight: 1 / Math.max(signals.length, 1),
+          })),
+        },
+        PORTFOLIO_PREFILL_SCHEMA_VERSION,
+      );
       window.location.hash = '#/portfolio';
     }
 

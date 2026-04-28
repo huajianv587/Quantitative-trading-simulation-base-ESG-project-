@@ -13,7 +13,7 @@ import json
 import time
 from typing import Dict, List, Tuple
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8012"
 FRONTEND_URL = "http://localhost:8080"
 
 class TestResults:

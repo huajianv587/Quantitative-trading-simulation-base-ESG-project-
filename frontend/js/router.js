@@ -52,6 +52,7 @@ export const ROUTES = {
   '/tearsheet': { module: () => import(`./pages/tearsheet.js?${VER}`), labelKey: 'page.tearsheet', icon: 'file-text', group: 'quant' },
   '/dataset': { module: () => import(`./pages/dataset.js?${VER}`), labelKey: 'page.dataset', icon: 'database', group: 'quant' },
   '/execution': { module: () => import(`./pages/execution.js?${VER}`), labelKey: 'page.execution', icon: 'zap', group: 'quant' },
+  '/paper-performance': { module: () => import(`./pages/paper-performance.js?${VER}`), labelKey: 'page.paper_performance', icon: 'bar-chart-3', group: 'quant' },
   '/validation': { module: () => import(`./pages/validation.js?${VER}`), labelKey: 'page.validation', icon: 'shield', group: 'research' },
   '/models': { module: () => import(`./pages/models.js?${VER}`), labelKey: 'page.models', icon: 'cpu', group: 'research' },
   '/rl-lab': { module: () => import(`./pages/rl-lab.js?${VER}`), labelKey: 'page.rl_lab', icon: 'cpu', group: 'research' },

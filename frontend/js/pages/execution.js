@@ -1,6 +1,7 @@
 import { api, openExecutionWS } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
 import { getLang, getLocale, onLangChange } from '../i18n.js?v=8';
+import { getVersionedStorageValue, setVersionedStorageValue } from '../utils.js?v=8';
 
 let _ws = null;
 let _orders = [];
@@ -8,6 +9,11 @@ let _currentContainer = null;
 let _langCleanup = null;
 let _killArmed = false;
 let _policy = null;
+
+const EXECUTION_PREFILL_STORAGE_KEY = 'qt.execution.prefill';
+const WORKFLOW_LATEST_STORAGE_KEY = 'qt.workflow.latest';
+const EXECUTION_PREFILL_SCHEMA_VERSION = 1;
+const WORKFLOW_LATEST_SCHEMA_VERSION = 1;
 
 const COPY = {
   en: {
@@ -53,6 +59,12 @@ const COPY = {
     liveAvailable: 'Live Available',
     blockReason: 'Block Reason',
     nextActions: 'Next Actions',
+    latestWorkflow: 'Latest Hybrid Workflow',
+    workflowHint: 'Open the execution created by the one-click paper strategy workflow.',
+    openWorkflowExecution: 'Open Workflow Execution',
+    noWorkflowExecution: 'No workflow execution saved yet.',
+    paperPerformance: 'Paper Performance',
+    openPaperPerformance: 'Open Paper Performance',
     blockedTitle: 'Live is selected but still gated',
     blockedHint: 'Switch back to Paper or finish live readiness before attempting execution.',
     accountOnline: 'ACCOUNT ONLINE',
@@ -208,16 +220,72 @@ function humanNextAction(value) {
 
 function applyPrefill(container) {
   try {
-    const raw = window.sessionStorage.getItem('qt.execution.prefill');
-    if (!raw) return;
-    const payload = JSON.parse(raw);
+    const payload = getVersionedStorageValue(
+      window.sessionStorage,
+      EXECUTION_PREFILL_STORAGE_KEY,
+      EXECUTION_PREFILL_SCHEMA_VERSION,
+    );
+    if (!payload) return;
     if (payload.universe) container.querySelector('#ex-universe').value = payload.universe;
     if (payload.capital) container.querySelector('#ex-capital').value = payload.capital;
     if (payload.broker) container.querySelector('#ex-broker').value = payload.broker;
-    window.sessionStorage.removeItem('qt.execution.prefill');
+    window.sessionStorage.removeItem(EXECUTION_PREFILL_STORAGE_KEY);
   } catch {
-    window.sessionStorage.removeItem('qt.execution.prefill');
+    window.sessionStorage.removeItem(EXECUTION_PREFILL_STORAGE_KEY);
   }
+}
+
+function readWorkflowShortcut() {
+  return getVersionedStorageValue(window.localStorage, WORKFLOW_LATEST_STORAGE_KEY, WORKFLOW_LATEST_SCHEMA_VERSION);
+}
+
+function renderWorkflowShortcut(container, shortcut = readWorkflowShortcut()) {
+  const target = container.querySelector('#workflow-shortcut-summary');
+  const button = container.querySelector('#btn-open-workflow-execution');
+  if (!target) return;
+  if (!shortcut || !shortcut.workflow_id) {
+    target.innerHTML = `<div>${c('noWorkflowExecution')}</div>`;
+    if (button) button.disabled = true;
+    return;
+  }
+  if (button) button.disabled = false;
+  target.innerHTML = `
+    <div><span class="text-muted">Workflow:</span> <span class="font-mono">${shortcut.workflow_id || '--'}</span></div>
+    <div><span class="text-muted">Status:</span> <span class="font-mono">${shortcut.status || '--'}</span></div>
+    <div><span class="text-muted">Execution:</span> <span class="font-mono">${shortcut.execution_id || '--'}</span></div>
+    <div><span class="text-muted">Submitted:</span> <span class="font-mono">${shortcut.submitted_count || 0}</span></div>
+  `;
+}
+
+async function openLatestWorkflowExecution(container) {
+  let shortcut = readWorkflowShortcut();
+  if (!shortcut?.workflow_id) {
+    toast.warning(c('latestWorkflow'), c('noWorkflowExecution'));
+    renderWorkflowShortcut(container, shortcut);
+    return;
+  }
+
+  try {
+    const workflow = await api.workflows.getPaperStrategy(shortcut.workflow_id);
+    shortcut = {
+      workflow_id: workflow.workflow_id || shortcut.workflow_id,
+      status: workflow.status || shortcut.status,
+      execution_id: workflow.execution_id || shortcut.execution_id,
+      submitted_count: workflow.submitted_count ?? shortcut.submitted_count ?? 0,
+      generated_at: workflow.generated_at || shortcut.generated_at,
+    };
+    setVersionedStorageValue(window.localStorage, WORKFLOW_LATEST_STORAGE_KEY, shortcut, WORKFLOW_LATEST_SCHEMA_VERSION);
+    renderWorkflowShortcut(container, shortcut);
+  } catch (_ignore) {
+    renderWorkflowShortcut(container, shortcut);
+  }
+
+  if (!shortcut.execution_id) {
+    toast.warning(c('latestWorkflow'), 'Workflow has no execution id yet.');
+    return;
+  }
+
+  await loadWorkflowExecution(container, shortcut.execution_id);
 }
 
 function buildShell() {
@@ -295,6 +363,29 @@ function buildShell() {
           </div>
           <div class="run-panel__foot">
             <button class="btn workbench-action-btn workbench-action-btn--primary btn-lg" id="btn-run-exec" style="flex:1">${c('runPlan')}</button>
+          </div>
+        </div>
+
+        <div class="card" id="workflow-shortcut-card">
+          <div class="card-header">
+            <span class="card-title">${c('latestWorkflow')}</span>
+            <button class="btn btn-ghost btn-sm" id="btn-open-workflow-execution">${c('openWorkflowExecution')}</button>
+          </div>
+          <div class="card-body">
+            <div class="text-muted text-sm">${c('workflowHint')}</div>
+            <div class="broker-status-card__body" id="workflow-shortcut-summary" style="margin-top:8px">
+              <div>${c('noWorkflowExecution')}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="paper-performance-shortcut-card">
+          <div class="card-header">
+            <span class="card-title">${c('paperPerformance')}</span>
+            <button class="btn btn-ghost btn-sm" id="btn-open-paper-performance">${c('openPaperPerformance')}</button>
+          </div>
+          <div class="card-body">
+            <div class="text-muted text-sm">90-day paper metrics, N+1/N+3/N+5 outcomes, and live canary gates.</div>
           </div>
         </div>
 
@@ -402,6 +493,7 @@ export function render(container) {
   container.innerHTML = buildShell();
   applyPrefill(container);
   bindEvents(container);
+  renderWorkflowShortcut(container);
   loadRuntime(container);
   _langCleanup ||= onLangChange(() => {
     if (_currentContainer?.isConnected) render(_currentContainer);
@@ -425,6 +517,8 @@ function bindEvents(container) {
   container.querySelector('#btn-refresh-pos')?.addEventListener('click', () => loadPositions(container));
   container.querySelector('#btn-refresh-account')?.addEventListener('click', () => loadAccount(container));
   container.querySelector('#filter-status')?.addEventListener('change', () => renderOrders(container));
+  container.querySelector('#btn-open-workflow-execution')?.addEventListener('click', () => openLatestWorkflowExecution(container));
+  container.querySelector('#btn-open-paper-performance')?.addEventListener('click', () => { window.location.hash = '#/paper-performance'; });
 
   const killButton = container.querySelector('#btn-kill');
   killButton?.addEventListener('click', () => {
@@ -472,6 +566,20 @@ async function loadRuntime(container) {
     loadOrders(container),
     loadPositions(container),
   ]);
+}
+
+async function loadWorkflowExecution(container, executionId) {
+  try {
+    const monitor = await api.execution.monitor(currentBroker(container), executionId, 100, 'paper');
+    _orders = monitor.orders || [];
+    syncModeFields(monitor);
+    renderOrders(container);
+    connectWS(container, executionId, 'paper');
+    toast.success(c('latestWorkflow'), executionId);
+  } catch (error) {
+    toast.error(c('latestWorkflow'), error.message || 'Unknown error');
+    connectWS(container, executionId, 'paper');
+  }
 }
 
 function updateModeBadge(container) {
@@ -759,9 +867,9 @@ async function loadPositions(container) {
   }
 }
 
-function connectWS(container, executionId = null) {
+function connectWS(container, executionId = null, overrideMode = null) {
   const broker = currentBroker(container);
-  const mode = currentMode();
+  const mode = overrideMode || currentMode();
   const feedLog = container.querySelector('#feed-log');
   const status = container.querySelector('#feed-status');
   _ws?.close();

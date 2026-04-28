@@ -436,3 +436,36 @@ export function getStorage(key, defaultValue = null) {
 export function removeStorage(key) {
   localStorage.removeItem(key);
 }
+
+export function setVersionedStorageValue(storage, key, value, schemaVersion = 1) {
+  try {
+    const payload = value && typeof value === 'object' ? { ...value, schema_version: schemaVersion } : {
+      value,
+      schema_version: schemaVersion,
+    };
+    storage.setItem(key, JSON.stringify(payload));
+  } catch (e) {
+    console.warn('storage save failed:', e);
+  }
+}
+
+export function getVersionedStorageValue(storage, key, expectedSchemaVersion = 1) {
+  try {
+    const item = storage.getItem(key);
+    if (!item) return null;
+    const parsed = JSON.parse(item);
+    if (!parsed || typeof parsed !== 'object' || parsed.schema_version !== expectedSchemaVersion) {
+      storage.removeItem(key);
+      return null;
+    }
+    return parsed;
+  } catch (e) {
+    console.warn('storage parse failed, cleared cache:', e);
+    try {
+      storage.removeItem(key);
+    } catch {
+      // no-op
+    }
+    return null;
+  }
+}

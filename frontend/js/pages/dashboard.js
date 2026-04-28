@@ -4,6 +4,7 @@ import { getApiEndpointLabel } from '../qtapi.js?v=8';
 import { getLang, getLocale, onLangChange } from '../i18n.js?v=8';
 import { createDashboardKlineRenderer } from '../modules/dashboard-kline-renderer.js?v=8';
 import { ensureUiAuditLog, recordUiAuditEvent } from '../modules/ui-audit.js?v=8';
+import { setVersionedStorageValue } from '../utils.js?v=8';
 
 const ZOOM_SEQUENCE = ['116%', '352%', '600%'];
 const ZOOM_MIN = 100;
@@ -16,6 +17,9 @@ const CHART_REQUEST_DEADLINE_MS = 4_000;
 const DASHBOARD_PROVIDER_STORAGE_KEY = 'qt.dashboard.provider.v1';
 const DASHBOARD_STATE_STORAGE_KEY = 'qt.dashboard.state.v1';
 const DASHBOARD_CHART_STORAGE_PREFIX = 'qt.dashboard.chart.v1';
+const DASHBOARD_CACHE_SCHEMA_VERSION = 1;
+const EXECUTION_PREFILL_STORAGE_KEY = 'qt.execution.prefill';
+const EXECUTION_PREFILL_SCHEMA_VERSION = 1;
 
 const TEXT = {
   en: {
@@ -289,6 +293,7 @@ function chartStorageKey(symbol, timeframe, provider = _selectedProvider) {
 function persistDashboardState(state) {
   try {
     localStorage.setItem(DASHBOARD_STATE_STORAGE_KEY, JSON.stringify({
+      schema_version: DASHBOARD_CACHE_SCHEMA_VERSION,
       saved_at: Date.now(),
       payload: state,
     }));
@@ -302,6 +307,7 @@ function loadPersistedDashboardState() {
     const raw = localStorage.getItem(DASHBOARD_STATE_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
+    if (parsed?.schema_version !== DASHBOARD_CACHE_SCHEMA_VERSION) return null;
     return parsed?.payload || null;
   } catch {
     return null;
@@ -311,6 +317,7 @@ function loadPersistedDashboardState() {
 function persistChartSnapshot(symbol, timeframe, provider, payload) {
   try {
     localStorage.setItem(chartStorageKey(symbol, timeframe, provider), JSON.stringify({
+      schema_version: DASHBOARD_CACHE_SCHEMA_VERSION,
       saved_at: Date.now(),
       payload,
     }));
@@ -323,7 +330,8 @@ function readPersistedChartSnapshotEntry(symbol, timeframe, provider = _selected
   try {
     const raw = localStorage.getItem(chartStorageKey(symbol, timeframe, provider));
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return parsed?.schema_version === DASHBOARD_CACHE_SCHEMA_VERSION ? parsed : null;
   } catch {
     return null;
   }
@@ -2383,13 +2391,13 @@ function bindEvents() {
 
     const tradeButton = event.target.closest('[data-trade-symbol]');
     if (tradeButton) {
-      const symbol = String(tradeButton.dataset.tradeSymbol || '').toUpperCase();
+        const symbol = String(tradeButton.dataset.tradeSymbol || '').toUpperCase();
       if (symbol) {
-        window.sessionStorage.setItem('qt.execution.prefill', JSON.stringify({
+        setVersionedStorageValue(window.sessionStorage, EXECUTION_PREFILL_STORAGE_KEY, {
           universe: symbol,
           broker: 'alpaca',
           source: 'dashboard_heatmap',
-        }));
+        }, EXECUTION_PREFILL_SCHEMA_VERSION);
         recordUiAuditEvent('trade_prefill', 'dashboard_heatmap', {}, { symbol, route: '/execution' });
         window.location.hash = '#/execution';
       }

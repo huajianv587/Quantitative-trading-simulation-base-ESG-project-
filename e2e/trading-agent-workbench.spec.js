@@ -525,6 +525,7 @@ test('trading ops keeps cached snapshot visible while a slow refresh completes',
   await configure(page, baseURL, 'zh', 'dark');
   await page.addInitScript(() => {
     localStorage.setItem('qt.trading.ops.snapshot.v1', JSON.stringify({
+      schema_version: 1,
       saved_at: Date.now(),
       payload: {
         generated_at: '2026-04-20T14:39:00Z',

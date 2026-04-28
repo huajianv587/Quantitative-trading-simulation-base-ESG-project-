@@ -662,6 +662,8 @@ async function stubSiteAuditApis(page) {
 async function openRoute(page, config) {
   await page.goto(config.url, { waitUntil: 'domcontentloaded' });
   await page.locator(config.ready).first().waitFor({ state: 'visible', timeout: 30000 });
+  await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(100);
 }
 
 async function findBlankPoint(page, rootSelector) {

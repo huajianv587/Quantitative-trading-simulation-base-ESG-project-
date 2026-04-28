@@ -64,6 +64,15 @@ CLICK_TARGETS = {
         "data-strategy-toggle",
         "data-strategy-save",
     ],
+    "frontend/js/pages/execution.js": [
+        "#btn-open-paper-performance",
+    ],
+    "frontend/js/pages/paper-performance.js": [
+        "#btn-paper-performance-refresh",
+        "#btn-paper-performance-snapshot",
+        "#btn-paper-outcomes-settle",
+        "#btn-paper-promotion-evaluate",
+    ],
     "frontend/js/pages/backtest.js": ["#btn-run-bt"],
     "frontend/js/pages/portfolio.js": ["#btn-optimize", "#btn-to-execution", "#s5-execute"],
     "frontend/js/pages/chat.js": ["#send-btn"],
@@ -117,6 +126,7 @@ def test_router_declares_current_workbench_routes():
         "/portfolio",
         "/backtest",
         "/execution",
+        "/paper-performance",
         "/validation",
         "/models",
         "/rl-lab",
@@ -133,7 +143,7 @@ def test_router_declares_current_workbench_routes():
 def test_router_declares_all_current_routes():
     router_source = Path("frontend/js/router.js").read_text(encoding="utf-8")
     routes = re.findall(r"'((?:/)[^']*)':\s*\{", router_source)
-    assert len(routes) == 34
+    assert len(routes) == 35
 
 
 def test_router_redirects_empty_shell_urls_back_to_landing():
@@ -156,6 +166,12 @@ def test_trading_api_client_declares_public_runtime_methods():
         "/decision/audit-trail",
         "/simulate/scenario",
         "/outcomes/evaluate",
+        "/paper/performance",
+        "/paper/outcomes/settle",
+        "/promotion/report",
+        "/deployment/preflight",
+        "/trading-calendar/status",
+        "/observability/paper-workflow",
         "/api/v1/connectors/registry",
         "/api/v1/connectors/health",
         "/api/v1/connectors/test",
@@ -337,7 +353,7 @@ def test_launcher_opens_root_and_verifies_quant_fingerprint():
     assert 'set "APP_URL=%API_URL%/"' in content
     assert "app_id -eq 'quant-terminal'" in content
     assert "service_name -eq 'Quant Terminal'" in content
-    assert "PORT_CANDIDATES=8000 8010 8011" in content
+    assert "PORT_CANDIDATES=8012" in content
 
 
 def test_critical_shell_and_workbench_files_do_not_contain_known_mojibake_fragments():

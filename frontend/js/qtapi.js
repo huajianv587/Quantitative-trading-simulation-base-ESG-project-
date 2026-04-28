@@ -13,6 +13,63 @@ function _isReadMethod(method) {
   return normalized === 'GET' || normalized === 'HEAD';
 }
 
+function _normalizedPath(path) {
+  return String(path || '').split('?')[0].replace(/\/+$/, '') || '/';
+}
+
+function _isPublicApiPath(path) {
+  var normalized = _normalizedPath(path);
+  return normalized === '/auth/register'
+    || normalized === '/auth/login'
+    || normalized === '/auth/reset-password/request'
+    || normalized === '/auth/reset-password/confirm'
+    || normalized === '/api/auth/register'
+    || normalized === '/api/auth/login'
+    || normalized === '/api/auth/reset-password/request'
+    || normalized === '/api/auth/reset-password/confirm'
+    || normalized === '/api/health'
+    || normalized === '/health'
+    || normalized === '/livez';
+}
+
+function _scopeForRequest(method, path, explicitScope) {
+  if (explicitScope) return explicitScope;
+  if (_isPublicApiPath(path)) return '';
+
+  var normalized = _normalizedPath(path);
+  if (normalized.indexOf('/admin') === 0) return 'admin';
+  if (normalized.indexOf('/ops') === 0) return 'ops';
+  if (normalized.indexOf('/scheduler') === 0) return 'scheduler';
+  if (normalized.indexOf('/user') === 0) return 'user';
+  if (normalized.indexOf('/api/v1/trading') === 0 || normalized.indexOf('/api/v1/watchlist') === 0) return 'trading';
+  if (normalized.indexOf('/api/v1/connectors') === 0) return 'research';
+  if (normalized.indexOf('/api/v1/quant/execution') === 0
+      || normalized.indexOf('/api/v1/quant/validation') === 0
+      || normalized.indexOf('/api/v1/quant/workflows') === 0
+      || normalized.indexOf('/api/v1/quant/paper') === 0
+      || normalized.indexOf('/api/v1/quant/promotion') === 0
+      || normalized.indexOf('/api/v1/quant/models') === 0
+      || normalized.indexOf('/api/v1/quant/deployment') === 0
+      || normalized.indexOf('/api/v1/quant/observability') === 0
+      || normalized.indexOf('/api/v1/quant/storage') === 0
+      || normalized.indexOf('/api/v1/quant/submit-locks') === 0
+      || normalized.indexOf('/api/v1/quant/session-evidence') === 0) {
+    return 'execution';
+  }
+  if (normalized.indexOf('/api/v1/quant/rl/promote') === 0) return 'execution';
+  if (normalized.indexOf('/api/v1/quant/rl') === 0) return 'research';
+  if (normalized.indexOf('/api/v1/quant') === 0) return 'research';
+  if (normalized.indexOf('/api/session') === 0
+      || normalized.indexOf('/api/query') === 0
+      || normalized.indexOf('/api/agent') === 0
+      || normalized.indexOf('/session') === 0
+      || normalized.indexOf('/query') === 0
+      || normalized.indexOf('/agent') === 0) {
+    return 'user';
+  }
+  return _isReadMethod(method) ? '' : 'user';
+}
+
 export function getApiBaseUrl() {
   BASE = _normalizedApiBase();
   return BASE;
@@ -27,7 +84,7 @@ export function getApiEndpointLabel() {
   }
 }
 
-// 生成trace_id
+// Generate a per-mutation trace id.
 function _generateTraceId() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -36,25 +93,31 @@ function _generateTraceId() {
   });
 }
 
-// 存储最后的trace_id
+// Last response trace id surfaced to the UI.
 var _lastTraceId = null;
 
 function _apiKeyForScope(scope) {
+  if (!scope || scope === 'public') return '';
   if (scope === 'admin') return window.__ESG_ADMIN_API_KEY__ || window.__ESG_API_KEY__ || '';
   if (scope === 'execution') return window.__ESG_EXECUTION_API_KEY__ || window.__ESG_API_KEY__ || '';
   if (scope === 'ops') return window.__ESG_OPS_API_KEY__ || window.__ESG_ADMIN_API_KEY__ || window.__ESG_API_KEY__ || '';
+  if (scope === 'trading') return window.__ESG_TRADING_API_KEY__ || window.__ESG_EXECUTION_API_KEY__ || window.__ESG_API_KEY__ || '';
+  if (scope === 'scheduler') return window.__ESG_SCHEDULER_API_KEY__ || window.__ESG_OPS_API_KEY__ || window.__ESG_API_KEY__ || '';
+  if (scope === 'research') return window.__ESG_RESEARCH_API_KEY__ || window.__ESG_API_KEY__ || '';
+  if (scope === 'user') return window.__ESG_USER_API_KEY__ || window.__ESG_API_KEY__ || '';
   return window.__ESG_API_KEY__ || '';
 }
 
-function _mergeHeaders(method, scope, body, extraHeaders) {
+function _mergeHeaders(method, path, scope, body, extraHeaders) {
   var headers = {};
-  var apiKey = _apiKeyForScope(scope);
+  var resolvedScope = _scopeForRequest(method, path, scope);
+  var apiKey = _apiKeyForScope(resolvedScope);
   if (apiKey) headers['x-api-key'] = apiKey;
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
 
-  // 添加trace_id
+  // Attach trace ids only to requests that can mutate state.
   if (!_isReadMethod(method)) {
     headers['X-Trace-ID'] = _generateTraceId();
   }
@@ -71,12 +134,12 @@ function _req(method, path, body, opts) {
   var options = opts || {};
   var requestOptions = {
     method: method,
-    headers: _mergeHeaders(method, options.scope, body, options.headers),
+    headers: _mergeHeaders(method, path, options.scope, body, options.headers),
   };
   if (body !== undefined) requestOptions.body = JSON.stringify(body);
 
   return fetch(getApiBaseUrl() + path, requestOptions).then(function(res) {
-    // 保存响应中的trace_id
+    // Preserve the latest response trace id.
     var traceId = res.headers.get('X-Trace-ID');
     if (traceId) _lastTraceId = traceId;
 
@@ -92,7 +155,7 @@ function _req(method, path, body, opts) {
           }
         };
       }).then(function(err) {
-        // 处理新的错误响应格式
+        // Preferred structured error format.
         if (err.success === false && err.error) {
           var error = new Error(err.error.message || ('HTTP ' + res.status));
           error.code = err.error.code;
@@ -101,7 +164,7 @@ function _req(method, path, body, opts) {
           error.retryable = err.error.retryable;
           throw error;
         }
-        // 向后兼容旧格式
+        // Backward-compatible FastAPI error format.
         var error = new Error(err.detail || ('HTTP ' + res.status));
         error.trace_id = traceId;
         throw error;
@@ -119,7 +182,7 @@ function _del(path, opts) { return _req('DELETE', path, undefined, opts); }
 export var api = {
   health: function() { return _get('/api/health'); },
 
-  // ── Auth ─────────────────────────────────────
+  // Auth
   auth: {
     register:     function(payload) { return _post('/api/auth/register', payload); },
     login:        function(payload) { return _post('/api/auth/login', payload); },
@@ -128,7 +191,7 @@ export var api = {
     resetConfirm: function(payload) { return _post('/api/auth/reset-password/confirm', payload); },
   },
 
-  // ── Market data ──────────────────────────────
+  // Market data
   market: {
     ohlcv: function(symbol, timeframe, limit) {
       return _get('/api/market/ohlcv?symbol=' + encodeURIComponent(symbol || 'NVDA')
@@ -258,12 +321,138 @@ export var api = {
     },
   },
 
+  workflows: {
+    runPaperStrategy: function(payload) {
+      return _post(Q + '/workflows/paper-strategy/run', payload || {}, { scope: 'execution' });
+    },
+    getPaperStrategy: function(workflowId) {
+      return _get(Q + '/workflows/paper-strategy/' + encodeURIComponent(workflowId), { scope: 'execution' });
+    },
+  },
+
+  paper: {
+    performance: function(windowDays) {
+      return _get(Q + '/paper/performance?window_days=' + encodeURIComponent(windowDays || 90), { scope: 'execution' });
+    },
+    snapshot: function(payload) {
+      return _post(Q + '/paper/performance/snapshot', payload || {}, { scope: 'execution' });
+    },
+    backfill: function(payload) {
+      return _post(Q + '/paper/performance/backfill', payload || {}, { scope: 'execution' });
+    },
+    dailyDigest: function(phase, sessionDate) {
+      var query = '?phase=' + encodeURIComponent(phase || 'postclose');
+      if (sessionDate) query += '&session_date=' + encodeURIComponent(sessionDate);
+      return _get(Q + '/paper/daily-digest/latest' + query, { scope: 'execution' });
+    },
+    sendDailyDigest: function(payload) {
+      return _post(Q + '/paper/daily-digest/send', payload || {}, { scope: 'execution' });
+    },
+    weeklyDigest: function(windowDays, sessionDate) {
+      var query = '?window_days=' + encodeURIComponent(windowDays || 7);
+      if (sessionDate) query += '&session_date=' + encodeURIComponent(sessionDate);
+      return _get(Q + '/paper/weekly-digest/latest' + query, { scope: 'execution' });
+    },
+    sendWeeklyDigest: function(payload) {
+      return _post(Q + '/paper/weekly-digest/send', payload || {}, { scope: 'execution' });
+    },
+    latestSessionEvidence: function() {
+      return _get(Q + '/session-evidence/latest', { scope: 'execution' });
+    },
+    sessionEvidence: function(sessionDate) {
+      return _get(Q + '/session-evidence/' + encodeURIComponent(sessionDate || ''), { scope: 'execution' });
+    },
+    reconcileAlpacaPaper: function(payload) {
+      return _post(Q + '/execution/reconcile/alpaca-paper', payload || {}, { scope: 'execution' });
+    },
+    backupStorage: function(payload) {
+      return _post(Q + '/storage/backup', payload || {}, { scope: 'execution' });
+    },
+    submitLocks: function(params) {
+      params = params || {};
+      var query = '?limit=' + encodeURIComponent(params.limit || 100);
+      if (params.session_date) query += '&session_date=' + encodeURIComponent(params.session_date);
+      if (params.status) query += '&status=' + encodeURIComponent(params.status);
+      return _get(Q + '/submit-locks' + query, { scope: 'execution' });
+    },
+    outcomes: function(params) {
+      params = params || {};
+      var query = '?limit=' + encodeURIComponent(params.limit || 200);
+      if (params.record_kind) query += '&record_kind=' + encodeURIComponent(params.record_kind);
+      if (params.status) query += '&status=' + encodeURIComponent(params.status);
+      if (params.symbol) query += '&symbol=' + encodeURIComponent(params.symbol);
+      return _get(Q + '/paper/outcomes' + query, { scope: 'execution' });
+    },
+    settleOutcomes: function(payload) {
+      return _post(Q + '/paper/outcomes/settle', payload || {}, { scope: 'execution' });
+    },
+  },
+
+  promotion: {
+    report: function(windowDays) {
+      return _get(Q + '/promotion/report?window_days=' + encodeURIComponent(windowDays || 90), { scope: 'execution' });
+    },
+    evaluate: function(payload) {
+      return _post(Q + '/promotion/evaluate', payload || {}, { scope: 'execution' });
+    },
+    timeline: function(limit) {
+      return _get(Q + '/promotion/timeline?limit=' + encodeURIComponent(limit || 50), { scope: 'execution' });
+    },
+  },
+
+  models: {
+    runShadowRetrain: function(payload) {
+      return _post(Q + '/models/shadow-retrain/run', payload || {}, { scope: 'execution' });
+    },
+    latestShadowRetrain: function() {
+      return _get(Q + '/models/shadow-retrain/latest', { scope: 'execution' });
+    },
+  },
+
+  deployment: {
+    preflight: function(profile, dryRun) {
+      var query = '?profile=' + encodeURIComponent(profile || 'paper_cloud');
+      if (dryRun) query += '&dry_run=true';
+      return _get(Q + '/deployment/preflight' + query, { scope: 'execution' });
+    },
+    evaluatePreflight: function(profile) {
+      return _post(Q + '/deployment/preflight/evaluate?profile=' + encodeURIComponent(profile || 'paper_cloud'), {}, { scope: 'execution' });
+    },
+  },
+
+  tradingCalendar: {
+    status: function() {
+      return _get(Q + '/trading-calendar/status', { scope: 'execution' });
+    },
+  },
+
+  observability: {
+    paperWorkflow: function(windowDays) {
+      return _get(Q + '/observability/paper-workflow?window_days=' + encodeURIComponent(windowDays || 30), { scope: 'execution' });
+    },
+    paperWorkflowSlo: function(windowDays) {
+      return _get(Q + '/slo/paper-workflow?window_days=' + encodeURIComponent(windowDays || 30), { scope: 'execution' });
+    },
+    evaluatePaperWorkflow: function(windowDays) {
+      return _post(Q + '/observability/paper-workflow/evaluate?window_days=' + encodeURIComponent(windowDays || 30), {}, { scope: 'execution' });
+    },
+  },
+
   validation: {
     run: function(payload) { return _post(Q + '/validation/run', payload, { scope: 'execution' }); },
   },
 
   quantRL: {
-    overview: function() { return _get(Q + '/rl/overview'); },
+    overview: function(params) {
+      params = params || {};
+      var query = '?limit=' + encodeURIComponent(params.limit || 20)
+        + '&offset=' + encodeURIComponent(params.offset || 0);
+      if (params.includeEligibility) query += '&include_eligibility=true';
+      if (params.includeBindings) query += '&include_bindings=true';
+      if (params.includeArtifacts === false) query += '&include_artifacts=false';
+      if (params.includeOutputStatus) query += '&include_output_status=true';
+      return _get(Q + '/rl/overview' + query);
+    },
     runs: function() { return _get(Q + '/rl/runs'); },
     buildDataset: function(payload) { return _post(Q + '/rl/datasets/build', payload); },
     buildRecipeDataset: function(payload) { return _post(Q + '/rl/recipes/build', payload); },
@@ -444,7 +633,7 @@ export var api = {
   },
 };
 
-// 获取最后的trace_id
+// Return the latest trace id.
 export function getLastTraceId() {
   return _lastTraceId;
 }

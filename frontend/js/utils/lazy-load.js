@@ -395,6 +395,11 @@ export function optimizeImage(img, options = {}) {
 /**
  * Initialize all performance optimizations
  */
+function isDevelopmentRuntime() {
+  return (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development')
+    || window.__ESG_NODE_ENV__ === 'development';
+}
+
 export function initPerformanceOptimizations() {
   // Initialize lazy loading
   initLazyLoading();
@@ -410,7 +415,7 @@ export function initPerformanceOptimizations() {
   });
 
   // Monitor long tasks in development
-  if (process.env.NODE_ENV === 'development') {
+  if (isDevelopmentRuntime()) {
     monitorLongTasks((task) => {
       console.warn('[Long Task]', task);
     });

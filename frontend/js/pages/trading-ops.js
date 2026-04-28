@@ -18,10 +18,12 @@ import {
 let _container = null;
 let _langCleanup = null;
 let _snapshot = null;
+let _preflight = null;
 let _marketDepthWS = null;
 let _snapshotSavedAt = null;
 let _degradedMeta = null;
 const OPS_SNAPSHOT_CACHE_KEY = 'qt.trading.ops.snapshot.v1';
+const OPS_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
 const OPS_SNAPSHOT_CACHE_TTL_MS = 15 * 60 * 1000;
 
 const COPY = {
@@ -100,6 +102,8 @@ const COPY = {
     statusBlocked: 'blocked',
     statusStandby: 'standby',
     statusGuarded: 'guarded',
+    cloudPreflight: 'Cloud Preflight',
+    openPaperPerformance: 'Open Paper Performance',
   },
   zh: {
     title: '交易运维',
@@ -338,6 +342,7 @@ export function destroy() {
   }
   _container = null;
   _snapshot = null;
+  _preflight = null;
   _snapshotSavedAt = null;
   _degradedMeta = null;
   _langCleanup?.();
@@ -444,7 +449,12 @@ async function refreshOps() {
   }
   setRefreshState(true);
   try {
-    _snapshot = await api.trading.opsSnapshot();
+    const [snapshot, preflight] = await Promise.all([
+      api.trading.opsSnapshot(),
+      api.deployment.preflight('paper_cloud').catch(() => null),
+    ]);
+    _snapshot = snapshot;
+    _preflight = preflight;
     if (!isMounted()) return;
     persistSnapshot(_snapshot);
     _degradedMeta = null;
@@ -527,6 +537,7 @@ function hydrateSnapshotFromCache() {
     const raw = localStorage.getItem(OPS_SNAPSHOT_CACHE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw);
+    if (parsed?.schema_version !== OPS_SNAPSHOT_CACHE_SCHEMA_VERSION) return;
     if (!parsed?.payload || !parsed?.saved_at) return;
     if ((Date.now() - Number(parsed.saved_at)) > OPS_SNAPSHOT_CACHE_TTL_MS) return;
     _snapshot = parsed.payload;
@@ -548,6 +559,7 @@ function persistSnapshot(snapshot) {
   try {
     _snapshotSavedAt = Date.now();
     localStorage.setItem(OPS_SNAPSHOT_CACHE_KEY, JSON.stringify({
+      schema_version: OPS_SNAPSHOT_CACHE_SCHEMA_VERSION,
       saved_at: _snapshotSavedAt,
       payload: snapshot,
     }));
@@ -747,6 +759,7 @@ function renderSnapshot() {
         ${guardRow(c('notifier'), notifier.telegram_configured ? 'is-pass' : 'is-watch', notifier.telegram_configured ? 'telegram' : c('uiOnly'))}
       </div>
     </section>
+    ${renderCloudPreflight(_preflight)}
     ${renderMarketDepthDiagnostics(marketDepth)}
     ${renderRegistryGate({
       registry_gate_status: strategyEligibility.blocked_count ? 'blocked' : (strategyEligibility.review_count ? 'review' : 'pass'),
@@ -825,4 +838,25 @@ function timelineStep(label, status) {
 
 function guardRow(label, klass, value) {
   return `<div class="factor-check-row"><span>${esc(label)}</span><strong class="${klass}">${esc(value)}</strong></div>`;
+}
+
+function renderCloudPreflight(preflight) {
+  if (!preflight) return '';
+  const hard = Array.isArray(preflight.hard_checks) ? preflight.hard_checks : [];
+  return `
+    <section class="workbench-section">
+      <div class="workbench-section__title">${c('cloudPreflight')}</div>
+      <div class="workbench-metric-grid">
+        ${metric('Ready', preflight.ready ? c('statusReady') : c('statusBlocked'), preflight.ready ? 'positive' : 'risk')}
+        ${metric('Blockers', (preflight.blockers || []).length, (preflight.blockers || []).length ? 'risk' : 'positive')}
+        ${metric('Warnings', (preflight.warnings || []).length, (preflight.warnings || []).length ? 'risk' : 'positive')}
+      </div>
+      <div class="factor-checklist">
+        ${hard.map((item) => guardRow(item.name || '-', item.ok ? 'is-pass' : 'is-watch', item.ok ? c('statusPassed') : c('statusBlocked'))).join('')}
+      </div>
+      <div class="workbench-action-grid" style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="window.location.hash='#/paper-performance'">${c('openPaperPerformance')}</button>
+      </div>
+    </section>
+  `;
 }

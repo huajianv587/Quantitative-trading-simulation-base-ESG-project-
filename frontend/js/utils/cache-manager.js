@@ -430,8 +430,13 @@ window.addEventListener('beforeunload', () => {
   cacheManager.stopCleanupTimer();
 });
 
+function isDevelopmentRuntime() {
+  return (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development')
+    || window.__ESG_NODE_ENV__ === 'development';
+}
+
 // Expose cache stats in development
-if (process.env.NODE_ENV === 'development') {
+if (isDevelopmentRuntime()) {
   window.__CACHE_STATS__ = () => cacheManager.getStats();
   window.__CACHE_CLEAR__ = () => cacheManager.clear();
 }

@@ -1,6 +1,7 @@
 import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
 import { getLang, onLangChange, translateLoose } from '../i18n.js?v=8';
+import { getVersionedStorageValue, setVersionedStorageValue } from '../utils.js?v=8';
 
 let _step     = 1;
 let _result   = null;
@@ -11,6 +12,10 @@ let _langCleanup = null;
 
 const localizeSector = (value) => translateLoose(value || '');
 const lt = (en, zh) => getLang() === 'zh' ? zh : en;
+const PORTFOLIO_PREFILL_STORAGE_KEY = 'qt.portfolio.prefill';
+const EXECUTION_PREFILL_STORAGE_KEY = 'qt.execution.prefill';
+const PORTFOLIO_PREFILL_SCHEMA_VERSION = 1;
+const EXECUTION_PREFILL_SCHEMA_VERSION = 1;
 const PRESET_UNIVERSES = {
   'S&P 500 Full': ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'JPM', 'UNH'],
   'S&P 500 ESG': ['PG', 'NEE', 'MSFT', 'AAPL', 'UNH', 'JPM'],
@@ -61,14 +66,16 @@ export function destroy() {
 
 function loadPrefill(container) {
   try {
-    const raw = window.sessionStorage.getItem('qt.portfolio.prefill');
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    if (data.signals?.length) {
+    const data = getVersionedStorageValue(
+      window.sessionStorage,
+      PORTFOLIO_PREFILL_STORAGE_KEY,
+      PORTFOLIO_PREFILL_SCHEMA_VERSION,
+    );
+    if (data?.signals?.length) {
       const uni = data.signals.map(s => s.symbol).join(', ');
       container._prefillUniverse = uni;
     }
-    window.sessionStorage.removeItem('qt.portfolio.prefill');
+    window.sessionStorage.removeItem(PORTFOLIO_PREFILL_STORAGE_KEY);
   } catch (_) {}
 }
 
@@ -685,7 +692,12 @@ function bindStep5(container) {
     if (!ack?.checked) { toast.warning(translateLoose('Acknowledgment required'), translateLoose('Please confirm the risk disclosure')); return; }
     if (_result) {
       const uni = (_result.holdings||[]).map(h=>h.symbol).join(', ');
-      window.sessionStorage.setItem('qt.execution.prefill', JSON.stringify({ universe: uni, capital: 1000000, broker: 'alpaca' }));
+      setVersionedStorageValue(
+        window.sessionStorage,
+        EXECUTION_PREFILL_STORAGE_KEY,
+        { universe: uni, capital: 1000000, broker: 'alpaca' },
+        EXECUTION_PREFILL_SCHEMA_VERSION,
+      );
     }
     window.location.hash = '#/execution';
   });
@@ -704,7 +716,12 @@ function bindEvents(container) {
     }
     if (e.target.closest('#btn-to-execution') && _result) {
       const uni = (_result.holdings||[]).map(h=>h.symbol).join(', ');
-      window.sessionStorage.setItem('qt.execution.prefill', JSON.stringify({ universe:uni, capital:1000000, broker:'alpaca' }));
+      setVersionedStorageValue(
+        window.sessionStorage,
+        EXECUTION_PREFILL_STORAGE_KEY,
+        { universe: uni, capital: 1000000, broker: 'alpaca' },
+        EXECUTION_PREFILL_SCHEMA_VERSION,
+      );
       window.location.hash = '#/execution';
     }
   });

@@ -1,4 +1,8 @@
 import * as base from './portfolio.js';
+import { setVersionedStorageValue } from '../utils.js?v=8';
+
+const EXECUTION_PREFILL_STORAGE_KEY = 'qt.execution.prefill';
+const EXECUTION_PREFILL_SCHEMA_VERSION = 1;
 
 export async function render(container) {
   await base.render(container);
@@ -18,7 +22,12 @@ export async function render(container) {
       const universe = container.querySelector('#p-universe')?.value?.trim() || '';
       const capital = container.querySelector('#p-capital')?.value || '1000000';
       const broker = 'alpaca';
-      window.sessionStorage.setItem('qt.execution.prefill', JSON.stringify({ universe, capital, broker }));
+      setVersionedStorageValue(
+        window.sessionStorage,
+        EXECUTION_PREFILL_STORAGE_KEY,
+        { universe, capital, broker },
+        EXECUTION_PREFILL_SCHEMA_VERSION,
+      );
       window.location.hash = '#/execution';
     });
     optimizeButton.parentElement.appendChild(executionButton);

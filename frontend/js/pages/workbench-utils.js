@@ -248,10 +248,12 @@ export function renderError(el, err, options = {}) {
 
 export function persistPayloadSnapshot(storageKey, payload, meta) {
   if (!storageKey || payload === undefined) return null;
+  const metadata = meta || {};
   const record = {
+    schema_version: metadata.schema_version || 1,
     saved_at: Date.now(),
     payload,
-    meta: meta || {},
+    meta: metadata,
   };
   try {
     localStorage.setItem(storageKey, JSON.stringify(record));
@@ -261,13 +263,14 @@ export function persistPayloadSnapshot(storageKey, payload, meta) {
   return record;
 }
 
-export function loadPayloadSnapshot(storageKey, ttlMs) {
+export function loadPayloadSnapshot(storageKey, ttlMs, expectedSchemaVersion = 1) {
   if (!storageKey) return null;
   try {
     const raw = localStorage.getItem(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || parsed.payload === undefined) return null;
+    if (parsed.schema_version !== expectedSchemaVersion) return null;
     const savedAt = Number(parsed.saved_at || 0);
     if (ttlMs && savedAt && (Date.now() - savedAt) > Number(ttlMs)) return null;
     return {
