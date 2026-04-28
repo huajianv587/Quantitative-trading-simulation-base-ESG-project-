@@ -11,30 +11,54 @@ import os
 import secrets
 import sys
 import time
-from urllib.parse import parse_qs, urlparse
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from gateway.auth.repository import get_auth_repository
+from gateway.config import settings
+from gateway.ops.security import is_local_origin
 from gateway.utils.email_delivery import send_email_message, smtp_ready
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "esg-quant-secret-change-in-prod-2026")
+_LOCAL_DEV_SECRET = "local-dev-auth-secret-change-me"
 _TOKEN_TTL = 86400 * 7
 _RESET_TTL = 3600
 
 
+def _auth_secret() -> str:
+    secret = str(getattr(settings, "AUTH_SECRET_KEY", "") or os.getenv("AUTH_SECRET_KEY", "") or "").strip()
+    if secret:
+        return secret
+    if str(getattr(settings, "APP_MODE", "local")).lower() == "prod":
+        raise RuntimeError("AUTH_SECRET_KEY is required when APP_MODE=prod")
+    return _LOCAL_DEV_SECRET
+
+
+def validate_auth_runtime_config() -> None:
+    _auth_secret()
+
+
+def _hash_iterations() -> int:
+    return max(100_000, int(getattr(settings, "AUTH_PASSWORD_PBKDF2_ITERATIONS", 260_000) or 260_000))
+
+
 def _hash_password(password: str) -> str:
+    iterations = _hash_iterations()
     salt = secrets.token_hex(16)
-    hashed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
-    return f"{salt}:{hashed.hex()}"
+    hashed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), iterations)
+    return f"pbkdf2_sha256${iterations}${salt}${hashed.hex()}"
 
 
 def _verify_password(password: str, stored: str) -> bool:
     try:
+        if stored.startswith("pbkdf2_sha256$"):
+            _, iterations_raw, salt, digest = stored.split("$", 3)
+            expected = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), int(iterations_raw))
+            return hmac.compare_digest(expected.hex(), digest)
         salt, digest = stored.split(":", 1)
         expected = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
         return hmac.compare_digest(expected.hex(), digest)
@@ -44,7 +68,7 @@ def _verify_password(password: str, stored: str) -> bool:
 
 def _make_token(user_id: str) -> str:
     payload = f"{user_id}:{int(time.time()) + _TOKEN_TTL}"
-    signature = hmac.new(_SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(_auth_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
     import base64
 
     return base64.urlsafe_b64encode(f"{payload}:{signature}".encode()).decode()
@@ -57,7 +81,7 @@ def _verify_token(token: str) -> str | None:
         raw = base64.urlsafe_b64decode(token.encode()).decode()
         user_id, expires, signature = raw.rsplit(":", 2)
         payload = f"{user_id}:{expires}"
-        expected = hmac.new(_SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        expected = hmac.new(_auth_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, signature):
             return None
         if int(time.time()) > int(expires):
@@ -106,6 +130,14 @@ def _extract_reset_token(raw: str) -> str:
         if fragment_params.get("token"):
             return str(fragment_params["token"][0]).strip()
     return token
+
+
+def _allow_dev_reset_token(request: Request) -> bool:
+    if str(getattr(settings, "APP_MODE", "local")).lower() != "local" and "pytest" not in sys.modules:
+        return False
+    client_host = str(getattr(request.client, "host", "") or "")
+    request_host = str(request.url.hostname or "")
+    return is_local_origin(client_host=client_host, request_host=request_host)
 
 
 @router.get("/status")
@@ -171,7 +203,7 @@ def login(req: LoginRequest):
 
 
 @router.post("/reset-password/request")
-def reset_request(payload: ResetRequestPayload):
+def reset_request(payload: ResetRequestPayload, request: Request):
     email = payload.email.strip().lower()
     repo = _repo()
     user = repo.get_user_by_email(email)
@@ -182,7 +214,6 @@ def reset_request(payload: ResetRequestPayload):
     reset_token = secrets.token_urlsafe(32)
     repo.create_reset_token(token=reset_token, email=email, expires_at=int(time.time()) + _RESET_TTL)
 
-    is_dev = os.getenv("APP_MODE", "dev").lower() in ("dev", "development", "local") or "pytest" in sys.modules
     response: dict[str, Any] = {"message": "If that email is registered, a reset link has been sent."}
     if smtp_ready():
         app_url = os.getenv("APP_PUBLIC_BASE_URL", "http://127.0.0.1:9000/app#/reset-password")
@@ -208,7 +239,7 @@ def reset_request(payload: ResetRequestPayload):
         response["email_delivery"] = "sent" if email_result.get("ok") else "failed"
         if not email_result.get("ok"):
             response["email_error"] = str(email_result.get("detail", "unknown_error"))
-    if is_dev:
+    if _allow_dev_reset_token(request):
         response["_dev_token"] = reset_token
 
     repo.record_auth_audit(event_type="reset_request", email=email, user_id=str(user["id"]), success=True, detail="token_created")
