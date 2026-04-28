@@ -22,6 +22,38 @@ def _optional_import(module_path: str, names: tuple[str, ...], label: str) -> li
         return [None for _ in names]
 
 
+def _lazy_import_callable(module_path: str, name: str, label: str):
+    def _call(*args, **kwargs):
+        try:
+            module = importlib.import_module(module_path)
+            target = getattr(module, name)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(f"{label} lazy load failed: {exc}")
+            raise
+        return target(*args, **kwargs)
+
+    _call.__name__ = name
+    return _call
+
+
+def _lazy_import_class(module_path: str, name: str, label: str):
+    class _LazyImportedClass:
+        __name__ = name
+
+        def __new__(cls, *args, **kwargs):
+            del cls
+            try:
+                module = importlib.import_module(module_path)
+                target = getattr(module, name)
+            except Exception as exc:
+                logging.getLogger(__name__).warning(f"{label} lazy load failed: {exc}")
+                raise
+            return target(*args, **kwargs)
+
+    _LazyImportedClass.__name__ = name
+    return _LazyImportedClass
+
+
 @dataclass
 class RuntimeContext:
     get_query_engine: Any = None
@@ -47,6 +79,10 @@ class RuntimeContext:
     report_scheduler: Any = None
     quant_system: Any = None
     trading_service: Any = None
+    lazy_components: dict[str, str] = field(default_factory=lambda: {
+        "rag_query_engine": "lazy",
+        "trading_service": "lazy",
+    })
     report_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     sync_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -315,10 +351,13 @@ class RuntimeContext:
                 async def _init_rag():
                     loop = asyncio.get_running_loop()
                     try:
+                        self.lazy_components["rag_query_engine"] = "initializing"
                         engine = await loop.run_in_executor(None, self.get_query_engine)
                         app.state.query_engine = engine
+                        self.lazy_components["rag_query_engine"] = "ready"
                         logger.info("[Startup] RAG engine ready (background init complete)")
                     except Exception as exc:
+                        self.lazy_components["rag_query_engine"] = "degraded"
                         logger.warning(f"[Startup] RAG engine failed: {exc}")
 
                 asyncio.create_task(_init_rag())
@@ -336,15 +375,19 @@ class RuntimeContext:
                     quant_system=self.quant_system,
                     get_client=self.get_client,
                 )
+                self.lazy_components["trading_service"] = "initialized"
                 logger.info("[Runtime] Trading agent service initialized")
             except Exception as exc:
+                self.lazy_components["trading_service"] = "degraded"
                 logger.warning(f"[Runtime] Trading agent service init failed: {exc}")
 
         if self.trading_service is not None and hasattr(self.trading_service, "startup"):
             try:
                 await self.trading_service.startup()
+                self.lazy_components["trading_service"] = "ready"
                 logger.info("[Runtime] Trading agent service started")
             except Exception as exc:
+                self.lazy_components["trading_service"] = "degraded"
                 logger.warning(f"[Runtime] Trading agent service startup failed: {exc}")
 
         logger.info("[Startup] All modules initialized successfully")
@@ -359,51 +402,23 @@ class RuntimeContext:
 
 
 def build_runtime() -> RuntimeContext:
-    get_query_engine, = _optional_import(
-        "gateway.rag.rag_main",
-        ("get_query_engine",),
-        "RAG",
-    )
+    get_query_engine = _lazy_import_callable("gateway.rag.rag_main", "get_query_engine", "RAG")
     save_message, get_history, create_session, get_client = _optional_import(
         "gateway.db.supabase_client",
         ("save_message", "get_history", "create_session", "get_client"),
         "Supabase",
     )
-    get_orchestrator, = _optional_import(
-        "gateway.scheduler.orchestrator",
-        ("get_orchestrator",),
-        "Orchestrator",
-    )
-    run_agent, = _optional_import(
-        "gateway.agents.graph",
-        ("run_agent",),
-        "Agent graph",
-    )
-    ESGScoringFramework, ESGScoreReport = _optional_import(
-        "gateway.agents.esg_scorer",
-        ("ESGScoringFramework", "ESGScoreReport"),
-        "ESG scorer",
-    )
-    ESGVisualizer, = _optional_import(
-        "gateway.agents.esg_visualizer",
-        ("ESGVisualizer",),
-        "ESG visualizer",
-    )
-    DataSourceManager, CompanyData = _optional_import(
-        "gateway.scheduler.data_sources",
-        ("DataSourceManager", "CompanyData"),
-        "DataSource",
-    )
-    ESGReportGenerator, = _optional_import(
-        "gateway.scheduler.report_generator",
-        ("ESGReportGenerator",),
-        "ReportGenerator",
-    )
-    ReportScheduler, PushRule, ReportSubscription = _optional_import(
-        "gateway.scheduler.report_scheduler",
-        ("ReportScheduler", "PushRule", "ReportSubscription"),
-        "ReportScheduler",
-    )
+    get_orchestrator = _lazy_import_callable("gateway.scheduler.orchestrator", "get_orchestrator", "Orchestrator")
+    run_agent = _lazy_import_callable("gateway.agents.graph", "run_agent", "Agent graph")
+    ESGScoringFramework = _lazy_import_class("gateway.agents.esg_scorer", "ESGScoringFramework", "ESG scorer")
+    ESGScoreReport = _lazy_import_class("gateway.agents.esg_scorer", "ESGScoreReport", "ESG scorer")
+    ESGVisualizer = _lazy_import_class("gateway.agents.esg_visualizer", "ESGVisualizer", "ESG visualizer")
+    DataSourceManager = _lazy_import_class("gateway.scheduler.data_sources", "DataSourceManager", "DataSource")
+    CompanyData = _lazy_import_class("gateway.scheduler.data_sources", "CompanyData", "DataSource")
+    ESGReportGenerator = _lazy_import_class("gateway.scheduler.report_generator", "ESGReportGenerator", "ReportGenerator")
+    ReportScheduler = _lazy_import_class("gateway.scheduler.report_scheduler", "ReportScheduler", "ReportScheduler")
+    PushRule = _lazy_import_class("gateway.scheduler.report_scheduler", "PushRule", "ReportScheduler")
+    ReportSubscription = _lazy_import_class("gateway.scheduler.report_scheduler", "ReportSubscription", "ReportScheduler")
     get_quant_system, = _optional_import(
         "gateway.quant.service",
         ("get_quant_system",),

@@ -112,6 +112,7 @@ def test_health_endpoint_returns_basic_status():
     assert "runtime" in data
     assert "modules" in data
     assert "ready" in data
+    assert "operational_readiness" in data
     assert data["app_id"] == "quant-terminal"
     assert data["service_name"] == "Quant Terminal"
     assert data["landing_entry"].endswith("/")
@@ -119,7 +120,18 @@ def test_health_endpoint_returns_basic_status():
     assert data["api_base_url"].startswith("http://testserver")
 
 
-def test_ready_endpoint_tracks_rag_initialization():
+def test_livez_is_lightweight_process_probe():
+    client = TestClient(main_module.app)
+
+    response = client.get("/livez")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["app_id"] == "quant-terminal"
+
+
+def test_ready_endpoint_tracks_rag_initialization(monkeypatch):
     client = TestClient(main_module.app)
     previous = getattr(main_module.app.state, "query_engine", None)
     previous_scorer = main_module.runtime.esg_scorer
@@ -127,6 +139,16 @@ def test_ready_endpoint_tracks_rag_initialization():
     try:
         main_module.runtime.esg_scorer = object()
         main_module.runtime.report_scheduler = object()
+        monkeypatch.setattr(
+            main_module.runtime.quant_system,
+            "build_cached_readiness",
+            lambda: {
+                "ready": main_module.app.state.query_engine is not None,
+                "cached": True,
+                "blockers": [] if main_module.app.state.query_engine is not None else ["rag"],
+                "components": {},
+            },
+        )
         main_module.app.state.query_engine = None
         not_ready = client.get("/health/ready")
         assert not_ready.status_code == 503

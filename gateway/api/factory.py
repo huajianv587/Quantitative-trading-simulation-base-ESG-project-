@@ -50,6 +50,8 @@ def _parse_cors_origins(raw_value: str) -> list[str]:
 
 
 def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
+    auth.validate_auth_runtime_config()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await app_runtime.startup(app)
@@ -87,6 +89,7 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
 
     app.include_router(core.router)
     app.include_router(auth.router)
+    app.include_router(auth.router, prefix="/api", include_in_schema=False)
     app.include_router(agent.router)
     app.include_router(reports.router)
     app.include_router(admin.router)

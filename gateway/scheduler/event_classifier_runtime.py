@@ -181,6 +181,13 @@ class EventClassifierRuntime:
                 return candidate
         return self.checkpoint_root / task
 
+    @staticmethod
+    def _transformers_load_path(path: Path) -> str:
+        try:
+            return str(path.relative_to(Path.cwd()))
+        except ValueError:
+            return str(path)
+
     def _ensure_loaded(self, task: str) -> bool:
         if task in self._models and task in self._tokenizers:
             return True
@@ -193,10 +200,11 @@ class EventClassifierRuntime:
 
         try:
             checkpoint_dir = self._task_checkpoint_dir(task)
+            checkpoint_load_path = self._transformers_load_path(checkpoint_dir)
             self._torch = torch
             self._device = "cuda" if torch.cuda.is_available() else "cpu"
-            tokenizer = AutoTokenizer.from_pretrained(str(checkpoint_dir))
-            model = AutoModelForSequenceClassification.from_pretrained(str(checkpoint_dir))
+            tokenizer = AutoTokenizer.from_pretrained(checkpoint_load_path)
+            model = AutoModelForSequenceClassification.from_pretrained(checkpoint_load_path)
             model.to(self._device)
             model.eval()
             self._tokenizers[task] = tokenizer

@@ -9,7 +9,6 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from gateway.app_runtime import runtime
 from gateway.config import settings
-from gateway.utils.llm_client import get_runtime_backend_status
 from gateway.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -39,6 +38,60 @@ def _module_status(request: Request) -> dict[str, bool]:
         "esg_scorer": runtime.esg_scorer is not None,
         "report_scheduler": runtime.report_scheduler is not None,
         "quant_system": runtime.quant_system is not None,
+    }
+
+
+def _runtime_backend_status() -> dict[str, Any]:
+    from gateway.utils.llm_client import get_runtime_backend_status
+
+    return get_runtime_backend_status()
+
+
+@router.get("/livez")
+@router.get("/api/v1/livez", include_in_schema=False)
+@router.get("/api/health/live", include_in_schema=False)
+def livez(request: Request):
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "app_id": getattr(request.app.state, "app_id", "quant-terminal"),
+        "service_name": getattr(request.app.state, "service_name", "Quant Terminal"),
+    }
+
+
+def _cached_ready_payload(request: Request) -> dict[str, Any]:
+    modules = _module_status(request)
+    required_module_keys = ["quant_system"] if bool(getattr(settings, "UNATTENDED_PAPER_MODE", False)) else list(modules.keys())
+    operational_readiness: dict[str, Any] = {
+        "ready": False,
+        "blockers": ["quant_system_unavailable"],
+        "components": {},
+    }
+    if runtime.quant_system is not None:
+        try:
+            if hasattr(runtime.quant_system, "build_cached_readiness"):
+                operational_readiness = runtime.quant_system.build_cached_readiness()
+            else:
+                operational_readiness = runtime.quant_system.build_healthcheck()
+        except Exception as exc:
+            logger.warning(f"[Ready] Cached readiness unavailable: {exc}")
+            operational_readiness = {
+                "ready": False,
+                "error": str(exc),
+                "blockers": ["readiness_probe_failed"],
+            }
+    ready = all(bool(modules.get(key)) for key in required_module_keys) and bool(operational_readiness.get("ready"))
+    base_url = _app_base_url(request)
+    return {
+        "status": "ok" if ready else "not_ready",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "app_id": getattr(request.app.state, "app_id", "quant-terminal"),
+        "service_name": getattr(request.app.state, "service_name", "Quant Terminal"),
+        "api_base_url": base_url,
+        "ready": ready,
+        "modules": modules,
+        "required_modules": required_module_keys,
+        "operational_readiness": operational_readiness,
     }
 
 
@@ -263,10 +316,22 @@ def _build_event_monitor(recent_signals: list[dict[str, Any]], generated_at: dat
 
 
 @router.get("/health")
+@router.get("/api/v1/health", include_in_schema=False)
 @router.get("/api/health", include_in_schema=False)
 def health(request: Request):
     modules = _module_status(request)
     base_url = _app_base_url(request)
+    operational_readiness = None
+    if runtime.quant_system is not None:
+        try:
+            operational_readiness = runtime.quant_system.build_healthcheck()
+        except Exception as exc:
+            logger.warning(f"[Health] Quant healthcheck unavailable: {exc}")
+            operational_readiness = {
+                "ready": False,
+                "error": str(exc),
+            }
+    ready = all(modules.values()) and bool((operational_readiness or {}).get("ready"))
 
     return {
         "status": "ok",
@@ -279,16 +344,19 @@ def health(request: Request):
         "frontend_source": getattr(request.app.state, "frontend_source", "unknown"),
         "frontend_path": getattr(request.app.state, "frontend_path", None),
         "app_mode": settings.APP_MODE,
-        "runtime": get_runtime_backend_status(),
-        "ready": all(modules.values()),
+        "runtime": _runtime_backend_status(),
+        "ready": ready,
         "modules": modules,
+        "operational_readiness": operational_readiness,
     }
 
 
 @router.get("/health/ready")
+@router.get("/ready", include_in_schema=False)
+@router.get("/api/v1/ready", include_in_schema=False)
 @router.get("/api/health/ready", include_in_schema=False)
 def health_ready(request: Request):
-    payload = health(request)
+    payload = _cached_ready_payload(request)
     if payload["ready"]:
         return payload
     return JSONResponse(status_code=503, content=payload)

@@ -23,6 +23,9 @@ def test_ops_endpoints_return_runtime_snapshots():
     health_payload = health_response.json()
     assert "components" in health_payload
     assert "api" in health_payload["components"]
+    assert "auth_keys" in health_payload["components"]
+    assert "llm_local_auto" in health_payload["components"]
+    assert "llm_hybrid_remote" in health_payload["components"]
 
     alerts_response = client.get("/ops/alerts", headers=OPS_HEADERS)
     assert alerts_response.status_code == 200

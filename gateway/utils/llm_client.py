@@ -2,31 +2,16 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import time
 from pathlib import Path
 
 import requests
 
 try:
-    import torch
-except Exception:  # pragma: no cover - optional runtime dependency
-    torch = None
-
-try:
     from openai import OpenAI
 except Exception:  # pragma: no cover - optional runtime dependency
     OpenAI = None
-
-try:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-except Exception:  # pragma: no cover - optional runtime dependency
-    AutoModelForCausalLM = None
-    AutoTokenizer = None
-
-try:
-    from peft import PeftModel
-except Exception:  # pragma: no cover - optional runtime dependency
-    PeftModel = None
 
 from gateway.config import settings
 from gateway.utils.cache import get_cache, set_cache
@@ -47,6 +32,7 @@ _local_model     = None  # 本地模型实例（避免重复加载）
 _local_tokenizer = None  # 本地分词器实例
 _openai_client   = None  # OpenAI 客户端实例
 _deepseek_client = None  # DeepSeek 客户端实例
+_local_dependency_error = ""
 _local_fail_count = 0    # 本地模型连续失败计数器（熔断器）
 _remote_fail_count = 0   # 远端 GPU 服务连续失败计数器（熔断器）
 _remote_retry_after = 0.0
@@ -133,6 +119,51 @@ def _chat_cache_key(messages: list[dict], temperature: float, max_tokens: int, b
     return f"llm_chat::{payload}"
 
 
+def _load_torch_dependency() -> object | None:
+    global _local_dependency_error
+    try:
+        import torch
+
+        _local_dependency_error = ""
+        return torch
+    except Exception as exc:  # pragma: no cover - optional runtime dependency
+        _local_dependency_error = str(exc)
+        return None
+
+
+def _load_local_dependencies() -> tuple[object | None, object | None, object | None, object | None]:
+    global _local_dependency_error
+    torch = _load_torch_dependency()
+    if torch is None:
+        return None, None, None, None
+    try:
+        from peft import PeftModel
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        _local_dependency_error = ""
+        return torch, AutoModelForCausalLM, AutoTokenizer, PeftModel
+    except Exception as exc:  # pragma: no cover - optional runtime dependency
+        _local_dependency_error = str(exc)
+        return None, None, None, None
+
+
+def __getattr__(name: str) -> object:
+    if name == "torch":
+        torch = _load_torch_dependency()
+        if torch is None:
+            raise AttributeError(f"torch dependency is unavailable: {_local_dependency_error}")
+        return torch
+    raise AttributeError(name)
+
+
+def _local_cuda_available_without_import() -> bool:
+    loaded_torch = sys.modules.get("torch")
+    if loaded_torch is None:
+        return False
+    cuda = getattr(loaded_torch, "cuda", None)
+    return bool(cuda and cuda.is_available())
+
+
 def _local_backend_supported() -> bool:
     """检查当前环境是否适合加载本地 7B LoRA 模型。"""
     ckpt = Path(LOCAL_CKPT)
@@ -140,8 +171,10 @@ def _local_backend_supported() -> bool:
         _disable_local_backend(f"Local checkpoint not found: {LOCAL_CKPT}")
         return False
 
-    if torch is None or AutoTokenizer is None or AutoModelForCausalLM is None or PeftModel is None:
-        _disable_local_backend("Torch/Transformers/PEFT unavailable; local backend disabled.")
+    torch = _load_torch_dependency()
+    if torch is None:
+        detail = f" {_local_dependency_error}" if _local_dependency_error else ""
+        _disable_local_backend(f"PyTorch unavailable; local backend disabled.{detail}")
         return False
 
     if not torch.cuda.is_available():
@@ -151,11 +184,13 @@ def _local_backend_supported() -> bool:
         )
         return False
 
+    _, AutoModelForCausalLM, AutoTokenizer, PeftModel = _load_local_dependencies()
+    if AutoTokenizer is None or AutoModelForCausalLM is None or PeftModel is None:
+        detail = f" {_local_dependency_error}" if _local_dependency_error else ""
+        _disable_local_backend(f"Transformers/PEFT unavailable; local backend disabled.{detail}")
+        return False
+
     return True
-
-
-# 启动时检测本地模型是否可用，不适合时直接跳过
-_local_backend_supported()
 
 
 def _backend_mode() -> str:
@@ -175,8 +210,9 @@ def get_runtime_backend_status() -> dict:
         "remote_llm_enabled_in_mode": _backend_mode() == "remote",
         "cloud_fallback_order": list(CLOUD_FALLBACK_ORDER),
         "degraded_llm_fallback_enabled": _degraded_fallback_enabled(),
-        "local_llm_cuda_available": bool(torch and torch.cuda.is_available()),
+        "local_llm_cuda_available": _local_cuda_available_without_import(),
         "local_checkpoint_exists": Path(LOCAL_CKPT).exists(),
+        "local_dependency_error": _local_dependency_error,
         "openai_sdk_available": OpenAI is not None,
     }
 
@@ -208,6 +244,10 @@ def _load_local_model():
 
     ckpt = Path(LOCAL_CKPT)
     logger.info(f"[LLM] Loading local model from {LOCAL_CKPT} ...")
+    torch, AutoModelForCausalLM, AutoTokenizer, PeftModel = _load_local_dependencies()
+    if torch is None or AutoTokenizer is None or AutoModelForCausalLM is None or PeftModel is None:
+        raise RuntimeError("Local LLM dependencies are unavailable.")
+
     # 加载分词器
     tokenizer = AutoTokenizer.from_pretrained(LOCAL_BASE, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
@@ -249,6 +289,9 @@ def _chat_local(messages: list[dict], max_new_tokens: int = 1024) -> str:
     )
     # tokenize 编码为 input_ids 和 attention_mask
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    torch = sys.modules.get("torch")
+    if torch is None:
+        raise RuntimeError("Local LLM torch runtime is unavailable.")
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,

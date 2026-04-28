@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query
 
 from api.schemas_quant_rl import (
     QuantRLBacktestRequest,
@@ -14,20 +16,73 @@ from api.schemas_quant_rl import (
     QuantRLSearchRequest,
     QuantRLTrainRequest,
 )
-from quant_rl.service.quant_service import QuantRLService
 
 router = APIRouter(prefix="/api/v1/quant/rl", tags=["quant-rl"])
-service = QuantRLService()
+
+
+class _LazyQuantRLService:
+    """Keep the public service handle while deferring the training stack import."""
+
+    def __init__(self) -> None:
+        self._instance: Any | None = None
+
+    def _get(self) -> Any:
+        if self._instance is None:
+            from quant_rl.service.quant_service import QuantRLService
+
+            self._instance = QuantRLService()
+        return self._instance
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get(), name)
+
+    def reset_for_tests(self) -> None:
+        self._instance = None
+
+
+service = _LazyQuantRLService()
 
 
 @router.get("/overview")
-def overview() -> dict:
-    return service.overview()
+def overview(
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    include_eligibility: bool = False,
+    include_artifacts: bool = True,
+    include_output_status: bool = False,
+    include_bindings: bool = False,
+) -> dict:
+    return service.overview(
+        limit=limit,
+        offset=offset,
+        include_eligibility=include_eligibility,
+        include_artifacts=include_artifacts,
+        include_output_status=include_output_status,
+        include_bindings=include_bindings,
+    )
 
 
 @router.get("/runs")
-def list_runs() -> dict:
-    return {"runs": service.list_runs()}
+def list_runs(
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    include_eligibility: bool = False,
+    include_bindings: bool = False,
+) -> dict:
+    return {
+        "runs": service.list_runs(
+            limit=limit,
+            offset=offset,
+            include_eligibility=include_eligibility,
+            include_bindings=include_bindings,
+        ),
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "include_eligibility": include_eligibility,
+            "include_bindings": include_bindings,
+        },
+    }
 
 
 @router.post("/datasets/build")

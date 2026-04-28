@@ -137,7 +137,7 @@ class SequenceForecasterRuntime:
         self._device = "cpu"
         self._models: dict[str, Any] = {}
         self._history_frame: pd.DataFrame | None = None
-        self._load()
+        self._load_attempted = False
 
     def available(self) -> bool:
         return self.enabled and bool(self._models) and bool(self.manifests)
@@ -158,7 +158,10 @@ class SequenceForecasterRuntime:
 
     def predict(self, signals: list[ResearchSignal], frame: pd.DataFrame) -> dict[str, list[float | None]]:
         payload = {key: [None for _ in signals] for key in SEQUENCE_TARGET_COLUMN_TO_KEY.values()}
-        if not signals or frame.empty or not self.available():
+        if not signals or frame.empty:
+            return payload
+        self._ensure_loaded()
+        if not self.available():
             return payload
         torch = self._torch
         for target_key, model in self._models.items():
@@ -189,8 +192,26 @@ class SequenceForecasterRuntime:
         multipliers = np.linspace(0.94, 1.02, num=window_size, dtype=np.float32)
         return np.stack([base * scale for scale in multipliers], axis=0)
 
+    def _ensure_loaded(self) -> None:
+        if self._load_attempted:
+            return
+        self._load_attempted = True
+        self._load()
+
     def _load(self) -> None:
         if not self.enabled:
+            return
+        candidate_dirs = [self.checkpoint_dir]
+        for target_column in self.requested_targets:
+            target_key = SEQUENCE_TARGET_COLUMN_TO_KEY.get(target_column)
+            if target_key is None:
+                continue
+            candidate_dirs.extend([self.checkpoint_dir / target_key, self.checkpoint_dir / target_column])
+        has_checkpoint = any(
+            (candidate / "sequence_manifest.json").exists() and (candidate / "model.pt").exists()
+            for candidate in candidate_dirs
+        )
+        if not has_checkpoint:
             return
         try:
             import torch

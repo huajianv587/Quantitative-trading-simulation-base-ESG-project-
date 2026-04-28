@@ -30,6 +30,7 @@ from gateway.quant.p1_stack import P1ModelSuiteRuntime
 from gateway.quant.p2_decision import P2DecisionStackRuntime
 from gateway.scheduler.event_classifier_runtime import EventClassifierRuntime
 from gateway.quant.storage import QuantStorageGateway
+from gateway.utils.llm_client import get_runtime_backend_status
 
 
 def probe_json(url: str, timeout: int = 5) -> tuple[bool, dict | str]:
@@ -51,10 +52,18 @@ def pkg_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def _auth_key_status() -> dict[str, bool]:
+    return {
+        "execution_api_key_set": bool(os.getenv("EXECUTION_API_KEY", "")),
+        "admin_api_key_set": bool(os.getenv("ADMIN_API_KEY", "")),
+        "ops_api_key_set": bool(os.getenv("OPS_API_KEY", "")),
+    }
+
+
 def main() -> int:
     remote_llm_url = os.getenv("REMOTE_LLM_URL", "").rstrip("/")
     qdrant_url = os.getenv("QDRANT_URL", "http://127.0.0.1:6333").rstrip("/")
-    local_api_url = os.getenv("LOCAL_API_URL", "http://127.0.0.1:8000").rstrip("/")
+    local_api_url = os.getenv("LOCAL_API_URL", "http://127.0.0.1:8012").rstrip("/")
     alpaca = AlpacaPaperClient()
     broker_registry = BrokerRegistry(get_alpaca_client=lambda: alpaca)
     market_data = MarketDataGateway()
@@ -75,6 +84,7 @@ def main() -> int:
             "app_mode": os.getenv("APP_MODE", "local"),
             "llm_backend_mode": os.getenv("LLM_BACKEND_MODE", "auto"),
             "remote_llm_configured": bool(remote_llm_url),
+            "remote_llm_api_key_set": bool(os.getenv("REMOTE_LLM_API_KEY", "")),
         },
         "packages": {
             "torch": pkg_available("torch"),
@@ -99,6 +109,7 @@ def main() -> int:
             "alpaca_paper": alpaca.connection_status(),
             "broker_mesh": [item.model_dump() for item in broker_registry.list_brokers()],
             "auth": auth_posture(),
+            "llm_runtime": get_runtime_backend_status(),
         },
         "health": {},
     }
@@ -154,6 +165,42 @@ def main() -> int:
             report["health"]["scheduler_worker"] = {"ok": False, "payload": "scheduler heartbeat file not found"}
     except Exception as exc:
         report["health"]["scheduler_worker"] = {"ok": False, "payload": str(exc)}
+
+    auth_keys = _auth_key_status()
+    local_runtime = report["integrations"]["llm_runtime"]
+    cloud_fallback_ready = bool(os.getenv("OPENAI_API_KEY", "") or os.getenv("DEEPSEEK_API_KEY", ""))
+    local_auto_ready = bool(
+        (local_runtime.get("local_checkpoint_exists") and local_runtime.get("local_llm_cuda_available"))
+        or cloud_fallback_ready
+    )
+    hybrid_remote_ready = bool(
+        remote_llm_url
+        and os.getenv("REMOTE_LLM_API_KEY", "")
+        and report["health"].get("remote_llm", {}).get("ok")
+    )
+    missing_production_prereqs = [
+        name for name, configured in auth_keys.items() if not configured
+    ]
+    if not local_auto_ready:
+        missing_production_prereqs.append("llm_local_auto")
+    if not hybrid_remote_ready:
+        missing_production_prereqs.append("llm_hybrid_remote")
+
+    report["readiness"] = {
+        "auth_keys": auth_keys,
+        "llm_modes": {
+            "local_auto": {
+                "ok": local_auto_ready,
+                "detail": "local checkpoint with CUDA or cloud fallback keys available",
+            },
+            "hybrid_remote": {
+                "ok": hybrid_remote_ready,
+                "detail": remote_llm_url or "REMOTE_LLM_URL not configured",
+            },
+        },
+        "missing_production_prereqs": missing_production_prereqs,
+        "status": "production_ready" if not missing_production_prereqs else "quasi_ready",
+    }
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query, Request
 from gateway.app_runtime import runtime
 from gateway.api.quant_schemas import ModelReleaseRequest
 from gateway.config import settings
-from gateway.ops.security import auth_posture
+from gateway.ops.security import auth_coverage_for_app, auth_posture
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
@@ -19,13 +19,18 @@ def _quant_service():
 
 @router.get("/runtime")
 def runtime_snapshot(request: Request) -> dict[str, Any]:
-    runtime.ensure_optional_services(start_scheduler=True)
     quant_service = _quant_service()
     brokers = quant_service.list_execution_brokers() if quant_service is not None else []
+    auth = auth_posture()
+    auth["coverage"] = auth_coverage_for_app(request.app)
+    storage_status = quant_service.storage.status() if quant_service is not None else {}
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "app_mode": getattr(runtime, "app_mode", None) or settings.APP_MODE,
-        "auth": auth_posture(),
+        "auth": auth,
+        "startup": {
+            "lazy_components": dict(getattr(runtime, "lazy_components", {}) or {}),
+        },
         "modules": {
             "rag": runtime.query_engine is not None if hasattr(runtime, "query_engine") else False,
             "esg_scorer": runtime.esg_scorer is not None,
@@ -33,7 +38,10 @@ def runtime_snapshot(request: Request) -> dict[str, Any]:
             "quant_system": quant_service is not None,
         },
         "brokers": brokers,
-        "storage": quant_service.storage.status() if quant_service is not None else {},
+        "storage": {
+            **storage_status,
+            "backend_status": storage_status,
+        },
         "request_path": request.url.path,
     }
 

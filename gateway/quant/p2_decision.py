@@ -242,7 +242,7 @@ class GraphNeuralRuntime:
         self._model = None
         self._feature_names = list(P2_PRIORITY_FEATURE_COLUMNS)
         self._cluster_labels = ["defensive", "growth", "balanced", "crowded"]
-        self._load()
+        self._load_attempted = False
 
     def available(self) -> bool:
         return self.enabled and self._model is not None
@@ -266,6 +266,7 @@ class GraphNeuralRuntime:
         neighbor_map: dict[str, list[tuple[str, float]]],
         heuristic_nodes: list[dict[str, Any]],
     ) -> dict[str, dict[str, Any]] | None:
+        self._ensure_loaded()
         if not self.available() or not signals:
             return None
         torch = self._torch
@@ -330,6 +331,12 @@ class GraphNeuralRuntime:
                 "graph_neighbor_strength": round(float(neighbor_strengths[index]), 6),
             }
         return refined
+
+    def _ensure_loaded(self) -> None:
+        if self._load_attempted:
+            return
+        self._load_attempted = True
+        self._load()
 
     def _load(self) -> None:
         if not self.enabled or not self.checkpoint_dir.exists():
