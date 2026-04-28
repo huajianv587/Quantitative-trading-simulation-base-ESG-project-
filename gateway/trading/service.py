@@ -23,6 +23,7 @@ from gateway.trading.models import (
     FactorPipelineStage,
     FusionReferenceManifest,
     OrderApprovalLedger,
+    PaperRewardCandidate,
     PriceAlertRecord,
     RiskApproval,
     SentimentSnapshot,
@@ -34,6 +35,15 @@ from gateway.trading.models import (
     TradingJobRun,
 )
 from gateway.trading.monitor import AlpacaMarketMonitor
+from gateway.trading.reward_bandit import (
+    arm_key,
+    bandit_score,
+    build_horizon_states,
+    default_bandit_state,
+    safe_float as reward_safe_float,
+    settle_candidate_with_bars,
+    update_bandit_state,
+)
 from gateway.trading.scheduler import TradingScheduler
 from gateway.trading.sentiment import SentimentAgent
 from gateway.trading.store import TradingStore
@@ -98,6 +108,295 @@ class TradingAgentService:
 
     def monitor_status(self) -> dict[str, Any]:
         return self.monitor.status().model_dump(mode="json")
+
+    def run_paper_reward_candidates(
+        self,
+        *,
+        universe: list[str] | None = None,
+        max_candidates: int = 5,
+        per_order_notional: float | None = None,
+        benchmark: str = "SPY",
+        allow_duplicates: bool = False,
+    ) -> dict[str, Any]:
+        candidate_count = max(1, min(5, int(max_candidates or 5)))
+        generated_at = utc_now()
+        batch_id = f"reward-batch-{uuid.uuid4().hex[:10]}"
+        universe_symbols = self._paper_reward_universe(universe)
+        bandit_state = self.store.get_paper_reward_bandit_state() or default_bandit_state()
+
+        execution_payload = self.quant_system.create_execution_plan(
+            benchmark=benchmark or self.quant_system.default_benchmark,
+            universe_symbols=universe_symbols,
+            broker="alpaca",
+            mode="paper",
+            submit_orders=False,
+            max_orders=candidate_count,
+            per_order_notional=per_order_notional,
+            order_type="market",
+            time_in_force="day",
+            extended_hours=False,
+            allow_duplicates=allow_duplicates,
+            reward_candidate_mode=True,
+        )
+        positions_by_symbol = {
+            str(position.get("symbol") or "").upper(): position
+            for position in (execution_payload.get("portfolio") or {}).get("positions", [])
+        }
+        ranked_orders: list[dict[str, Any]] = []
+        for order in execution_payload.get("orders", []):
+            symbol = str(order.get("symbol") or "").upper().strip()
+            features = self._paper_reward_features_for_order(order, positions_by_symbol.get(symbol))
+            scoring_candidate = {"symbol": symbol, "action": self._paper_reward_action(order), "features": features}
+            order["_paper_reward_features"] = features
+            order["_paper_reward_bandit_score"] = bandit_score(bandit_state, scoring_candidate)
+            ranked_orders.append(order)
+
+        ranked_orders.sort(key=lambda item: float(item.get("_paper_reward_bandit_score") or 0.0), reverse=True)
+        selected_orders = ranked_orders[:candidate_count]
+        execution_payload["orders"] = selected_orders
+        execution_payload["max_orders"] = len(selected_orders)
+        execution_payload["reward_batch_id"] = batch_id
+        execution_payload["reward_candidate_mode"] = True
+
+        if execution_payload.get("ready") and selected_orders:
+            adapter, _ = self.quant_system._prepare_broker_adapter(
+                execution_payload.get("broker_id") or "alpaca",
+                "paper",
+            )
+            journal = self.quant_system._build_execution_journal(
+                execution_id=execution_payload["execution_id"],
+                broker_id=execution_payload.get("broker_id") or "alpaca",
+                mode=execution_payload.get("mode", "paper"),
+                orders=selected_orders,
+                risk_summary=execution_payload.get("warnings", []),
+            )
+            execution_payload["journal"] = journal
+            try:
+                self.quant_system._submit_broker_orders(
+                    adapter=adapter,
+                    payload=execution_payload,
+                    journal=journal,
+                    capped_max_orders=len(selected_orders),
+                    capped_notional=float(execution_payload.get("per_order_notional") or per_order_notional or 0.0),
+                    normalized_order_type=str(execution_payload.get("order_type") or "market"),
+                    normalized_tif=str(execution_payload.get("time_in_force") or "day"),
+                    extended_hours=bool(execution_payload.get("extended_hours")),
+                    allow_duplicates=allow_duplicates,
+                )
+            except Exception as exc:
+                logger.warning(f"[PaperReward] candidate submission failed: {exc}")
+                execution_payload.setdefault("warnings", []).append(str(exc))
+                execution_payload["broker_status"] = "submit_failed"
+                execution_payload["submitted"] = False
+            self.quant_system._persist_execution_payload(execution_payload, execution_payload["journal"])
+
+        receipts = self._paper_reward_receipts_by_order(execution_payload.get("submitted_orders", []))
+        saved_candidates: list[dict[str, Any]] = []
+        for order in selected_orders:
+            symbol = str(order.get("symbol") or "").upper().strip()
+            client_order_id = str(order.get("client_order_id") or "")
+            receipt = receipts.get(client_order_id) or receipts.get(str(order.get("broker_order_id") or "")) or {}
+            entry_at = str(order.get("submitted_at") or receipt.get("submitted_at") or generated_at)
+            order_status = str(order.get("status") or execution_payload.get("broker_status") or "planned")
+            submitted = bool(order.get("broker_order_id") or receipt.get("id"))
+            status = self._paper_reward_candidate_status(order_status=order_status, submitted=submitted, ready=bool(execution_payload.get("ready")))
+            candidate = PaperRewardCandidate.model_validate(
+                {
+                    "candidate_id": f"reward-{uuid.uuid4().hex[:12]}",
+                    "batch_id": batch_id,
+                    "created_at": generated_at,
+                    "symbol": symbol,
+                    "action": self._paper_reward_action(order),
+                    "notional": reward_safe_float(order.get("notional") or execution_payload.get("per_order_notional")),
+                    "entry_price": self._paper_reward_entry_price(order, receipt),
+                    "entry_at": entry_at,
+                    "execution_id": execution_payload.get("execution_id"),
+                    "broker_order_id": order.get("broker_order_id") or receipt.get("id"),
+                    "client_order_id": client_order_id or receipt.get("client_order_id"),
+                    "order_status": order_status,
+                    "submitted": submitted,
+                    "strategy_id": (positions_by_symbol.get(symbol) or {}).get("strategy_bucket"),
+                    "context": {
+                        "broker_status": execution_payload.get("broker_status"),
+                        "batch_id": batch_id,
+                        "execution_id": execution_payload.get("execution_id"),
+                        "benchmark": benchmark,
+                        "order": {key: value for key, value in order.items() if not key.startswith("_paper_reward")},
+                        "receipt": receipt,
+                    },
+                    "features": order.get("_paper_reward_features") or {},
+                    "settlements": build_horizon_states(entry_at),
+                    "bandit_score": reward_safe_float(order.get("_paper_reward_bandit_score")),
+                    "status": status,
+                    "warnings": list(execution_payload.get("warnings") or []),
+                    "lineage": [
+                        "quant.create_execution_plan",
+                        "paper_reward.bandit_rank",
+                        "alpaca.paper_submit",
+                    ],
+                    "metadata": {
+                        "ready": bool(execution_payload.get("ready")),
+                        "canary_bucket": order.get("canary_bucket"),
+                        "allow_duplicates": bool(allow_duplicates),
+                    },
+                }
+            )
+            saved_candidates.append(self.store.save_paper_reward_candidate(candidate))
+
+        return {
+            "batch_id": batch_id,
+            "generated_at": generated_at,
+            "execution_id": execution_payload.get("execution_id"),
+            "requested_count": candidate_count,
+            "candidate_count": len(saved_candidates),
+            "submitted_count": sum(1 for item in saved_candidates if item.get("submitted")),
+            "broker_status": execution_payload.get("broker_status"),
+            "ready": bool(execution_payload.get("ready")),
+            "candidates": saved_candidates,
+            "bandit_state": bandit_state,
+            "execution": {
+                "execution_id": execution_payload.get("execution_id"),
+                "broker_id": execution_payload.get("broker_id"),
+                "mode": execution_payload.get("mode"),
+                "per_order_notional": execution_payload.get("per_order_notional"),
+                "submitted_orders": execution_payload.get("submitted_orders", []),
+                "warnings": execution_payload.get("warnings", []),
+            },
+        }
+
+    def settle_paper_reward_candidates(
+        self,
+        *,
+        candidate_id: str | None = None,
+        force_refresh: bool = False,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        settlement_id = f"reward-settle-{uuid.uuid4().hex[:10]}"
+        if candidate_id:
+            loaded = self.store.get_paper_reward_candidate(candidate_id)
+            candidates = [loaded] if loaded else []
+        else:
+            candidates = [
+                row
+                for row in self.store.list_paper_reward_candidates(limit=limit)
+                if str(row.get("status") or "") in {"pending", "partially_settled"}
+            ]
+
+        bandit_state = self.store.get_paper_reward_bandit_state() or default_bandit_state()
+        updated: list[dict[str, Any]] = []
+        bandit_updated = False
+        warnings: list[str] = []
+        for candidate in candidates[: max(1, int(limit or 200))]:
+            symbol = str(candidate.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            try:
+                bars_result = self.quant_system.market_data.get_daily_bars(
+                    symbol,
+                    limit=60,
+                    force_refresh=force_refresh,
+                    allow_stale_cache=True,
+                )
+                bars = self._paper_reward_bars_to_rows(bars_result)
+                settled_payload, changed = settle_candidate_with_bars(candidate, bars)
+            except Exception as exc:
+                warnings.append(f"{symbol}: {exc}")
+                continue
+
+            should_update_bandit = bool(
+                settled_payload.get("score") is not None
+                and not settled_payload.get("bandit_updated_at")
+            )
+            if should_update_bandit:
+                bandit_state = update_bandit_state(bandit_state, settled_payload)
+                settled_payload["bandit_updated_at"] = utc_now()
+                bandit_updated = True
+            if changed or should_update_bandit:
+                saved = self.store.save_paper_reward_candidate(PaperRewardCandidate.model_validate(settled_payload))
+                updated.append(saved)
+
+        if bandit_updated:
+            self.store.save_paper_reward_bandit_state(bandit_state)
+
+        return {
+            "settlement_id": settlement_id,
+            "generated_at": utc_now(),
+            "candidate_id": candidate_id,
+            "checked_count": len(candidates),
+            "updated_count": len(updated),
+            "bandit_updated": bandit_updated,
+            "updated_candidates": updated,
+            "warnings": warnings,
+            "bandit_state": bandit_state,
+        }
+
+    def paper_reward_leaderboard(self, *, limit: int = 100) -> dict[str, Any]:
+        rows = self.store.list_paper_reward_candidates(limit=limit)
+        bandit_state = self.store.get_paper_reward_bandit_state() or default_bandit_state()
+        arms: dict[str, dict[str, Any]] = {}
+        for candidate in rows:
+            key = arm_key(candidate)
+            arm = arms.setdefault(
+                key,
+                {
+                    "arm": key,
+                    "symbol": str(candidate.get("symbol") or "").upper(),
+                    "action": str(candidate.get("action") or "long"),
+                    "candidate_count": 0,
+                    "settled_count": 0,
+                    "hit_count": 0,
+                    "score_sum": 0.0,
+                    "last_score": None,
+                },
+            )
+            arm["candidate_count"] += 1
+            score = candidate.get("score")
+            if score is None:
+                continue
+            score_value = float(score)
+            arm["settled_count"] += 1
+            arm["score_sum"] += score_value
+            arm["hit_count"] += 1 if score_value > 0 else 0
+            arm["last_score"] = score_value
+
+        bandit_arms = dict((bandit_state.get("arms") or {}))
+        leaderboard = []
+        for key, payload in arms.items():
+            settled_count = max(int(payload["settled_count"]), 1)
+            bandit_payload = bandit_arms.get(key) or {}
+            leaderboard.append(
+                {
+                    **payload,
+                    "avg_score": payload["score_sum"] / settled_count if payload["settled_count"] else None,
+                    "hit_rate": payload["hit_count"] / settled_count if payload["settled_count"] else None,
+                    "bandit_pulls": int(bandit_payload.get("pulls") or 0),
+                    "bandit_avg_reward": bandit_payload.get("avg_reward"),
+                    "bandit_last_score": bandit_payload.get("last_score"),
+                }
+            )
+        leaderboard.sort(
+            key=lambda item: (
+                item.get("avg_score") is not None,
+                float(item.get("avg_score") or -999.0),
+                int(item.get("candidate_count") or 0),
+            ),
+            reverse=True,
+        )
+        ranked_candidates = sorted(
+            rows,
+            key=lambda item: (
+                item.get("score") is not None,
+                float(item.get("score") if item.get("score") is not None else item.get("partial_score") or -999.0),
+            ),
+            reverse=True,
+        )
+        return {
+            "generated_at": utc_now(),
+            "candidate_count": len(rows),
+            "leaderboard": leaderboard,
+            "candidates": ranked_candidates[: max(1, int(limit or 100))],
+            "bandit_state": bandit_state,
+        }
 
     @staticmethod
     def _policy_auto_submit_enabled(policy: dict[str, Any]) -> bool:
@@ -712,6 +1011,16 @@ class TradingAgentService:
                 result = self.run_midday_summary_agent()
             elif job_name == "review_agent":
                 result = self.run_review_agent()
+            elif job_name == "paper_reward_candidates_run":
+                result = self.run_paper_reward_candidates(
+                    universe=None,
+                    max_candidates=5,
+                    per_order_notional=None,
+                    benchmark="SPY",
+                    allow_duplicates=False,
+                )
+            elif job_name == "paper_reward_settlement":
+                result = self.settle_paper_reward_candidates()
             elif job_name == "intraday_monitor_start":
                 result = await self.start_intraday_monitor()
             elif job_name == "intraday_monitor_stop":
@@ -720,13 +1029,20 @@ class TradingAgentService:
                 raise ValueError(f"Unknown trading job: {job_name}")
             run.status = "completed"
             run.completed_at = utc_now()
-            run.auto_submit_triggered = bool(result.get("auto_submit_triggered") or result.get("submitted"))
+            run.auto_submit_triggered = bool(
+                result.get("auto_submit_triggered")
+                or result.get("submitted")
+                or int(result.get("submitted_count") or 0) > 0
+            )
             run.result_ref = {
                 "result_kind": job_name,
                 "record_id": result.get("review", {}).get("review_id")
+                or result.get("batch_id")
                 or result.get("briefing_id")
                 or result.get("monitor_run_id")
+                or result.get("settlement_id")
                 or result.get("run_id"),
+                "execution_id": result.get("execution_id"),
             }
         except Exception as exc:
             logger.warning(f"[TradingScheduler] {job_name} failed: {exc}")
@@ -1414,6 +1730,102 @@ class TradingAgentService:
         rows = self.store.list_watchlist(enabled_only=True)
         values = [str(row.get("symbol") or "").upper().strip() for row in rows if str(row.get("symbol") or "").strip()]
         return values or list(self.DEFAULT_WATCHLIST)
+
+    def _paper_reward_universe(self, universe: list[str] | None) -> list[str]:
+        configured_defaults = getattr(settings, "PAPER_REWARD_DEFAULT_UNIVERSE", None)
+        configured_values = []
+        if configured_defaults:
+            configured_values = [item.strip() for item in str(configured_defaults).split(",") if item.strip()]
+        values = [
+            *(universe or []),
+            *self._active_watchlist_symbols(),
+            *(configured_values or ["AAPL", "MSFT", "NVDA", "GOOGL", "NEE", "PG", "TSLA", "AMZN", "SPY"]),
+        ]
+        normalized = [str(item or "").upper().strip() for item in values if str(item or "").strip()]
+        return list(dict.fromkeys(normalized))
+
+    @staticmethod
+    def _paper_reward_action(order: dict[str, Any]) -> str:
+        return "short" if str(order.get("side") or "").lower() == "sell" else "long"
+
+    @staticmethod
+    def _paper_reward_features_for_order(order: dict[str, Any], position: dict[str, Any] | None) -> dict[str, Any]:
+        position = dict(position or {})
+        expected_return = reward_safe_float(position.get("expected_return"))
+        risk_budget = reward_safe_float(position.get("risk_budget"), 0.5)
+        risk_score = reward_safe_float(position.get("risk_score"), max(0.0, min(100.0, (1.0 - risk_budget) * 100.0)))
+        overall_score = reward_safe_float(position.get("score") or position.get("overall_score"), 50.0)
+        confidence = reward_safe_float(
+            position.get("decision_score") or position.get("expected_fill_probability") or order.get("expected_fill_probability"),
+            0.5,
+        )
+        return {
+            "symbol": str(order.get("symbol") or position.get("symbol") or "").upper(),
+            "action": "short" if str(order.get("side") or "").lower() == "sell" else "long",
+            "expected_return": expected_return,
+            "confidence": confidence,
+            "overall_score": overall_score,
+            "risk_score": risk_score,
+            "target_weight": reward_safe_float(order.get("target_weight") or position.get("weight")),
+            "estimated_slippage_bps": reward_safe_float(order.get("estimated_slippage_bps")),
+            "estimated_impact_bps": reward_safe_float(order.get("estimated_impact_bps")),
+            "expected_fill_probability": reward_safe_float(order.get("expected_fill_probability"), confidence),
+            "predicted_volatility_10d": reward_safe_float(
+                position.get("predicted_volatility_10d"),
+                max(0.08, min(0.60, abs(expected_return) * 2.0 + 0.12)),
+            ),
+            "strategy_bucket": position.get("strategy_bucket"),
+            "execution_tactic": order.get("execution_tactic"),
+        }
+
+    @staticmethod
+    def _paper_reward_receipts_by_order(receipts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        lookup: dict[str, dict[str, Any]] = {}
+        for receipt in receipts or []:
+            for key in (
+                receipt.get("client_order_id"),
+                receipt.get("id"),
+                receipt.get("order_id"),
+                receipt.get("symbol"),
+            ):
+                normalized = str(key or "").strip()
+                if normalized:
+                    lookup[normalized] = receipt
+        return lookup
+
+    @staticmethod
+    def _paper_reward_entry_price(order: dict[str, Any], receipt: dict[str, Any]) -> float | None:
+        for value in (
+            order.get("filled_avg_price"),
+            receipt.get("filled_avg_price"),
+            receipt.get("average_price"),
+            receipt.get("limit_price"),
+            order.get("limit_price"),
+        ):
+            price = reward_safe_float(value)
+            if price > 0:
+                return price
+        return None
+
+    @staticmethod
+    def _paper_reward_candidate_status(*, order_status: str, submitted: bool, ready: bool) -> str:
+        normalized = str(order_status or "").lower()
+        if submitted:
+            return "pending"
+        if not ready or normalized in {"blocked", "canary_holdout", "suppressed_duplicate"}:
+            return "blocked"
+        if normalized in {"failed", "rejected", "submit_failed", "not_configured", "account_error"}:
+            return "submit_failed"
+        return "submit_failed"
+
+    @staticmethod
+    def _paper_reward_bars_to_rows(bars_result: Any) -> list[dict[str, Any]]:
+        bars = getattr(bars_result, "bars", bars_result)
+        if hasattr(bars, "to_dict"):
+            return list(bars.to_dict(orient="records"))
+        if isinstance(bars, list):
+            return [dict(row) for row in bars if isinstance(row, dict)]
+        return []
 
     @staticmethod
     def _normalize_universe(universe: list[str] | None, symbol: str) -> list[str]:

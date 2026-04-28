@@ -13,6 +13,7 @@ from gateway.trading.models import (
     ExecutionPathStatus,
     FusionReferenceManifest,
     OrderApprovalLedger,
+    PaperRewardCandidate,
     PriceAlertRecord,
     RiskApproval,
     StrategyAllocation,
@@ -332,6 +333,57 @@ class TradingStore:
     def list_order_approval_ledgers(self, *, limit: int = 20, symbol: str | None = None) -> list[dict[str, Any]]:
         filters = {"symbol": str(symbol).upper()} if symbol else None
         return list_table_rows("order_approval_ledgers", limit=limit, order_by="generated_at", desc=True, filters=filters)
+
+    def save_paper_reward_candidate(self, candidate: PaperRewardCandidate) -> dict[str, Any]:
+        payload = candidate.model_dump(mode="json")
+        payload["storage"] = self.storage.persist_record("paper_reward_candidates", candidate.candidate_id, payload)
+        updated = update_table_row("paper_reward_candidates", payload, match={"candidate_id": candidate.candidate_id})
+        if not updated:
+            save_table_row("paper_reward_candidates", payload)
+        return payload
+
+    def get_paper_reward_candidate(self, candidate_id: str) -> dict[str, Any] | None:
+        local = self.storage.load_record("paper_reward_candidates", candidate_id)
+        if local:
+            return local
+        rows = list_table_rows(
+            "paper_reward_candidates",
+            limit=1,
+            order_by="created_at",
+            desc=True,
+            filters={"candidate_id": candidate_id},
+        )
+        return rows[0] if rows else None
+
+    def list_paper_reward_candidates(
+        self,
+        *,
+        limit: int = 200,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = self.storage.list_records("paper_reward_candidates")
+        if not rows:
+            rows = list_table_rows("paper_reward_candidates", limit=limit, order_by="created_at", desc=True)
+        if status:
+            rows = [row for row in rows if str(row.get("status") or "") == status]
+        rows.sort(key=lambda item: str(item.get("created_at") or item.get("generated_at") or ""), reverse=True)
+        return rows[: max(1, int(limit))]
+
+    def save_paper_reward_bandit_state(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(payload or {})
+        payload["state_id"] = "state"
+        payload["storage"] = self.storage.persist_record("paper_reward_bandit", "state", payload)
+        updated = update_table_row("paper_reward_bandit", payload, match={"state_id": "state"})
+        if not updated:
+            save_table_row("paper_reward_bandit", payload)
+        return payload
+
+    def get_paper_reward_bandit_state(self) -> dict[str, Any] | None:
+        local = self.storage.load_record("paper_reward_bandit", "state")
+        if local:
+            return local
+        rows = list_table_rows("paper_reward_bandit", limit=1, order_by="updated_at", desc=True, filters={"state_id": "state"})
+        return rows[0] if rows else None
 
     def get_fusion_manifest(self) -> dict[str, Any]:
         latest = latest_table_row("fusion_reference_manifest", order_by="generated_at")

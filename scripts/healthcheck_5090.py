@@ -39,8 +39,23 @@ def _probe_json(url: str, *, timeout: int, headers: dict[str, str] | None = None
 
 def _component_health(base_url: str, remote_llm_url: str, qdrant_url: str, timeout: int) -> dict[str, dict[str, object]]:
     ops_headers = _headers_for_ops()
-    api_health = _probe_json(f"{base_url.rstrip('/')}/health/ready", timeout=timeout)
+    api_health = _probe_json(f"{base_url.rstrip('/')}/livez", timeout=timeout)
+    ready_health = _probe_json(f"{base_url.rstrip('/')}/ready", timeout=timeout)
     ops_health = _probe_json(f"{base_url.rstrip('/')}/ops/healthcheck", timeout=timeout, headers=ops_headers)
+    paper_preflight = _probe_json(
+        f"{base_url.rstrip('/')}/api/v1/quant/deployment/preflight?profile=paper_cloud&dry_run=true",
+        timeout=timeout,
+        headers=ops_headers,
+    )
+    paper_observability = _probe_json(
+        f"{base_url.rstrip('/')}/api/v1/quant/observability/paper-workflow?window_days=30",
+        timeout=timeout,
+        headers=ops_headers,
+    )
+    if isinstance(paper_preflight.get("response"), dict):
+        paper_preflight["ok"] = bool(paper_preflight["response"].get("ready"))
+    if isinstance(paper_observability.get("response"), dict):
+        paper_observability["ok"] = "summary" in paper_observability["response"]
     remote_health = _probe_json(f"{remote_llm_url.rstrip('/')}/health", timeout=timeout)
     qdrant_health = _probe_json(f"{qdrant_url.rstrip('/')}/healthz", timeout=timeout)
     scheduler_meta = {}
@@ -62,7 +77,10 @@ def _component_health(base_url: str, remote_llm_url: str, qdrant_url: str, timeo
         }
     return {
         "api": api_health,
+        "ready": ready_health,
         "ops_healthcheck": ops_health,
+        "paper_cloud_preflight": paper_preflight,
+        "paper_observability": paper_observability,
         "remote_llm": remote_health,
         "qdrant": qdrant_health,
         "quant_scheduler": scheduler_health,
@@ -72,7 +90,7 @@ def _component_health(base_url: str, remote_llm_url: str, qdrant_url: str, timeo
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cloud 5090 healthcheck for the ESG Quant stack.")
-    parser.add_argument("--base-url", default=os.getenv("LOCAL_API_URL") or "http://127.0.0.1:8000")
+    parser.add_argument("--base-url", default=os.getenv("LOCAL_API_URL") or "http://127.0.0.1:8012")
     parser.add_argument("--remote-llm-url", default=os.getenv("REMOTE_LLM_URL") or "http://127.0.0.1:8010")
     parser.add_argument("--qdrant-url", default=os.getenv("QDRANT_URL") or "http://127.0.0.1:6333")
     parser.add_argument("--timeout", type=int, default=5)
@@ -91,7 +109,7 @@ def main() -> int:
             "qdrant_url": args.qdrant_url,
             "components": components,
         }
-        required = ["api", "ops_healthcheck", "remote_llm", "qdrant", "quant_scheduler", "model_registry"]
+        required = ["api", "ops_healthcheck", "paper_cloud_preflight", "paper_observability", "remote_llm", "qdrant", "quant_scheduler", "model_registry"]
         snapshot["ready"] = all(bool(components[name].get("ok")) for name in required)
         if snapshot["ready"]:
             break

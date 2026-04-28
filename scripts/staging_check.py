@@ -6,7 +6,8 @@ Usage examples:
   python scripts/staging_check.py preflight
   python scripts/staging_check.py up --require-module rag --require-module esg_scorer
   python scripts/staging_check.py compose
-  python scripts/staging_check.py smoke --base-url http://localhost:8000
+  python scripts/staging_check.py smoke --base-url http://localhost:8012
+  python scripts/staging_check.py paper-cloud --base-url http://localhost:8012
   python scripts/staging_check.py all --require-module rag --require-module esg_scorer
 """
 
@@ -26,15 +27,50 @@ from urllib.request import Request, urlopen
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
-DEFAULT_BASE_URL = "http://localhost:8000"
-DEFAULT_ENDPOINTS = ("/health", "/dashboard/overview")
+DEFAULT_BASE_URL = "http://localhost:8012"
+DEFAULT_ENDPOINTS = ("/health", "/health/ready", "/dashboard/overview", "/api/v1/quant/platform/overview")
+PAPER_CLOUD_ENDPOINTS = (
+    "/livez",
+    "/api/v1/quant/deployment/preflight?profile=paper_cloud&dry_run=true",
+    "/api/v1/quant/observability/paper-workflow?window_days=30",
+    "/api/v1/quant/paper/performance?window_days=90",
+    "/api/v1/quant/paper/daily-digest/latest?phase=postclose",
+)
 REQUIRED_ENV_VARS = (
     "OPENAI_API_KEY",
     "SUPABASE_URL",
+    "REMOTE_LLM_URL",
+    "REMOTE_LLM_API_KEY",
+    "SMTP_HOST",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "ALPACA_API_KEY",
+    "ALPACA_API_SECRET",
+    "EXECUTION_API_KEY",
+    "ADMIN_API_KEY",
+    "OPS_API_KEY",
 )
-OPTIONAL_ENV_GROUPS = (
+PAPER_CLOUD_REQUIRED_ENV_VARS = (
+    "ALPACA_API_KEY",
+    "ALPACA_API_SECRET",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_TOKEN_ROTATION_CONFIRMED",
+    "QUANT_DAILY_DIGEST_RECIPIENTS",
+    "QUANT_DAILY_DIGEST_CHANNELS",
+    "SCHEDULER_AUTO_SUBMIT",
+    "ALPACA_DEFAULT_TEST_NOTIONAL",
+    "EXECUTION_API_KEY",
+    "OPS_API_KEY",
+)
+REQUIRED_ENV_GROUPS = (
     ("SUPABASE_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY"),
     ("ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"),
+)
+OPTIONAL_ENV_GROUPS = (
+    ("IBKR_GATEWAY_URL", "IBKR_ACCOUNT_ID", "IBKR_USERNAME", "IBKR_PASSWORD"),
+    ("TIGER_ID", "TIGER_ACCOUNT", "TIGER_PRIVATE_KEY_PATH", "TIGER_ACCESS_TOKEN"),
+    ("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN"),
 )
 EXPECTED_PATHS = (
     PROJECT_ROOT / "docker-compose.yml",
@@ -48,7 +84,7 @@ EXPECTED_DIRS = (
     PROJECT_ROOT / "frontend",
     PROJECT_ROOT / "configs",
 )
-DEFAULT_PORTS = (80, 8000, 6333)
+DEFAULT_PORTS = (80, 8012, 6333)
 
 
 def ok(message: str) -> None:
@@ -85,6 +121,14 @@ def load_env_file(path: Path) -> dict[str, str]:
     return env
 
 
+def merged_env(path: Path) -> dict[str, str]:
+    values = load_env_file(path)
+    for key, value in os.environ.items():
+        if value:
+            values[key] = value
+    return values
+
+
 def run_command(command: list[str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
@@ -106,7 +150,7 @@ def check_port(port: int) -> bool:
 
 def preflight(env_file: Path) -> bool:
     success = True
-    env_values = load_env_file(env_file)
+    env_values = merged_env(env_file)
 
     print("== Preflight ==")
     if env_file.exists():
@@ -137,10 +181,10 @@ def preflight(env_file: Path) -> bool:
             fail(f"required env missing: {key}")
             success = False
 
-    for group in OPTIONAL_ENV_GROUPS:
+    for group in REQUIRED_ENV_GROUPS:
         resolved = None
         for key in group:
-            value = env_values.get(key) or os.getenv(key, "")
+            value = env_values.get(key, "")
             if value:
                 resolved = (key, value)
                 break
@@ -149,6 +193,15 @@ def preflight(env_file: Path) -> bool:
         else:
             fail(f"missing env group: one of {', '.join(group)}")
             success = False
+
+    for group in OPTIONAL_ENV_GROUPS:
+        populated = [key for key in group if env_values.get(key)]
+        if len(populated) == len(group):
+            ok(f"optional broker group satisfied: {', '.join(populated)}")
+        elif populated:
+            warn(f"optional broker group partially configured: {', '.join(populated)}")
+        else:
+            warn(f"optional broker group blocked: {', '.join(group)}")
 
     supabase_url = env_values.get("SUPABASE_URL") or os.getenv("SUPABASE_URL", "")
     if supabase_url.startswith("https://") and ".supabase.co" in supabase_url:
@@ -254,8 +307,20 @@ def compose_up(base_url: str, build: bool, require_modules: list[str], retries: 
     return health_ok and smoke_ok
 
 
-def http_json(url: str, timeout: int = 20) -> tuple[int, str]:
-    request = Request(url, headers={"User-Agent": "staging-check/1.0"})
+def http_request(
+    url: str,
+    *,
+    timeout: int = 20,
+    method: str = "GET",
+    body: dict | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, str]:
+    request_headers = {"User-Agent": "staging-check/1.0", **(headers or {})}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json")
+    request = Request(url, headers=request_headers, data=data, method=method.upper())
     try:
         with urlopen(request, timeout=timeout) as response:
             return response.getcode(), response.read().decode("utf-8", errors="ignore")
@@ -268,12 +333,36 @@ def http_json(url: str, timeout: int = 20) -> tuple[int, str]:
 def smoke(base_url: str, require_modules: list[str], retries: int, delay: float) -> bool:
     print("== Smoke ==")
     success = True
+    env_values = merged_env(DEFAULT_ENV_FILE)
+    protected_requests = [
+        {
+            "method": "GET",
+            "path": "/ops/healthcheck",
+            "headers": {
+                "x-api-key": env_values.get("OPS_API_KEY") or env_values.get("ADMIN_API_KEY") or env_values.get("EXECUTION_API_KEY") or "",
+            },
+        },
+        {
+            "method": "POST",
+            "path": "/agent/analyze",
+            "body": {"question": "Summarize Microsoft ESG posture.", "session_id": "staging-check"},
+            "headers": {},
+        },
+        {
+            "method": "POST",
+            "path": "/admin/reports/generate",
+            "body": {"report_type": "daily", "companies": ["Microsoft"], "async": False},
+            "headers": {
+                "x-api-key": env_values.get("ADMIN_API_KEY") or env_values.get("OPS_API_KEY") or "",
+            },
+        },
+    ]
 
     for endpoint in DEFAULT_ENDPOINTS:
         last_error = None
         for attempt in range(1, retries + 1):
             try:
-                status, _ = http_json(f"{base_url}{endpoint}")
+                status, _ = http_request(f"{base_url}{endpoint}")
                 if status == 200:
                     ok(f"{endpoint} -> 200")
                     break
@@ -285,8 +374,30 @@ def smoke(base_url: str, require_modules: list[str], retries: int, delay: float)
             fail(f"{endpoint} failed after {retries} attempts: {last_error}")
             success = False
 
+    for request_spec in protected_requests:
+        last_error = None
+        path = request_spec["path"]
+        for attempt in range(1, retries + 1):
+            try:
+                status, _ = http_request(
+                    f"{base_url}{path}",
+                    method=request_spec["method"],
+                    body=request_spec.get("body"),
+                    headers=request_spec.get("headers"),
+                )
+                if status == 200:
+                    ok(f"{request_spec['method']} {path} -> 200")
+                    break
+                last_error = f"unexpected status {status}"
+            except Exception as exc:  # pragma: no cover - defensive
+                last_error = str(exc)
+            time.sleep(delay)
+        else:
+            fail(f"{request_spec['method']} {path} failed after {retries} attempts: {last_error}")
+            success = False
+
     try:
-        status, body = http_json(f"{base_url}/health")
+        status, body = http_request(f"{base_url}/health")
         if status != 200:
             fail("/health did not return 200 for module check")
             return False
@@ -305,9 +416,60 @@ def smoke(base_url: str, require_modules: list[str], retries: int, delay: float)
     return success
 
 
+def paper_cloud(base_url: str, env_file: Path, retries: int, delay: float) -> bool:
+    print("== Paper Cloud ==")
+    success = True
+    env_values = merged_env(env_file)
+    for key in PAPER_CLOUD_REQUIRED_ENV_VARS:
+        value = env_values.get(key, "")
+        if value:
+            ok(f"paper env present: {key}={mask_value(value)}")
+        else:
+            fail(f"paper env missing: {key}")
+            success = False
+
+    provider = env_values.get("MARKET_DATA_PROVIDER", "")
+    if provider and "synthetic" not in provider.lower():
+        ok(f"market data provider policy: {provider}")
+    else:
+        fail("MARKET_DATA_PROVIDER must be configured and must not include synthetic")
+        success = False
+    if str(env_values.get("TELEGRAM_TOKEN_ROTATION_CONFIRMED", "")).lower() == "true":
+        ok("Telegram token rotation confirmed")
+    else:
+        fail("TELEGRAM_TOKEN_ROTATION_CONFIRMED must be true for paper-cloud production")
+        success = False
+
+    headers = {"x-api-key": env_values.get("OPS_API_KEY") or env_values.get("ADMIN_API_KEY") or env_values.get("EXECUTION_API_KEY") or ""}
+    for endpoint in PAPER_CLOUD_ENDPOINTS:
+        last_error = None
+        for _attempt in range(1, retries + 1):
+            try:
+                status, body = http_request(f"{base_url}{endpoint}", headers=headers)
+                if status == 200:
+                    if "deployment/preflight" in endpoint:
+                        payload = json.loads(body)
+                        if payload.get("ready"):
+                            ok(f"{endpoint} -> ready")
+                            break
+                        last_error = f"preflight blockers: {payload.get('blockers')}"
+                    else:
+                        ok(f"{endpoint} -> 200")
+                        break
+                else:
+                    last_error = f"unexpected status {status}"
+            except Exception as exc:
+                last_error = str(exc)
+            time.sleep(delay)
+        else:
+            fail(f"{endpoint} failed after {retries} attempts: {last_error}")
+            success = False
+    return success
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run staging checks for ESG Agentic RAG Copilot")
-    parser.add_argument("mode", choices=["preflight", "up", "compose", "smoke", "all"])
+    parser.add_argument("mode", choices=["preflight", "up", "compose", "smoke", "paper-cloud", "all"])
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--require-module", action="append", default=[])
@@ -326,6 +488,8 @@ def main() -> int:
         overall = compose_health() and overall
     if args.mode in {"smoke", "all"}:
         overall = smoke(args.base_url, args.require_module, args.retries, args.delay) and overall
+    if args.mode in {"paper-cloud", "all"}:
+        overall = paper_cloud(args.base_url, args.env_file, args.retries, args.delay) and overall
 
     return 0 if overall else 1
 

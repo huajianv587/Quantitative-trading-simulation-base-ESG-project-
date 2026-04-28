@@ -138,9 +138,15 @@ class Settings:
         self.MOMENTUM_LONG_WINDOW = _env_int("MOMENTUM_LONG_WINDOW", default=60)
         self.SIGNAL_ENGINE_DEFAULT = _first_env("SIGNAL_ENGINE_DEFAULT", default="hybrid_momentum")
         self.SCHEDULER_TIMEZONE = _first_env("SCHEDULER_TIMEZONE", default="America/New_York")
+        self.TRADING_CALENDAR_ID = _first_env("TRADING_CALENDAR_ID", default="XNYS")
         self.SCHEDULER_SIGNAL_UNIVERSE = _first_env("SCHEDULER_SIGNAL_UNIVERSE", default="AAPL,MSFT,TSLA")
         self.SCHEDULER_PREOPEN_SIGNAL_TIME = _first_env("SCHEDULER_PREOPEN_SIGNAL_TIME", default="09:00")
         self.SCHEDULER_EXECUTION_TIME = _first_env("SCHEDULER_EXECUTION_TIME", default="09:31")
+        self.SCHEDULER_HYBRID_WORKFLOW_TIME = _first_env("SCHEDULER_HYBRID_WORKFLOW_TIME", default="09:35")
+        self.SCHEDULER_EXECUTION_ENGINE = _first_env("SCHEDULER_EXECUTION_ENGINE", default="hybrid_paper_workflow")
+        self.SCHEDULER_REQUIRE_TRADING_SESSION = _env_bool("SCHEDULER_REQUIRE_TRADING_SESSION", default=True)
+        self.SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT = _env_bool("SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT", default=True)
+        self.SCHEDULER_CLOSE_GRACE_MINUTES = _env_int("SCHEDULER_CLOSE_GRACE_MINUTES", default=10)
         self.SCHEDULER_AUTO_SUBMIT = _env_bool("SCHEDULER_AUTO_SUBMIT", default=False)
         self.SCHEDULER_MAX_EXECUTION_SYMBOLS = _env_int("SCHEDULER_MAX_EXECUTION_SYMBOLS", default=2)
         self.SCHEDULER_MAX_DAILY_NOTIONAL_USD = _env_float("SCHEDULER_MAX_DAILY_NOTIONAL_USD", default=1000.0)
@@ -156,6 +162,56 @@ class Settings:
         self.SCHEDULER_HEARTBEAT_PATH = _first_env("SCHEDULER_HEARTBEAT_PATH", default="storage/quant/scheduler/heartbeat.json")
         self.SCHEDULER_LOCK_PATH = _first_env("SCHEDULER_LOCK_PATH", default="storage/quant/scheduler/worker.lock")
         self.SCHEDULER_LOCK_STALE_MINUTES = _env_int("SCHEDULER_LOCK_STALE_MINUTES", default=240)
+        self.SCHEDULER_FAILURE_THRESHOLD = _env_int("SCHEDULER_FAILURE_THRESHOLD", default=3)
+        self.SCHEDULER_SYMBOL_FRESHNESS_ENABLED = _env_bool("SCHEDULER_SYMBOL_FRESHNESS_ENABLED", default=True)
+        self.WATCHDOG_API_URL = _first_env("WATCHDOG_API_URL", default="http://127.0.0.1:8012")
+        self.WATCHDOG_HEARTBEAT_STALE_SECONDS = _env_int("WATCHDOG_HEARTBEAT_STALE_SECONDS", default=300)
+        self.WATCHDOG_RESTART_SERVICES = _first_env("WATCHDOG_RESTART_SERVICES", default="api,quant-scheduler")
+        self.WATCHDOG_READY_RESTART_THRESHOLD = _env_int("WATCHDOG_READY_RESTART_THRESHOLD", default=3)
+        self.UNATTENDED_PAPER_MODE = _env_bool("UNATTENDED_PAPER_MODE", default=True)
+        self.ALERT_NOTIFIER = _first_env("ALERT_NOTIFIER", default="telegram")
+        self.ALERT_NOTIFIER_TIMEOUT_SECONDS = _env_int("ALERT_NOTIFIER_TIMEOUT_SECONDS", default=5)
+        self.TELEGRAM_BOT_TOKEN = _first_env("TELEGRAM_BOT_TOKEN", default="")
+        self.TELEGRAM_CHAT_ID = _first_env("TELEGRAM_CHAT_ID", default="")
+        self.TELEGRAM_TOKEN_ROTATION_CONFIRMED = _env_bool("TELEGRAM_TOKEN_ROTATION_CONFIRMED", default=False)
+        self.SLACK_WEBHOOK_URL = _first_env("SLACK_WEBHOOK_URL", default="")
+        self.DEPLOYMENT_PREFLIGHT_MAX_AGE_MINUTES = _env_int("DEPLOYMENT_PREFLIGHT_MAX_AGE_MINUTES", default=15)
+        self.PAPER_CLOUD_ACCEPTANCE_REQUIRE_READY = _env_bool("PAPER_CLOUD_ACCEPTANCE_REQUIRE_READY", default=True)
+        self.RESTORE_DRILL_ENABLED = _env_bool("RESTORE_DRILL_ENABLED", default=True)
+        self.SLO_WINDOW_DAYS = _first_env("SLO_WINDOW_DAYS", default="30,90")
+        self.SHADOW_RETRAIN_ENABLED = _env_bool("SHADOW_RETRAIN_ENABLED", default=False)
+        self.PAPER_CHAOS_DRILL_ENABLED = _env_bool("PAPER_CHAOS_DRILL_ENABLED", default=False)
+        self.PAPER_EVIDENCE_BACKFILL_DAYS = _env_int("PAPER_EVIDENCE_BACKFILL_DAYS", default=120)
+        self.QUANT_DAILY_DIGEST_RECIPIENTS = _first_env(
+            "QUANT_DAILY_DIGEST_RECIPIENTS",
+            "QUANT_DAILY_DIGEST_EMAIL",
+            default="jianghuajian99@gmail.com",
+        )
+        self.QUANT_DAILY_DIGEST_CHANNELS = _first_env("QUANT_DAILY_DIGEST_CHANNELS", default="telegram,email")
+        self.QUANT_DAILY_DIGEST_PREOPEN_ENABLED = _env_bool("QUANT_DAILY_DIGEST_PREOPEN_ENABLED", default=True)
+        self.QUANT_DAILY_DIGEST_POSTCLOSE_ENABLED = _env_bool("QUANT_DAILY_DIGEST_POSTCLOSE_ENABLED", default=True)
+        self.QUANT_DAILY_DIGEST_RETRY_MINUTES = _env_int("QUANT_DAILY_DIGEST_RETRY_MINUTES", default=15)
+        self.QUANT_WEEKLY_DIGEST_ENABLED = _env_bool("QUANT_WEEKLY_DIGEST_ENABLED", default=True)
+        self.QUANT_WEEKLY_DIGEST_DAY = _first_env("QUANT_WEEKLY_DIGEST_DAY", default="friday")
+        self.QUANT_WEEKLY_DIGEST_WINDOW_DAYS = _env_int("QUANT_WEEKLY_DIGEST_WINDOW_DAYS", default=7)
+        self.EXECUTION_SESSION_SUBMIT_LOCK_ENABLED = _env_bool("EXECUTION_SESSION_SUBMIT_LOCK_ENABLED", default=True)
+        self.SESSION_EVIDENCE_ENABLED = _env_bool("SESSION_EVIDENCE_ENABLED", default=True)
+        self.ALPACA_PAPER_RECONCILE_ENABLED = _env_bool("ALPACA_PAPER_RECONCILE_ENABLED", default=True)
+        self.DIGEST_RETRY_ENABLED = _env_bool("DIGEST_RETRY_ENABLED", default=True)
+        self.STORAGE_BACKUP_ENABLED = _env_bool("STORAGE_BACKUP_ENABLED", default=True)
+        self.STORAGE_BACKUP_RETENTION_DAYS = _env_int("STORAGE_BACKUP_RETENTION_DAYS", default=30)
+        self.STORAGE_DISK_CRITICAL_FREE_PERCENT = _env_float("STORAGE_DISK_CRITICAL_FREE_PERCENT", default=5.0)
+        self.MODEL_RETRAIN_SHADOW_ONLY = _env_bool("MODEL_RETRAIN_SHADOW_ONLY", default=True)
+        self.OMP_NUM_THREADS = _env_int("OMP_NUM_THREADS", default=2)
+        self.MKL_NUM_THREADS = _env_int("MKL_NUM_THREADS", default=2)
+        self.OPENBLAS_NUM_THREADS = _env_int("OPENBLAS_NUM_THREADS", default=2)
+        self.NUMEXPR_NUM_THREADS = _env_int("NUMEXPR_NUM_THREADS", default=2)
+        self.TORCH_NUM_THREADS = _env_int("TORCH_NUM_THREADS", default=2)
+        self.TOKENIZERS_PARALLELISM = _first_env("TOKENIZERS_PARALLELISM", default="false")
+        self.EXECUTION_PAPER_NEGATIVE_CASH_CIRCUIT_BREAKER_USD = _env_float(
+            "EXECUTION_PAPER_NEGATIVE_CASH_CIRCUIT_BREAKER_USD",
+            default=50000.0,
+        )
 
         self.ALPACA_API_KEY = _first_env(
             "ALPACA_API_KEY",
@@ -197,7 +253,12 @@ class Settings:
         self.ALPACA_API_TIMEOUT = _env_int("ALPACA_API_TIMEOUT", default=20)
         self.ALPACA_DEFAULT_TEST_NOTIONAL = _env_float("ALPACA_DEFAULT_TEST_NOTIONAL", default=1.0)
         self.ALPACA_MAX_TEST_ORDERS = _env_int("ALPACA_MAX_TEST_ORDERS", default=2)
-        self.ALPACA_MAX_ORDER_NOTIONAL = _env_float("ALPACA_MAX_ORDER_NOTIONAL", default=10.0)
+        self.ALPACA_MAX_ORDER_NOTIONAL = _env_float("ALPACA_MAX_ORDER_NOTIONAL", default=2500.0)
+        self.ALPACA_PAPER_MAX_ORDER_NOTIONAL = _env_float(
+            "ALPACA_PAPER_MAX_ORDER_NOTIONAL",
+            default=self.ALPACA_MAX_ORDER_NOTIONAL,
+        )
+        self.ALPACA_LIVE_MAX_ORDER_NOTIONAL = _env_float("ALPACA_LIVE_MAX_ORDER_NOTIONAL", default=1.0)
         self.ALPACA_ENABLE_LIVE_TRADING = _env_bool("ALPACA_ENABLE_LIVE_TRADING", default=False)
 
         self.QUANT_BROKER_DEFAULT = _env_choice(
@@ -207,7 +268,18 @@ class Settings:
         )
         self.EXECUTION_REQUIRE_MARKET_OPEN = _env_bool("EXECUTION_REQUIRE_MARKET_OPEN", default=False)
         self.EXECUTION_MAX_DAILY_ORDERS = _env_int("EXECUTION_MAX_DAILY_ORDERS", default=25)
+        self.EXECUTION_MAX_DAILY_NOTIONAL = _env_float("EXECUTION_MAX_DAILY_NOTIONAL", default=5.0)
         self.EXECUTION_MAX_NOTIONAL_PER_ORDER = _env_float("EXECUTION_MAX_NOTIONAL_PER_ORDER", default=2500.0)
+        self.EXECUTION_PAPER_MAX_NOTIONAL_PER_ORDER = _env_float(
+            "EXECUTION_PAPER_MAX_NOTIONAL_PER_ORDER",
+            default=self.EXECUTION_MAX_NOTIONAL_PER_ORDER,
+        )
+        self.EXECUTION_LIVE_MAX_NOTIONAL_PER_ORDER = _env_float("EXECUTION_LIVE_MAX_NOTIONAL_PER_ORDER", default=1.0)
+        self.EXECUTION_LIVE_MAX_DAILY_NOTIONAL = _env_float(
+            "EXECUTION_LIVE_MAX_DAILY_NOTIONAL",
+            "EXECUTION_MAX_DAILY_NOTIONAL",
+            default=5.0,
+        )
         self.EXECUTION_MIN_BUYING_POWER_BUFFER = _env_float("EXECUTION_MIN_BUYING_POWER_BUFFER", default=100.0)
         self.EXECUTION_SINGLE_NAME_WEIGHT_CAP = _env_float("EXECUTION_SINGLE_NAME_WEIGHT_CAP", default=0.26)
         self.EXECUTION_DEFAULT_SLIPPAGE_BPS = _env_float("EXECUTION_DEFAULT_SLIPPAGE_BPS", default=8.0)
@@ -239,6 +311,19 @@ class Settings:
             default=1,
         )
         self.EXECUTION_WS_ENABLED = _env_bool("EXECUTION_WS_ENABLED", default=True)
+        self.PAPER_GATE_WINDOW_TRADING_DAYS = _env_int("PAPER_GATE_WINDOW_TRADING_DAYS", default=60)
+        self.PAPER_GATE_MIN_VALID_DAYS = _env_int("PAPER_GATE_MIN_VALID_DAYS", default=40)
+        self.PAPER_GATE_MIN_NET_RETURN = _env_float("PAPER_GATE_MIN_NET_RETURN", default=0.0)
+        self.PAPER_GATE_MIN_EXCESS_RETURN = _env_float("PAPER_GATE_MIN_EXCESS_RETURN", default=0.0)
+        self.PAPER_GATE_MIN_SHARPE = _env_float("PAPER_GATE_MIN_SHARPE", default=0.5)
+        self.PAPER_GATE_MAX_DRAWDOWN = _env_float("PAPER_GATE_MAX_DRAWDOWN", default=0.08)
+        self.PAPER_GATE_MAX_DRAWDOWN_UNDERPERFORMANCE = _env_float(
+            "PAPER_GATE_MAX_DRAWDOWN_UNDERPERFORMANCE",
+            default=0.03,
+        )
+        self.PAPER_GATE_REQUIRE_PAPER_EVIDENCE = _env_bool("PAPER_GATE_REQUIRE_PAPER_EVIDENCE", default=True)
+        self.PROMOTION_POLICY_PATH = _first_env("PROMOTION_POLICY_PATH", default="configs/promotion_policy.paper.json")
+        self.SYNTHETIC_EVIDENCE_POLICY = _first_env("SYNTHETIC_EVIDENCE_POLICY", default="block")
 
         self.ALPHA_RANKER_BACKEND = _first_env("ALPHA_RANKER_BACKEND", default="auto")
         self.ALPHA_RANKER_CHECKPOINT_DIR = _first_env(
@@ -332,6 +417,19 @@ class Settings:
         self.EXECUTION_API_KEY = _first_env("EXECUTION_API_KEY")
         self.ADMIN_API_KEY = _first_env("ADMIN_API_KEY")
         self.OPS_API_KEY = _first_env("OPS_API_KEY")
+        self.TRADING_API_KEY = _first_env("TRADING_API_KEY")
+        self.SCHEDULER_API_KEY = _first_env("SCHEDULER_API_KEY")
+        self.RESEARCH_API_KEY = _first_env("RESEARCH_API_KEY")
+        self.USER_API_KEY = _first_env("USER_API_KEY")
+        self.AUTH_SECRET_KEY = _first_env("AUTH_SECRET_KEY")
+        self.AUTH_PASSWORD_PBKDF2_ITERATIONS = _env_int("AUTH_PASSWORD_PBKDF2_ITERATIONS", default=260000)
+        self.AUTH_RATE_LIMIT_WINDOW_SECONDS = _env_int("AUTH_RATE_LIMIT_WINDOW_SECONDS", default=60)
+        self.AUTH_LOGIN_RATE_LIMIT_MAX = _env_int("AUTH_LOGIN_RATE_LIMIT_MAX", default=12)
+        self.AUTH_RESET_RATE_LIMIT_MAX = _env_int("AUTH_RESET_RATE_LIMIT_MAX", default=6)
+        self.EXTERNAL_SCAN_RATE_LIMIT_MAX = _env_int("EXTERNAL_SCAN_RATE_LIMIT_MAX", default=30)
+        self.EXTERNAL_SCAN_RATE_LIMIT_WINDOW_SECONDS = _env_int("EXTERNAL_SCAN_RATE_LIMIT_WINDOW_SECONDS", default=60)
+        self.API_MUTATION_RATE_LIMIT_MAX = _env_int("API_MUTATION_RATE_LIMIT_MAX", default=120)
+        self.API_MUTATION_RATE_LIMIT_WINDOW_SECONDS = _env_int("API_MUTATION_RATE_LIMIT_WINDOW_SECONDS", default=60)
         self.AUTH_DEFAULT_REQUIRED = _env_bool("AUTH_DEFAULT_REQUIRED", default=True)
         self.AUTH_ALLOW_LOCALHOST_DEV = _env_bool("AUTH_ALLOW_LOCALHOST_DEV", default=True)
         self.AUTH_BEARER_ONLY = _env_bool("AUTH_BEARER_ONLY", default=False)
@@ -344,7 +442,7 @@ class Settings:
         self.PAPER_FEEDBACK_CAPTURE_ENABLED = _env_bool("PAPER_FEEDBACK_CAPTURE_ENABLED", default=True)
         self.API_HEALTHCHECK_REQUIRED_COMPONENTS = _first_env(
             "API_HEALTHCHECK_REQUIRED_COMPONENTS",
-            default="api,quant_scheduler,remote_llm,qdrant",
+            default="api,auth_keys,llm_local_auto,llm_hybrid_remote,qdrant,model_registry",
         )
         self.AUTO_RECOVERY_ENABLED = _env_bool("AUTO_RECOVERY_ENABLED", default=True)
 

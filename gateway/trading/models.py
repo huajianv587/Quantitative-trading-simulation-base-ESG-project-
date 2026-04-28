@@ -366,6 +366,46 @@ class OrderApprovalLedger(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PaperRewardHorizon(BaseModel):
+    horizon: int
+    status: Literal["pending", "settled", "unavailable"] = "pending"
+    due_date: str | None = None
+    close_price: float | None = None
+    close_date: str | None = None
+    return_pct: float | None = None
+    score: float | None = None
+    score_components: dict[str, Any] = Field(default_factory=dict)
+    settled_at: str | None = None
+
+
+class PaperRewardCandidate(BaseModel):
+    candidate_id: str
+    batch_id: str
+    created_at: str
+    symbol: str
+    action: Literal["long", "short"] = "long"
+    notional: float = Field(ge=0.0, default=0.0)
+    entry_price: float | None = None
+    entry_at: str | None = None
+    execution_id: str | None = None
+    broker_order_id: str | None = None
+    client_order_id: str | None = None
+    order_status: str = "planned"
+    submitted: bool = False
+    strategy_id: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+    features: dict[str, Any] = Field(default_factory=dict)
+    settlements: dict[str, PaperRewardHorizon | dict[str, Any]] = Field(default_factory=dict)
+    partial_score: float | None = None
+    score: float | None = None
+    bandit_score: float | None = None
+    bandit_updated_at: str | None = None
+    status: Literal["pending", "partially_settled", "settled", "submit_failed", "blocked"] = "pending"
+    warnings: list[str] = Field(default_factory=list)
+    lineage: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class FusionReferenceItem(BaseModel):
     source_project: str
     capability: str

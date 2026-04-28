@@ -7,7 +7,9 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, st
 from gateway.api.quant_schemas import (
     QuantBacktestRequest,
     QuantBacktestSweepRequest,
+    QuantAlpacaPaperReconcileRequest,
     QuantDatasetBuildRequest,
+    QuantDailyDigestSendRequest,
     QuantDecisionExplainRequest,
     QuantExecutionRequest,
     QuantFactorDiscoveryRequest,
@@ -18,12 +20,20 @@ from gateway.api.quant_schemas import (
     QuantOutcomeEvaluateRequest,
     QuantP1StackRequest,
     QuantP2DecisionRequest,
+    QuantPaperOutcomesSettleRequest,
+    QuantPaperPerformanceBackfillRequest,
+    QuantPaperPerformanceSnapshotRequest,
     QuantPortfolioRequest,
+    QuantPromotionEvaluateRequest,
     QuantResearchQualityRequest,
     QuantResearchRequest,
+    QuantShadowRetrainRequest,
+    QuantWorkflowRunRequest,
     ResearchContextResponse,
     QuantSimulationScenarioRequest,
+    QuantStorageBackupRequest,
     QuantValidationRequest,
+    QuantWeeklyDigestSendRequest,
 )
 from gateway.app_runtime import runtime
 from gateway.config import settings
@@ -66,6 +76,7 @@ def _run_execution_request(req: QuantExecutionRequest):
         allow_duplicates=req.allow_duplicates,
         live_confirmed=req.live_confirmed,
         operator_confirmation=req.operator_confirmation,
+        strategy_id=req.strategy_id,
     )
 
 
@@ -160,6 +171,221 @@ def run_p2_decision(req: QuantP2DecisionRequest):
     )
 
 
+@router.post("/workflows/paper-strategy/run")
+def run_hybrid_paper_strategy_workflow(req: QuantWorkflowRunRequest):
+    return _quant_service().run_hybrid_paper_strategy_workflow(
+        universe_symbols=req.universe or None,
+        benchmark=req.benchmark,
+        capital_base=req.capital_base,
+        strategy_mode=req.strategy_mode,
+        rl_algorithm=req.rl_algorithm,
+        rl_action_type=req.rl_action_type,
+        rl_dataset_path=req.rl_dataset_path,
+        rl_checkpoint_path=req.rl_checkpoint_path,
+        submit_orders=req.submit_orders,
+        mode=req.mode,
+        broker=req.broker,
+        max_orders=req.max_orders,
+        per_order_notional=req.per_order_notional,
+        allow_synthetic_execution=req.allow_synthetic_execution,
+        force_refresh=req.force_refresh,
+    )
+
+
+@router.get("/workflows/paper-strategy/{workflow_id}")
+def get_hybrid_paper_strategy_workflow(workflow_id: str):
+    payload = _quant_service().get_hybrid_paper_strategy_workflow(workflow_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    return payload
+
+
+@router.get("/paper/performance")
+def get_paper_performance(window_days: int = 90):
+    return _quant_service().build_paper_performance_report(window_days=window_days)
+
+
+@router.post("/paper/performance/snapshot")
+def create_paper_performance_snapshot(req: QuantPaperPerformanceSnapshotRequest | None = None):
+    payload = req or QuantPaperPerformanceSnapshotRequest()
+    return _quant_service().capture_paper_performance_snapshot(
+        workflow_id=payload.workflow_id,
+        execution_id=payload.execution_id,
+        benchmark=payload.benchmark,
+        broker=payload.broker,
+        mode=payload.mode,
+        force_refresh=payload.force_refresh,
+    )
+
+
+@router.post("/paper/performance/backfill")
+def backfill_paper_performance(req: QuantPaperPerformanceBackfillRequest | None = None):
+    payload = req or QuantPaperPerformanceBackfillRequest()
+    return _quant_service().backfill_paper_performance(
+        days=payload.days,
+        benchmark=payload.benchmark,
+        broker=payload.broker,
+        mode=payload.mode,
+        force_refresh=payload.force_refresh,
+    )
+
+
+@router.get("/paper/daily-digest/latest")
+def get_latest_paper_daily_digest(phase: str = "postclose", session_date: str | None = None):
+    return _quant_service().build_quant_daily_digest(phase=phase, session_date=session_date)
+
+
+@router.post("/paper/daily-digest/send")
+def send_paper_daily_digest(req: QuantDailyDigestSendRequest | None = None):
+    payload = req or QuantDailyDigestSendRequest()
+    return _quant_service().send_quant_daily_digest(
+        phase=payload.phase,
+        session_date=payload.session_date,
+        recipients=payload.recipients or None,
+        channels=payload.channels or None,
+    )
+
+
+@router.get("/paper/weekly-digest/latest")
+def get_latest_paper_weekly_digest(session_date: str | None = None, window_days: int = 7):
+    return _quant_service().build_quant_weekly_digest(session_date=session_date, window_days=window_days)
+
+
+@router.post("/paper/weekly-digest/send")
+def send_paper_weekly_digest(req: QuantWeeklyDigestSendRequest | None = None):
+    payload = req or QuantWeeklyDigestSendRequest()
+    return _quant_service().send_quant_weekly_digest(
+        session_date=payload.session_date,
+        window_days=payload.window_days,
+        recipients=payload.recipients or None,
+        channels=payload.channels or None,
+    )
+
+
+@router.get("/session-evidence/latest")
+def get_latest_session_evidence():
+    payload = _quant_service().latest_session_evidence()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session evidence not found")
+    return payload
+
+
+@router.get("/session-evidence/{session_date}")
+def get_session_evidence(session_date: str):
+    payload = _quant_service().get_session_evidence(session_date)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session evidence not found")
+    return payload
+
+
+@router.post("/execution/reconcile/alpaca-paper")
+def reconcile_alpaca_paper_orders(req: QuantAlpacaPaperReconcileRequest | None = None):
+    payload = req or QuantAlpacaPaperReconcileRequest()
+    return _quant_service().reconcile_alpaca_paper_orders(session_date=payload.session_date)
+
+
+@router.post("/storage/backup")
+def backup_quant_storage(req: QuantStorageBackupRequest | None = None):
+    payload = req or QuantStorageBackupRequest()
+    return _quant_service().backup_quant_storage(session_date=payload.session_date)
+
+
+@router.get("/submit-locks")
+def list_submit_locks(session_date: str | None = None, status: str | None = None, limit: int = 100):
+    return _quant_service().list_submit_locks(session_date=session_date, status=status, limit=limit)
+
+
+@router.get("/paper/outcomes")
+def list_paper_outcomes(
+    limit: int = 200,
+    record_kind: str | None = None,
+    status: str | None = None,
+    symbol: str | None = None,
+):
+    return _quant_service().list_paper_outcomes(
+        limit=limit,
+        record_kind=record_kind,
+        status=status,
+        symbol=symbol,
+    )
+
+
+@router.post("/paper/outcomes/settle")
+def settle_paper_outcomes(req: QuantPaperOutcomesSettleRequest | None = None):
+    payload = req or QuantPaperOutcomesSettleRequest()
+    return _quant_service().settle_paper_outcomes(
+        outcome_id=payload.outcome_id,
+        force_refresh=payload.force_refresh,
+        limit=payload.limit,
+    )
+
+
+@router.get("/promotion/report")
+def get_promotion_report(window_days: int = 90):
+    return _quant_service().build_promotion_report(window_days=window_days, persist=False)
+
+
+@router.post("/promotion/evaluate")
+def evaluate_promotion(req: QuantPromotionEvaluateRequest | None = None):
+    payload = req or QuantPromotionEvaluateRequest()
+    return _quant_service().evaluate_promotion(window_days=payload.window_days, persist=payload.persist)
+
+
+@router.get("/promotion/timeline")
+def get_promotion_timeline(limit: int = 50):
+    return _quant_service().build_promotion_timeline(limit=limit)
+
+
+@router.post("/models/shadow-retrain/run")
+def run_shadow_retrain(req: QuantShadowRetrainRequest | None = None):
+    payload = req or QuantShadowRetrainRequest()
+    return _quant_service().run_shadow_retrain(model_key=payload.model_key, force=payload.force)
+
+
+@router.get("/models/shadow-retrain/latest")
+def get_latest_shadow_retrain():
+    return _quant_service().latest_shadow_retrain()
+
+
+@router.get("/deployment/preflight")
+def get_deployment_preflight(profile: str = "paper_cloud", dry_run: bool = False):
+    service = _quant_service()
+    if dry_run and hasattr(service, "get_cached_deployment_preflight"):
+        return service.get_cached_deployment_preflight(profile=profile)
+    try:
+        return service.build_deployment_preflight(profile=profile, dry_run=dry_run)
+    except TypeError:
+        return service.build_deployment_preflight(profile=profile)
+
+
+@router.post("/deployment/preflight/evaluate")
+def evaluate_deployment_preflight(profile: str = "paper_cloud"):
+    service = _quant_service()
+    if hasattr(service, "evaluate_deployment_preflight"):
+        return service.evaluate_deployment_preflight(profile=profile)
+    return service.build_deployment_preflight(profile=profile)
+
+
+@router.get("/trading-calendar/status")
+def get_trading_calendar_status():
+    return _quant_service().get_trading_calendar_status()
+
+
+@router.get("/observability/paper-workflow")
+def get_paper_workflow_observability(window_days: int = 30):
+    return _quant_service().build_paper_workflow_observability(window_days=window_days)
+
+
+@router.get("/slo/paper-workflow")
+def get_paper_workflow_slo(window_days: int = 30):
+    return _quant_service().build_paper_workflow_slo(window_days=window_days)
+
+
+@router.post("/observability/paper-workflow/evaluate")
+def evaluate_paper_workflow_observability(window_days: int = 30):
+    return _quant_service().evaluate_paper_workflow_observability(window_days=window_days)
+
+
 @router.post("/backtests/run")
 def run_backtest(req: QuantBacktestRequest):
     return _quant_service().run_backtest(
@@ -240,6 +466,11 @@ def get_execution_account(broker: str = "alpaca", mode: str = "paper"):
 @router.get("/execution/controls")
 def get_execution_controls():
     return _quant_service().get_execution_controls()
+
+
+@router.get("/execution/paper-gate")
+def get_paper_gate_report(persist: bool = False):
+    return _quant_service().build_paper_gate_report(persist=persist)
 
 
 @router.post("/execution/kill-switch")

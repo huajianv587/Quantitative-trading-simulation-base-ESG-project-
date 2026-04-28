@@ -594,6 +594,12 @@ def test_quant_research_backtest_and_execution_flow():
     controls = client.get("/api/v1/quant/execution/controls", headers=EXECUTION_HEADERS)
     assert controls.status_code == 200
     assert "kill_switch_enabled" in controls.json()
+    assert "paper_gate" in controls.json()
+
+    paper_gate = client.get("/api/v1/quant/execution/paper-gate", headers=EXECUTION_HEADERS)
+    assert paper_gate.status_code == 200
+    assert "live_blocked_until_paper_gate" in paper_gate.json()
+    assert "markdown" in paper_gate.json()
 
     monitor = client.get("/api/v1/quant/execution/monitor", headers=EXECUTION_HEADERS)
     assert monitor.status_code == 200

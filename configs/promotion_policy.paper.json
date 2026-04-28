@@ -1,0 +1,28 @@
+{
+  "policy_id": "paper_default_v1",
+  "version": 1,
+  "paper_promoted": {
+    "min_valid_days": 60,
+    "min_net_return": 0.0,
+    "min_excess_return": 0.0,
+    "min_sharpe": 0.5,
+    "max_drawdown": 0.08,
+    "require_no_synthetic": true
+  },
+  "live_canary": {
+    "min_valid_days": 60,
+    "min_net_return": 0.0,
+    "min_excess_return": 0.0,
+    "min_sharpe": 0.5,
+    "max_drawdown": 0.08,
+    "min_filled_orders": 0,
+    "min_settled_outcomes": 0,
+    "max_reject_rate": 1.0,
+    "max_avg_slippage_bps": 9999.0,
+    "min_calendar_coverage": 0.0,
+    "require_no_synthetic": true,
+    "require_broker_sync_clean": true,
+    "require_kill_switch_released": true,
+    "require_alpaca_paper_ready": true
+  }
+}

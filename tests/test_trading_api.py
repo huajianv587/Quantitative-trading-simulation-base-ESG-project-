@@ -300,6 +300,49 @@ class _TradingStub:
     async def run_scheduled_job(self, job_name, scheduled_for):
         return {"run_id": f"job-{job_name}", "job_name": job_name, "scheduled_for": scheduled_for, "status": "completed"}
 
+    def run_paper_reward_candidates(self, **kwargs):
+        count = min(int(kwargs.get("max_candidates") or 5), 5)
+        candidates = [
+            {
+                "candidate_id": f"reward-{index}",
+                "batch_id": "reward-batch-1",
+                "symbol": symbol,
+                "action": "long",
+                "submitted": True,
+                "score": None,
+                "bandit_score": 0.1 + index,
+                "status": "pending",
+            }
+            for index, symbol in enumerate(["AAPL", "NVDA", "MSFT", "TSLA", "SPY"][:count], start=1)
+        ]
+        return {
+            "batch_id": "reward-batch-1",
+            "execution_id": "execution-reward-1",
+            "candidate_count": len(candidates),
+            "submitted_count": len(candidates),
+            "candidates": candidates,
+            "broker_status": "submitted",
+        }
+
+    def settle_paper_reward_candidates(self, **kwargs):
+        return {
+            "settlement_id": "reward-settle-1",
+            "candidate_id": kwargs.get("candidate_id"),
+            "checked_count": 1,
+            "updated_count": 1,
+            "bandit_updated": True,
+            "updated_candidates": [{"candidate_id": kwargs.get("candidate_id") or "reward-1", "score": 0.012, "status": "settled"}],
+            "warnings": [],
+        }
+
+    def paper_reward_leaderboard(self, **kwargs):
+        return {
+            "candidate_count": 1,
+            "leaderboard": [{"arm": "AAPL:long", "avg_score": 0.012, "hit_rate": 1.0, "bandit_pulls": 1}],
+            "candidates": [{"candidate_id": "reward-1", "symbol": "AAPL", "score": 0.012}],
+            "bandit_state": {"arms": {"AAPL:long": {"pulls": 1}}},
+        }
+
     def trading_ops_snapshot(self):
         return {
             "schedule": self.schedule_status(),
@@ -475,6 +518,32 @@ def test_trading_monitor_and_ops_snapshot(monkeypatch):
     job = client.post("/api/v1/trading/jobs/run/premarket_agent", json={})
     assert job.status_code == 200
     assert job.json()["job_name"] == "premarket_agent"
+
+    reward_job = client.post("/api/v1/trading/jobs/run/paper_reward_candidates_run", json={})
+    assert reward_job.status_code == 200
+    assert reward_job.json()["job_name"] == "paper_reward_candidates_run"
+
+
+def test_paper_reward_routes(monkeypatch):
+    monkeypatch.setattr(trading_router, "_trading_service", lambda: _TradingStub())
+    client = TestClient(main_module.app)
+
+    run = client.post(
+        "/api/v1/trading/reward/candidates/run",
+        json={"universe": ["AAPL", "NVDA"], "max_candidates": 5, "per_order_notional": 1.0},
+    )
+    assert run.status_code == 200
+    assert run.json()["candidate_count"] == 5
+    assert run.json()["submitted_count"] == 5
+
+    settle = client.post("/api/v1/trading/reward/settle", json={"candidate_id": "reward-1"})
+    assert settle.status_code == 200
+    assert settle.json()["settlement_id"] == "reward-settle-1"
+    assert settle.json()["updated_count"] == 1
+
+    leaderboard = client.get("/api/v1/trading/reward/leaderboard?limit=10")
+    assert leaderboard.status_code == 200
+    assert leaderboard.json()["leaderboard"][0]["arm"] == "AAPL:long"
 
 
 def test_autopilot_strategy_and_dashboard_routes(monkeypatch):

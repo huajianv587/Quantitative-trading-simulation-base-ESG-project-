@@ -209,6 +209,8 @@ def should_run_live_canary(args, live_dry_run_payload: dict[str, Any] | str) -> 
         return False, "confirm_live_not_provided"
     if not isinstance(live_dry_run_payload, dict):
         return False, "live_dry_run_failed"
+    if live_dry_run_payload.get("live_blocked_until_paper_gate"):
+        return False, "paper_gate_not_passed"
     if not live_dry_run_payload.get("ready"):
         return False, f"broker_not_ready:{live_dry_run_payload.get('broker_status', 'unknown')}"
     if str(live_dry_run_payload.get("broker_status", "")).lower() in {"blocked", "kill_switch_engaged", "awaiting_live_confirmation"}:
@@ -290,6 +292,12 @@ def run_smoke(args) -> dict[str, Any]:
             timeout=args.request_timeout,
             path="/api/v1/quant/execution/controls",
         )
+        paper_gate_status, paper_gate_payload = request_json(
+            "GET",
+            f"{base_url}/api/v1/quant/execution/paper-gate",
+            timeout=args.request_timeout,
+            path="/api/v1/quant/execution/paper-gate",
+        )
         policy_status, policy_payload = request_json(
             "GET",
             f"{base_url}/api/v1/trading/autopilot/policy",
@@ -308,11 +316,22 @@ def run_smoke(args) -> dict[str, Any]:
             timeout=args.request_timeout,
             path="/api/v1/trading/ops/snapshot",
         )
-        readiness_ok = all(status == 200 for status in [account_status, controls_status, policy_status, execution_path_status, ops_snapshot_status])
+        readiness_ok = all(
+            status == 200
+            for status in [
+                account_status,
+                controls_status,
+                paper_gate_status,
+                policy_status,
+                execution_path_status,
+                ops_snapshot_status,
+            ]
+        )
         broker_connected = bool(isinstance(account_payload, dict) and account_payload.get("connected"))
         report["evidence"]["broker_readiness"] = {
             "account": account_payload,
             "controls": controls_payload,
+            "paper_gate": paper_gate_payload,
             "policy": policy_payload,
             "execution_path": execution_path_payload,
             "ops_snapshot": ops_snapshot_payload,
@@ -485,7 +504,7 @@ def run_smoke(args) -> dict[str, Any]:
 def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Staged external execution smoke runner.")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8006)
+    parser.add_argument("--port", type=int, default=8012)
     parser.add_argument("--base-url", default="")
     parser.add_argument("--reuse-server", action="store_true")
     parser.add_argument("--startup-timeout", type=int, default=120)

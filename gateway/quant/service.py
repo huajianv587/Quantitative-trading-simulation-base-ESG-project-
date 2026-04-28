@@ -1,12 +1,15 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import inspect
 import json
 import hashlib
 from itertools import product
 import math
 import random
+import shutil
 import sys
 import statistics
+import tarfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -47,9 +50,21 @@ from gateway.quant.models import (
 )
 from gateway.quant.p1_stack import P1ModelSuiteRuntime
 from gateway.quant.p2_decision import P2_STRATEGY_PROFILES, P2DecisionStackRuntime
+from gateway.quant.paper_services import (
+    DeploymentPreflightService,
+    OutcomeLedgerService,
+    PaperPerformanceService,
+    PaperWorkflowService,
+    PromotionService,
+)
+from gateway.quant.promotion_policy import evaluate_thresholds, load_promotion_policy
+from gateway.quant.provenance import SyntheticEvidenceGuard
+from gateway.quant.service_components import QuantServiceComponents
 from gateway.scheduler.event_classifier_runtime import get_event_classifier_runtime
+from gateway.utils.email_delivery import send_email_message
 from gateway.quant.signals import MovingAverageCrossSignalEngine
 from gateway.quant.storage import QuantStorageGateway
+from gateway.quant.trading_calendar import TradingCalendarService
 from gateway.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -74,6 +89,26 @@ def _as_dict(model: BaseModel | dict[str, Any]) -> dict[str, Any]:
     return dict(model)
 
 
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_jsonable(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    return value
+
+
 def _safe_mean(values: list[float]) -> float:
     cleaned = [float(value) for value in values if value is not None]
     return float(statistics.mean(cleaned)) if cleaned else 0.0
@@ -86,9 +121,21 @@ class QuantSystemService:
         self.brokers = BrokerRegistry(get_alpaca_client=lambda: self.alpaca)
         self.market_data = MarketDataGateway()
         self.signal_engine = MovingAverageCrossSignalEngine(self.market_data)
+        self.trading_calendar = TradingCalendarService()
+        self.synthetic_guard = SyntheticEvidenceGuard(getattr(settings, "SYNTHETIC_EVIDENCE_POLICY", "block"))
+        self.paper_workflow_service = PaperWorkflowService(self)
+        self.paper_performance_service = PaperPerformanceService(self)
+        self.outcome_ledger_service = OutcomeLedgerService(self)
+        self.promotion_service = PromotionService(self)
+        self.deployment_preflight_service = DeploymentPreflightService(self)
         self.alpha_ranker = AlphaRankerRuntime()
         self.p1_suite = P1ModelSuiteRuntime()
         self.p2_stack = P2DecisionStackRuntime()
+        self.components = QuantServiceComponents.from_owner(self)
+        self.market_data_component = self.components.market_data
+        self.dashboard_component = self.components.dashboard
+        self.execution_component = self.components.execution
+        self.paper_workflow_component = self.components.paper_workflow
         self.default_capital = float(getattr(settings, "QUANT_DEFAULT_CAPITAL", 1_000_000))
         self.default_benchmark = getattr(settings, "QUANT_DEFAULT_BENCHMARK", "SPY")
         self.default_universe_name = getattr(settings, "QUANT_DEFAULT_UNIVERSE", "ESG_US_LARGE_CAP")
@@ -121,6 +168,50 @@ class QuantSystemService:
             "expires_at": datetime.now(timezone.utc) + timedelta(seconds=max(ttl, 1)),
         }
 
+    def _market_data_provider_order(self) -> list[str]:
+        provider_order = getattr(self.market_data, "provider_order", None)
+        if isinstance(provider_order, (list, tuple)):
+            normalized = [str(item or "").strip().lower() for item in provider_order if str(item or "").strip()]
+            if normalized:
+                return normalized
+        configured = str(getattr(settings, "MARKET_DATA_PROVIDER", "twelvedata,alpaca,yfinance") or "")
+        fallback = [item.strip().lower() for item in configured.split(",") if item.strip()]
+        return fallback or ["twelvedata", "alpaca", "yfinance"]
+
+    def _get_daily_bars(
+        self,
+        symbol: str,
+        *,
+        limit: int = 180,
+        force_refresh: bool = False,
+        provider_order_override: list[str] | None = None,
+        cache_only: bool = False,
+        allow_stale_cache: bool = True,
+        timeout_override: int | None = None,
+    ):
+        getter = self.market_data.get_daily_bars
+        kwargs = {
+            "limit": limit,
+            "force_refresh": force_refresh,
+            "provider_order_override": provider_order_override,
+            "cache_only": cache_only,
+            "allow_stale_cache": allow_stale_cache,
+            "timeout_override": timeout_override,
+        }
+        try:
+            signature = inspect.signature(getter)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None:
+            accepted = {
+                name
+                for name, parameter in signature.parameters.items()
+                if parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            }
+            filtered_kwargs = {name: value for name, value in kwargs.items() if name in accepted and value is not None}
+            return getter(symbol, **filtered_kwargs)
+        return getter(symbol, limit=limit, force_refresh=force_refresh)
+
     def _cached_payload(self, entry: dict[str, Any] | None) -> Any:
         if self._cache_is_fresh(entry):
             return entry["payload"]
@@ -129,6 +220,38 @@ class QuantSystemService:
     @staticmethod
     def _normalize_broker_mode(mode: str | None) -> str:
         return "live" if str(mode or "").strip().lower() == "live" else "paper"
+
+    def _execution_notional_limits(self, mode: str | None) -> dict[str, Any]:
+        normalized_mode = self._normalize_broker_mode(mode)
+        if normalized_mode == "live":
+            broker_limit = float(getattr(settings, "ALPACA_LIVE_MAX_ORDER_NOTIONAL", 1.0) or 1.0)
+            execution_limit = float(getattr(settings, "EXECUTION_LIVE_MAX_NOTIONAL_PER_ORDER", 1.0) or 1.0)
+            daily_limit = float(getattr(settings, "EXECUTION_LIVE_MAX_DAILY_NOTIONAL", 5.0) or 5.0)
+        else:
+            broker_limit = float(
+                getattr(
+                    settings,
+                    "ALPACA_PAPER_MAX_ORDER_NOTIONAL",
+                    getattr(settings, "ALPACA_MAX_ORDER_NOTIONAL", 2500.0),
+                )
+                or 2500.0
+            )
+            execution_limit = float(
+                getattr(
+                    settings,
+                    "EXECUTION_PAPER_MAX_NOTIONAL_PER_ORDER",
+                    getattr(settings, "EXECUTION_MAX_NOTIONAL_PER_ORDER", 2500.0),
+                )
+                or 2500.0
+            )
+            daily_limit = None
+        return {
+            "mode": normalized_mode,
+            "broker_max_order_notional": round(max(broker_limit, 0.0), 2),
+            "execution_max_order_notional": round(max(execution_limit, 0.0), 2),
+            "effective_per_order_notional": round(max(min(broker_limit, execution_limit), 0.0), 2),
+            "daily_notional_limit": None if daily_limit is None else round(max(daily_limit, 0.0), 2),
+        }
 
     def _prepare_broker_adapter(self, broker: str | None, mode: str | None = None):
         adapter = self._resolve_broker(broker)
@@ -145,6 +268,273 @@ class QuantSystemService:
                 adapter.set_runtime_mode(mode)
             status = adapter.connection_status()
         return dict(status or {})
+
+    def _paper_gate_thresholds(self) -> dict[str, Any]:
+        return {
+            "window_trading_days": int(getattr(settings, "PAPER_GATE_WINDOW_TRADING_DAYS", 60) or 60),
+            "min_valid_days": int(getattr(settings, "PAPER_GATE_MIN_VALID_DAYS", 40) or 40),
+            "min_net_return": float(getattr(settings, "PAPER_GATE_MIN_NET_RETURN", 0.0) or 0.0),
+            "min_excess_return": float(getattr(settings, "PAPER_GATE_MIN_EXCESS_RETURN", 0.0) or 0.0),
+            "min_sharpe": float(getattr(settings, "PAPER_GATE_MIN_SHARPE", 0.5) or 0.5),
+            "max_drawdown": float(getattr(settings, "PAPER_GATE_MAX_DRAWDOWN", 0.08) or 0.08),
+            "max_drawdown_underperformance": float(
+                getattr(settings, "PAPER_GATE_MAX_DRAWDOWN_UNDERPERFORMANCE", 0.03) or 0.03
+            ),
+            "require_paper_evidence": bool(getattr(settings, "PAPER_GATE_REQUIRE_PAPER_EVIDENCE", True)),
+            "benchmark": self.default_benchmark,
+        }
+
+    def build_paper_gate_report(
+        self,
+        *,
+        points: list[dict[str, Any]] | None = None,
+        persist: bool = False,
+    ) -> dict[str, Any]:
+        thresholds = self._paper_gate_thresholds()
+        if points is None:
+            gate_points, evidence_source = self._collect_paper_gate_points()
+        else:
+            gate_points = self._normalize_paper_gate_points(points)
+            evidence_source = "provided_points"
+        gate_points = sorted(gate_points, key=lambda item: item["date"])[-int(thresholds["window_trading_days"]) :]
+        metrics = self._compute_paper_gate_metrics(gate_points)
+        sync_status = self._paper_gate_sync_status()
+        eligible_sources = {"paper_performance", "provided_points"}
+        source_eligible = (not thresholds["require_paper_evidence"]) or evidence_source in eligible_sources
+        checks = {
+            "minimum_valid_days": metrics["valid_days"] >= thresholds["min_valid_days"],
+            "paper_evidence_source": bool(source_eligible),
+            "net_return_positive_after_costs": metrics["net_return"] > thresholds["min_net_return"],
+            "benchmark_excess_return_positive": metrics["excess_return"] > thresholds["min_excess_return"],
+            "sharpe_above_threshold": metrics["sharpe"] >= thresholds["min_sharpe"],
+            "drawdown_within_limit": metrics["max_drawdown"] <= thresholds["max_drawdown"],
+            "drawdown_not_worse_than_benchmark": (
+                metrics["max_drawdown"] - metrics["benchmark_max_drawdown"]
+            )
+            <= thresholds["max_drawdown_underperformance"],
+            "paper_sync_clean": bool(sync_status["ok"]),
+        }
+        blockers = [name for name, ok in checks.items() if not ok]
+        passed = not blockers
+        report_id = f"paper-gate-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        payload = {
+            "report_id": report_id,
+            "generated_at": _iso_now(),
+            "status": "passed" if passed else "blocked",
+            "passed": passed,
+            "live_blocked_until_paper_gate": not passed,
+            "live_enablement_policy": {
+                "mode": "paper_first",
+                "live_interfaces_retained": True,
+                "live_default_enabled": bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False)),
+                "operator_action_required_after_pass": True,
+            },
+            "evidence_source": evidence_source,
+            "thresholds": thresholds,
+            "metrics": metrics,
+            "checks": checks,
+            "blockers": blockers,
+            "sync_status": sync_status,
+            "sample": gate_points[-5:],
+        }
+        payload["markdown"] = self._render_paper_gate_markdown(payload)
+        if persist:
+            payload["storage"] = self.storage.persist_record("paper_gate_reports", report_id, payload)
+            payload["markdown_path"] = self._write_paper_gate_markdown(report_id, payload["markdown"])
+        return payload
+
+    def _collect_paper_gate_points(self) -> tuple[list[dict[str, Any]], str]:
+        performance_records = self.storage.list_records("paper_performance")
+        points: list[dict[str, Any]] = []
+        for record in performance_records:
+            raw_points = record.get("points")
+            if isinstance(raw_points, list):
+                points.extend(self._normalize_paper_gate_points(raw_points))
+            else:
+                points.extend(self._normalize_paper_gate_points([record]))
+        if points:
+            return points, "paper_performance"
+
+        for backtest in self.storage.list_records("backtests"):
+            timeline = backtest.get("timeline") or []
+            if timeline:
+                return self._normalize_paper_gate_points(timeline), "backtest_reference"
+        return [], "none"
+
+    def _normalize_paper_gate_points(self, raw_points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for point in raw_points:
+            if not isinstance(point, dict):
+                continue
+            if bool(point.get("synthetic_used")) or point.get("evidence_eligible") is False:
+                continue
+            date_key = self._paper_gate_date_key(point)
+            portfolio_nav = self._paper_gate_float(
+                point,
+                "portfolio_nav",
+                "nav",
+                "equity",
+                "portfolio_value",
+                "net_liquidation",
+            )
+            benchmark_nav = self._paper_gate_float(point, "benchmark_nav", "benchmark_value", "benchmark_equity")
+            if not date_key or portfolio_nav is None or benchmark_nav is None:
+                continue
+            normalized.append(
+                {
+                    "date": date_key,
+                    "portfolio_nav": float(portfolio_nav),
+                    "benchmark_nav": float(benchmark_nav),
+                }
+            )
+        deduped: dict[str, dict[str, Any]] = {}
+        for point in normalized:
+            deduped[point["date"]] = point
+        return list(deduped.values())
+
+    def _paper_gate_date_key(self, point: dict[str, Any]) -> str | None:
+        raw = point.get("date") or point.get("trading_day") or point.get("generated_at") or point.get("created_at")
+        parsed = self._parse_any_timestamp(raw)
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).date().isoformat()
+        text = str(raw or "").strip()
+        if len(text) >= 10:
+            try:
+                return date.fromisoformat(text[:10]).isoformat()
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _paper_gate_float(point: dict[str, Any], *keys: str) -> float | None:
+        for key in keys:
+            value = point.get(key)
+            if value in {None, ""}:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _compute_paper_gate_metrics(self, points: list[dict[str, Any]]) -> dict[str, Any]:
+        if len(points) < 2:
+            return {
+                "valid_days": len(points),
+                "net_return": 0.0,
+                "benchmark_return": 0.0,
+                "excess_return": 0.0,
+                "sharpe": 0.0,
+                "max_drawdown": 0.0,
+                "benchmark_max_drawdown": 0.0,
+                "drawdown_underperformance": 0.0,
+            }
+        portfolio_nav = [float(point["portfolio_nav"]) for point in points]
+        benchmark_nav = [float(point["benchmark_nav"]) for point in points]
+        portfolio_returns = [
+            (portfolio_nav[index] / portfolio_nav[index - 1]) - 1
+            for index in range(1, len(portfolio_nav))
+            if portfolio_nav[index - 1] > 0
+        ]
+        net_return = (portfolio_nav[-1] / portfolio_nav[0]) - 1 if portfolio_nav[0] > 0 else 0.0
+        benchmark_return = (benchmark_nav[-1] / benchmark_nav[0]) - 1 if benchmark_nav[0] > 0 else 0.0
+        mean_return = statistics.mean(portfolio_returns) if portfolio_returns else 0.0
+        volatility = statistics.pstdev(portfolio_returns) if len(portfolio_returns) > 1 else 0.0
+        if volatility > 0:
+            sharpe = mean_return / volatility * math.sqrt(252)
+        else:
+            sharpe = 999.0 if mean_return > 0 else 0.0
+        max_drawdown = self._max_drawdown_from_nav(portfolio_nav)
+        benchmark_max_drawdown = self._max_drawdown_from_nav(benchmark_nav)
+        return {
+            "valid_days": len(points),
+            "net_return": round(net_return, 6),
+            "benchmark_return": round(benchmark_return, 6),
+            "excess_return": round(net_return - benchmark_return, 6),
+            "sharpe": round(sharpe, 6),
+            "max_drawdown": round(max_drawdown, 6),
+            "benchmark_max_drawdown": round(benchmark_max_drawdown, 6),
+            "drawdown_underperformance": round(max_drawdown - benchmark_max_drawdown, 6),
+        }
+
+    @staticmethod
+    def _max_drawdown_from_nav(nav_values: list[float]) -> float:
+        peak = 0.0
+        max_drawdown = 0.0
+        for value in nav_values:
+            peak = max(peak, float(value))
+            if peak > 0:
+                max_drawdown = max(max_drawdown, 1 - float(value) / peak)
+        return max_drawdown
+
+    def _paper_gate_sync_status(self) -> dict[str, Any]:
+        thresholds = self._paper_gate_thresholds()
+        window_days = max(int(thresholds["window_trading_days"]) * 2, 90)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+        checked = 0
+        errors: list[dict[str, Any]] = []
+        for payload in self.storage.list_records("executions"):
+            if str(payload.get("mode") or "").lower() != "paper":
+                continue
+            generated_at = self._parse_any_timestamp(payload.get("generated_at") or payload.get("created_at"))
+            if generated_at is not None:
+                if generated_at.tzinfo is None:
+                    generated_at = generated_at.replace(tzinfo=timezone.utc)
+                if generated_at.astimezone(timezone.utc) < cutoff:
+                    continue
+            checked += 1
+            broker_errors = [str(item) for item in payload.get("broker_errors") or [] if str(item).strip()]
+            if broker_errors:
+                errors.append({"execution_id": payload.get("execution_id"), "reason": "broker_errors", "errors": broker_errors[:3]})
+            if payload.get("submit_orders") and str(payload.get("broker_status") or "").lower() in {
+                "account_error",
+                "not_configured",
+                "submit_failed",
+            }:
+                errors.append({"execution_id": payload.get("execution_id"), "reason": payload.get("broker_status")})
+            journal = payload.get("journal") or self._load_execution_journal(payload.get("execution_id")) or {}
+            if str(journal.get("current_state") or "").lower() in {"failed", "rejected"}:
+                errors.append({"execution_id": payload.get("execution_id"), "reason": "journal_state", "state": journal.get("current_state")})
+        return {
+            "ok": not errors,
+            "checked_executions": checked,
+            "error_count": len(errors),
+            "errors": errors[:10],
+        }
+
+    @staticmethod
+    def _render_paper_gate_markdown(payload: dict[str, Any]) -> str:
+        metrics = payload.get("metrics") or {}
+        thresholds = payload.get("thresholds") or {}
+        checks = payload.get("checks") or {}
+        lines = [
+            f"# Paper Gate Report - {payload.get('status')}",
+            "",
+            f"- Generated at: {payload.get('generated_at')}",
+            f"- Evidence source: {payload.get('evidence_source')}",
+            f"- Window trading days: {thresholds.get('window_trading_days')}",
+            f"- Valid days: {metrics.get('valid_days')}",
+            f"- Net return: {float(metrics.get('net_return') or 0.0):.2%}",
+            f"- Excess return: {float(metrics.get('excess_return') or 0.0):.2%}",
+            f"- Sharpe: {float(metrics.get('sharpe') or 0.0):.2f}",
+            f"- Max drawdown: {float(metrics.get('max_drawdown') or 0.0):.2%}",
+            "",
+            "## Checks",
+        ]
+        lines.extend(f"- {name}: {'pass' if ok else 'fail'}" for name, ok in checks.items())
+        if payload.get("blockers"):
+            lines.extend(["", "## Blockers"])
+            lines.extend(f"- {item}" for item in payload["blockers"])
+        return "\n".join(lines) + "\n"
+
+    def _write_paper_gate_markdown(self, report_id: str, markdown: str) -> str:
+        directory = self.storage.base_dir / "paper_gate_reports"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{report_id}.md"
+        path.write_text(markdown, encoding="utf-8")
+        return str(path)
 
     def _execution_mode_state(
         self,
@@ -166,7 +556,14 @@ class QuantSystemService:
         else:
             live_available = bool(live_connection.get("configured"))
         live_enabled = bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False)) if adapter.broker_id == "alpaca" else False
-        live_ready = bool(live_available and live_enabled and (connected or normalized_mode != "live" or not failure_reason))
+        paper_gate = self.build_paper_gate_report(persist=False) if adapter.broker_id == "alpaca" else {}
+        paper_gate_passed = bool(paper_gate.get("passed"))
+        live_ready = bool(
+            live_available
+            and live_enabled
+            and paper_gate_passed
+            and (connected or normalized_mode != "live" or not failure_reason)
+        )
         effective_mode = "live" if normalized_mode == "live" and live_ready else "paper"
         block_reason = None
         next_actions: list[str] = []
@@ -176,7 +573,10 @@ class QuantSystemService:
                 next_actions = ["add_live_alpaca_keys", "switch_to_paper_mode"]
             elif not live_enabled:
                 block_reason = "live_trading_disabled"
-                next_actions = ["keep_using_paper_mode", "enable_live_trading_when_ready"]
+                next_actions = ["keep_using_paper_mode", "wait_for_paper_gate_pass"]
+            elif not paper_gate_passed:
+                block_reason = "paper_gate_not_passed"
+                next_actions = ["keep_using_paper_mode", "review_paper_gate_report", "wait_for_60_trading_day_gate"]
             elif failure_reason:
                 block_reason = "live_account_unavailable"
                 next_actions = ["verify_live_account_permissions", "switch_to_paper_mode"]
@@ -196,6 +596,9 @@ class QuantSystemService:
             "next_actions": next_actions,
             "paper_connection": paper_connection,
             "live_connection": live_connection,
+            "paper_gate": paper_gate,
+            "paper_gate_passed": paper_gate_passed,
+            "live_blocked_until_paper_gate": adapter.broker_id == "alpaca" and not paper_gate_passed,
         }
 
     def _with_execution_mode_state(
@@ -221,6 +624,9 @@ class QuantSystemService:
         enriched["live_available"] = mode_state["live_available"]
         enriched["block_reason"] = mode_state["block_reason"]
         enriched["next_actions"] = list(mode_state["next_actions"])
+        enriched["paper_gate"] = mode_state.get("paper_gate", {})
+        enriched["paper_gate_passed"] = bool(mode_state.get("paper_gate_passed"))
+        enriched["live_blocked_until_paper_gate"] = bool(mode_state.get("live_blocked_until_paper_gate"))
         if "connected" in enriched:
             requested_connected = bool(enriched.get("connected", connected))
             enriched["connected"] = bool(requested_connected and not mode_state["block_reason"])
@@ -317,7 +723,7 @@ class QuantSystemService:
         if not normalized_symbols:
             return {}
 
-        provider_signature = tuple(provider_order_override or self.market_data.provider_order)
+        provider_signature = tuple(provider_order_override or self._market_data_provider_order())
         cache_key = (
             cache_tag,
             tuple(normalized_symbols),
@@ -334,7 +740,7 @@ class QuantSystemService:
         max_workers = min(len(normalized_symbols), self._dashboard_market_workers)
 
         def _load_symbol(symbol: str):
-            return self.market_data.get_daily_bars(
+            return self._get_daily_bars(
                 symbol,
                 limit=limit,
                 force_refresh=force_refresh,
@@ -1257,7 +1663,7 @@ class QuantSystemService:
                 live_provider_order = [provider_preference]
             elif live_provider_order:
                 live_provider_order = [live_provider_order[0]]
-            bars_result = self.market_data.get_daily_bars(
+            bars_result = self._get_daily_bars(
                 active_symbol,
                 limit=limit,
                 provider_order_override=live_provider_order,
@@ -1488,6 +1894,7 @@ class QuantSystemService:
 
     def build_dashboard_overview(self) -> dict[str, Any]:
         overview = self.build_platform_overview()
+        paper_gate = self.build_paper_gate_report(persist=False)
         top_signal = overview["top_signals"][0]
         portfolio = overview["portfolio_preview"]
         latest_backtest = overview["latest_backtest"]
@@ -1502,6 +1909,7 @@ class QuantSystemService:
                 "report_scheduler": True,
                 "data_sources": True,
             },
+            "paper_gate": paper_gate,
             "narrative": {
                 "headline": "ESG Quant Command Center。",
                 "subheadline": "将数据、研究、信号、回测、执行和产品交付收束为一个可运行的量化平台。",
@@ -1652,7 +2060,7 @@ class QuantSystemService:
             signal = watchlist_lookup.get(quote_symbol, {})
             market_payload = None
             try:
-                market_payload = self.market_data.get_daily_bars(
+                market_payload = self._get_daily_bars(
                     quote_symbol,
                     limit=2,
                     provider_order_override=[name for name in provider_chain if name != "synthetic"],
@@ -2544,6 +2952,3639 @@ class QuantSystemService:
         )
         return payload
 
+    def _build_quant_rl_service(self):
+        from quant_rl.service.quant_service import QuantRLService
+
+        return QuantRLService()
+
+    def get_hybrid_paper_strategy_workflow(self, workflow_id: str) -> dict[str, Any] | None:
+        return self.storage.load_record("workflow_runs", workflow_id)
+
+    def run_hybrid_paper_strategy_workflow(
+        self,
+        universe_symbols: list[str] | None = None,
+        benchmark: str | None = None,
+        capital_base: float | None = None,
+        strategy_mode: str = "hybrid_p1_p2_rl",
+        rl_algorithm: str = "sac",
+        rl_action_type: str = "continuous",
+        rl_dataset_path: str | None = None,
+        rl_checkpoint_path: str | None = None,
+        submit_orders: bool = True,
+        mode: str = "paper",
+        broker: str | None = None,
+        max_orders: int = 2,
+        per_order_notional: float | None = 1.0,
+        allow_synthetic_execution: bool = False,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        benchmark = benchmark or self.default_benchmark
+        capital_base = float(capital_base or self.default_capital)
+        broker_id = (broker or self.default_broker or "alpaca").strip().lower()
+        normalized_mode = self._normalize_broker_mode(mode)
+        workflow_id = f"workflow-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+        blockers: list[str] = []
+        warnings: list[str] = []
+        next_actions: list[str] = []
+        steps: dict[str, dict[str, Any]] = {}
+        artifacts: dict[str, Any] = {}
+
+        def add_blocker(message: str, *actions: str) -> None:
+            if message and message not in blockers:
+                blockers.append(message)
+            add_actions(*actions)
+
+        def add_warning(message: str, *actions: str) -> None:
+            if message and message not in warnings:
+                warnings.append(message)
+            add_actions(*actions)
+
+        def add_actions(*items: str) -> None:
+            for item in items:
+                if item and item not in next_actions:
+                    next_actions.append(item)
+
+        def mark_step(name: str, status: str, **details: Any) -> None:
+            payload = {"status": status, "updated_at": _iso_now()}
+            payload.update({key: value for key, value in details.items() if value is not None})
+            steps[name] = payload
+
+        def descriptor_path(descriptor: Any, explicit_path: str | None = None) -> str:
+            if explicit_path:
+                return str(explicit_path).strip()
+            if isinstance(descriptor, dict) and descriptor.get("exists"):
+                return str(descriptor.get("path") or "").strip()
+            return ""
+
+        def local_path_ready(path_value: str) -> bool:
+            if not path_value:
+                return False
+            if path_value.startswith(("http://", "https://", "s3://", "r2://", "supabase://")):
+                return False
+            try:
+                return Path(path_value).expanduser().exists()
+            except OSError:
+                return False
+
+        def artifact_ref(payload: dict[str, Any] | None, id_key: str) -> dict[str, Any]:
+            if not payload:
+                return {}
+            ref = {
+                "id": payload.get(id_key),
+                "storage": payload.get("storage", {}),
+            }
+            if payload.get("artifacts"):
+                ref["artifacts"] = payload.get("artifacts")
+            return ref
+
+        def model_status_snapshot() -> dict[str, Any]:
+            snapshot: dict[str, Any] = {}
+            for key, runtime_obj in (
+                ("alpha_ranker", self.alpha_ranker),
+                ("p1_suite", self.p1_suite),
+                ("p2_stack", self.p2_stack),
+            ):
+                try:
+                    snapshot[key] = runtime_obj.status()
+                except Exception as exc:
+                    snapshot[key] = {"available": False, "error": str(exc)}
+                    add_warning(f"{key} status check failed: {exc}", "inspect_model_runtime")
+            return snapshot
+
+        def synthetic_backtest_used(payload: dict[str, Any] | None) -> bool:
+            if not payload:
+                return False
+            if payload.get("used_synthetic_fallback"):
+                return True
+            if str(payload.get("data_source") or "").strip().lower() == "synthetic":
+                return True
+            for warning in payload.get("market_data_warnings") or []:
+                if "synthetic" in str(warning).lower():
+                    return True
+            return False
+
+        request_payload = {
+            "universe": universe_symbols or [],
+            "benchmark": benchmark,
+            "capital_base": capital_base,
+            "strategy_mode": strategy_mode,
+            "rl_algorithm": rl_algorithm,
+            "rl_action_type": rl_action_type,
+            "rl_dataset_path": rl_dataset_path or "",
+            "rl_checkpoint_path": rl_checkpoint_path or "",
+            "submit_orders": bool(submit_orders),
+            "mode": normalized_mode,
+            "broker": broker_id,
+            "max_orders": max(1, int(max_orders or 1)),
+            "per_order_notional": per_order_notional,
+            "allow_synthetic_execution": bool(allow_synthetic_execution),
+            "force_refresh": bool(force_refresh),
+        }
+
+        model_status = model_status_snapshot()
+        mark_step("model_status", "completed")
+
+        p1_report: dict[str, Any] | None = None
+        p2_report: dict[str, Any] | None = None
+        rl_overview: dict[str, Any] = {}
+        rl_backtest: dict[str, Any] | None = None
+        backtest: dict[str, Any] | None = None
+        tearsheet: dict[str, Any] | None = None
+        paper_gate: dict[str, Any] | None = None
+        execution: dict[str, Any] | None = None
+        controls: dict[str, Any] | None = None
+        account: dict[str, Any] | None = None
+
+        try:
+            p1_report = self.build_p1_stack_report(
+                universe_symbols=universe_symbols,
+                benchmark=benchmark,
+                capital_base=capital_base,
+                research_question="Run the hybrid paper workflow P1 alpha + risk stack.",
+            )
+            artifacts["p1_report"] = artifact_ref(p1_report, "report_id")
+            mark_step("p1_report", "completed", report_id=p1_report.get("report_id"))
+            p1_ready = p1_report.get("deployment_readiness") or {}
+            if not p1_ready.get("promotable_to_paper"):
+                add_warning(
+                    "P1 report is not promotable; P2 remains the hard strategy gate for this workflow.",
+                    "review_p1_report",
+                )
+        except Exception as exc:
+            add_blocker(f"P1 report failed: {exc}", "inspect_p1_runtime")
+            mark_step("p1_report", "failed", error=str(exc))
+
+        try:
+            p2_report = self.build_p2_decision_report(
+                universe_symbols=universe_symbols,
+                benchmark=benchmark,
+                capital_base=capital_base,
+                research_question="Run the hybrid paper workflow P2 graph + strategy selector stack.",
+            )
+            artifacts["p2_report"] = artifact_ref(p2_report, "report_id")
+            mark_step("p2_report", "completed", report_id=p2_report.get("report_id"))
+            p2_ready = p2_report.get("deployment_readiness") or {}
+            if not p2_ready.get("promotable_to_paper"):
+                p2_blockers = list(p2_ready.get("blockers") or [])
+                add_blocker(
+                    "P2 decision stack is not promotable to paper.",
+                    "review_p2_decision_report",
+                )
+                for item in p2_blockers:
+                    add_blocker(str(item), "review_p2_decision_report")
+        except Exception as exc:
+            add_blocker(f"P2 decision report failed: {exc}", "inspect_p2_runtime")
+            mark_step("p2_report", "failed", error=str(exc))
+
+        try:
+            rl_service = self._build_quant_rl_service()
+            rl_overview = rl_service.overview()
+            model_status["rl"] = {
+                "available": bool((rl_overview.get("artifact_health") or {}).get("checkpoint_ready")),
+                "latest_dataset": rl_overview.get("latest_dataset", {}),
+                "latest_checkpoint": rl_overview.get("latest_checkpoint", {}),
+                "artifact_health": rl_overview.get("artifact_health", {}),
+            }
+            artifacts["rl_overview"] = {
+                "latest_dataset": rl_overview.get("latest_dataset", {}),
+                "latest_checkpoint": rl_overview.get("latest_checkpoint", {}),
+                "latest_report": rl_overview.get("latest_report", {}),
+                "artifact_health": rl_overview.get("artifact_health", {}),
+            }
+            dataset_path = descriptor_path(rl_overview.get("latest_dataset"), rl_dataset_path)
+            checkpoint_path = descriptor_path(rl_overview.get("latest_checkpoint"), rl_checkpoint_path)
+            request_payload["rl_dataset_path"] = dataset_path
+            request_payload["rl_checkpoint_path"] = checkpoint_path
+
+            if not local_path_ready(dataset_path):
+                add_blocker("RL dataset artifact is not available.", "build_or_sync_rl_dataset")
+                mark_step("rl_backtest", "blocked", dataset_path=dataset_path)
+            elif not local_path_ready(checkpoint_path):
+                add_blocker("RL checkpoint artifact is not available.", "train_or_sync_rl_checkpoint")
+                mark_step("rl_backtest", "blocked", dataset_path=dataset_path, checkpoint_path=checkpoint_path)
+            else:
+                rl_backtest = rl_service.backtest(
+                    rl_algorithm,
+                    dataset_path,
+                    checkpoint_path=checkpoint_path,
+                    action_type=rl_action_type,
+                    notes=f"hybrid_paper_workflow_id={workflow_id}",
+                )
+                artifacts["rl_backtest"] = artifact_ref(rl_backtest, "run_id")
+                mark_step(
+                    "rl_backtest",
+                    "completed",
+                    run_id=rl_backtest.get("run_id"),
+                    dataset_path=dataset_path,
+                    checkpoint_path=checkpoint_path,
+                )
+        except Exception as exc:
+            model_status["rl"] = {"available": False, "error": str(exc)}
+            add_blocker(f"RL backtest failed: {exc}", "inspect_rl_checkpoint_and_dataset")
+            mark_step("rl_backtest", "failed", error=str(exc))
+
+        try:
+            backtest = self.run_backtest(
+                strategy_name="Hybrid P1/P2 + RL Timing",
+                universe_symbols=universe_symbols,
+                benchmark=benchmark,
+                capital_base=capital_base,
+                lookback_days=126,
+                force_refresh=force_refresh,
+            )
+            artifacts["backtest"] = artifact_ref(backtest, "backtest_id")
+            mark_step("quant_backtest", "completed", backtest_id=backtest.get("backtest_id"))
+            if synthetic_backtest_used(backtest) and not allow_synthetic_execution:
+                add_blocker("Backtest used synthetic market data fallback.", "rerun_backtest_with_real_market_data")
+        except Exception as exc:
+            add_blocker(f"Quant backtest failed: {exc}", "inspect_backtest_inputs")
+            mark_step("quant_backtest", "failed", error=str(exc))
+
+        if backtest and backtest.get("backtest_id"):
+            try:
+                tearsheet_id = str(backtest.get("tearsheet_report_id") or "")
+                tearsheet = self.storage.load_record("tearsheets", tearsheet_id) if tearsheet_id else None
+                if tearsheet is None:
+                    tearsheet = self.build_tearsheet(str(backtest["backtest_id"]), persist=True)
+                artifacts["tearsheet"] = artifact_ref(tearsheet, "report_id")
+                mark_step("tearsheet", "completed", report_id=tearsheet.get("report_id"))
+                if str(tearsheet.get("protection_status") or "").lower() != "pass":
+                    add_blocker(
+                        "Tearsheet protection status did not pass.",
+                        "review_tearsheet_protection_status",
+                    )
+            except Exception as exc:
+                add_blocker(f"Tearsheet generation failed: {exc}", "inspect_tearsheet_generation")
+                mark_step("tearsheet", "failed", error=str(exc))
+        else:
+            mark_step("tearsheet", "skipped")
+
+        try:
+            paper_gate = self.build_paper_gate_report(persist=True)
+            artifacts["paper_gate"] = artifact_ref(paper_gate, "report_id")
+            mark_step("paper_gate", "completed", report_id=paper_gate.get("report_id"), status_label=paper_gate.get("status"))
+            if not paper_gate.get("passed"):
+                add_warning(
+                    "Paper gate is blocked for live enablement; paper workflow can still route if execution gates pass.",
+                    "review_paper_gate_report",
+                )
+        except Exception as exc:
+            add_blocker(f"Paper gate report failed: {exc}", "inspect_paper_gate_inputs")
+            mark_step("paper_gate", "failed", error=str(exc))
+
+        if normalized_mode != "paper":
+            add_blocker("Hybrid paper workflow only supports paper mode.", "switch_to_paper_mode")
+        if broker_id != "alpaca":
+            add_blocker("Hybrid paper workflow only supports Alpaca paper routing.", "switch_to_alpaca")
+        if rl_backtest is None:
+            add_blocker("RL backtest did not complete successfully.", "train_or_sync_rl_checkpoint")
+
+        try:
+            controls = self.get_execution_controls()
+            if submit_orders and bool(controls.get("kill_switch_enabled")):
+                add_blocker("Execution kill switch is enabled.", "clear_execution_kill_switch")
+        except Exception as exc:
+            add_blocker(f"Execution controls unavailable: {exc}", "inspect_execution_controls")
+
+        try:
+            account = self.get_execution_account(broker=broker_id, mode="paper")
+            if submit_orders and (not account.get("paper_ready") or not account.get("connected")):
+                add_blocker("Alpaca paper account is not ready.", "configure_paper_credentials")
+            for item in account.get("warnings") or []:
+                add_warning(str(item))
+            add_actions(*[str(item) for item in account.get("next_actions") or []])
+        except Exception as exc:
+            if submit_orders:
+                add_blocker(f"Alpaca paper account check failed: {exc}", "configure_paper_credentials")
+            else:
+                add_warning(f"Alpaca paper account check failed: {exc}", "configure_paper_credentials")
+
+        if blockers:
+            mark_step("paper_execution", "skipped")
+        else:
+            try:
+                execution = self.create_execution_plan(
+                    benchmark=benchmark,
+                    capital_base=capital_base,
+                    universe_symbols=universe_symbols,
+                    broker=broker_id,
+                    mode="paper",
+                    submit_orders=bool(submit_orders),
+                    max_orders=max_orders,
+                    per_order_notional=per_order_notional,
+                    allow_duplicates=False,
+                    strategy_id=strategy_mode,
+                )
+                artifacts["execution"] = artifact_ref(execution, "execution_id")
+                execution_orders = execution.get("submitted_orders") or []
+                mark_step(
+                    "paper_execution",
+                    "completed" if (not submit_orders or execution_orders) else "blocked",
+                    execution_id=execution.get("execution_id"),
+                    submitted_count=len(execution_orders),
+                    broker_status=execution.get("broker_status"),
+                )
+                for item in execution.get("warnings") or []:
+                    add_warning(str(item))
+                if submit_orders and not execution.get("submitted"):
+                    reason = execution.get("block_reason") or execution.get("broker_status") or "execution_not_submitted"
+                    add_blocker(f"Paper execution was not submitted: {reason}", *[str(item) for item in execution.get("next_actions") or []])
+            except Exception as exc:
+                add_blocker(f"Paper execution failed: {exc}", "inspect_execution_stack")
+                mark_step("paper_execution", "failed", error=str(exc))
+
+        submitted_orders = (execution or {}).get("submitted_orders") or []
+        planned_orders = (execution or {}).get("orders") or []
+        if blockers:
+            status = "blocked"
+        elif submit_orders and submitted_orders:
+            status = "submitted"
+        else:
+            status = "planned"
+
+        order_summary = [
+            {
+                "symbol": order.get("symbol"),
+                "side": order.get("side"),
+                "status": order.get("status"),
+                "notional": order.get("notional"),
+                "qty": order.get("qty") or order.get("quantity"),
+                "client_order_id": order.get("client_order_id"),
+                "broker_order_id": order.get("broker_order_id") or order.get("id"),
+            }
+            for order in (submitted_orders or planned_orders)[: max(1, int(max_orders or 1))]
+            if isinstance(order, dict)
+        ]
+
+        payload = {
+            "workflow_id": workflow_id,
+            "generated_at": _iso_now(),
+            "session_date": self._execution_session_date({"generated_at": _iso_now()}),
+            "status": status,
+            "request": request_payload,
+            "blockers": list(dict.fromkeys(blockers)),
+            "warnings": list(dict.fromkeys(warnings)),
+            "next_actions": list(dict.fromkeys(next_actions or ["inspect_workflow_artifacts"])),
+            "model_status": model_status,
+            "steps": steps,
+            "p1_report_id": (p1_report or {}).get("report_id"),
+            "p2_report_id": (p2_report or {}).get("report_id"),
+            "rl_backtest_run_id": (rl_backtest or {}).get("run_id"),
+            "backtest_id": (backtest or {}).get("backtest_id"),
+            "tearsheet_id": (tearsheet or {}).get("report_id") or (backtest or {}).get("tearsheet_report_id"),
+            "paper_gate_id": (paper_gate or {}).get("report_id"),
+            "execution_id": (execution or {}).get("execution_id"),
+            "submitted_count": len(submitted_orders),
+            "order_summary": order_summary,
+            "artifacts": artifacts,
+            "config_snapshot": self._config_snapshot(),
+            "gate_snapshot": {
+                "p2_promotable": bool(((p2_report or {}).get("deployment_readiness") or {}).get("promotable_to_paper")),
+                "rl_backtest_success": rl_backtest is not None,
+                "tearsheet_protection_status": (tearsheet or {}).get("protection_status"),
+                "paper_gate_status": (paper_gate or {}).get("status"),
+                "synthetic_execution": synthetic_backtest_used(backtest),
+                "alpaca_paper_ready": bool((account or {}).get("paper_ready") and (account or {}).get("connected")),
+                "kill_switch_enabled": bool((controls or {}).get("kill_switch_enabled")),
+            },
+        }
+        payload["blocker_summary"] = self.build_blocker_summary(
+            blockers=payload.get("blockers") or [],
+            warnings=payload.get("warnings") or [],
+        )
+        try:
+            payload["outcome_summary"] = self.record_workflow_paper_outcomes(
+                workflow_payload=payload,
+                p1_report=p1_report,
+                p2_report=p2_report,
+                execution_payload=execution,
+                backtest_payload=backtest,
+            )
+        except Exception as exc:
+            payload.setdefault("warnings", []).append(f"Paper outcome capture failed: {exc}")
+        try:
+            snapshot = self.capture_paper_performance_snapshot(
+                workflow_id=workflow_id,
+                execution_id=(execution or {}).get("execution_id"),
+                benchmark=benchmark,
+                broker=broker_id,
+                mode="paper",
+                account_payload=account,
+                force_refresh=force_refresh,
+            )
+            payload["paper_performance_snapshot_id"] = snapshot.get("snapshot_id")
+        except Exception as exc:
+            payload.setdefault("warnings", []).append(f"Paper performance snapshot failed: {exc}")
+        sanitized_payload = _jsonable(payload)
+        storage_info = self.storage.persist_record("workflow_runs", workflow_id, sanitized_payload)
+        sanitized_payload["storage"] = storage_info
+        self.storage.persist_record("workflow_runs", workflow_id, sanitized_payload)
+        return sanitized_payload
+
+    def capture_paper_performance_snapshot(
+        self,
+        *,
+        workflow_id: str | None = None,
+        execution_id: str | None = None,
+        benchmark: str | None = None,
+        broker: str = "alpaca",
+        mode: str = "paper",
+        account_payload: dict[str, Any] | None = None,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        benchmark = benchmark or self.default_benchmark
+        generated_at = _iso_now()
+        calendar_status = self.trading_calendar.status()
+        trading_day = (
+            calendar_status.get("session_date")
+            if calendar_status.get("is_session")
+            else calendar_status.get("previous_session") or datetime.now(timezone.utc).date().isoformat()
+        )
+        account_payload = account_payload or self.get_execution_account(broker=broker, mode=mode)
+        account = dict(account_payload.get("account") or account_payload)
+        previous = self._latest_paper_performance_snapshot(before_date=trading_day)
+        equity = self._paper_payload_float(account, "equity", "portfolio_value", "net_liquidation")
+        cash = self._paper_payload_float(account, "cash")
+        buying_power = self._paper_payload_float(account, "buying_power", "buyingPower")
+        if equity is None:
+            equity = self._paper_payload_float(previous or {}, "equity", "portfolio_nav") or self.default_capital
+        benchmark_nav, benchmark_meta = self._latest_benchmark_nav(
+            benchmark=benchmark,
+            fallback=self._paper_payload_float(previous or {}, "benchmark_nav") or 1.0,
+            force_refresh=force_refresh,
+        )
+        snapshot = {
+            "snapshot_id": trading_day,
+            "date": trading_day,
+            "generated_at": generated_at,
+            "workflow_id": workflow_id,
+            "execution_id": execution_id,
+            "broker": broker,
+            "mode": self._normalize_broker_mode(mode),
+            "benchmark": benchmark,
+            "portfolio_nav": float(equity or 0.0),
+            "equity": float(equity or 0.0),
+            "cash": cash,
+            "buying_power": buying_power,
+            "benchmark_nav": float(benchmark_nav or 1.0),
+            "benchmark_meta": benchmark_meta,
+            "calendar": calendar_status,
+            "session_date": trading_day,
+            "account": account,
+            "account_ready": bool(account_payload.get("connected") and account_payload.get("paper_ready", True)),
+            "warnings": list(account_payload.get("warnings") or []),
+        }
+        cash_flow_summary = self._capture_alpaca_cash_flows_for_session(
+            session_date=str(trading_day),
+            broker=broker,
+            mode=mode,
+        )
+        if cash_flow_summary.get("warnings"):
+            snapshot["warnings"].extend(cash_flow_summary.get("warnings") or [])
+        snapshot["cash_flow_adjustment_source"] = cash_flow_summary.get("source", "unavailable")
+        snapshot["cash_flows"] = cash_flow_summary
+        snapshot = self.synthetic_guard.annotate(snapshot, fallback_source=str((benchmark_meta or {}).get("provider") or "broker_account"))
+        snapshot["storage"] = self.storage.persist_record("paper_performance", trading_day, _jsonable(snapshot))
+        attribution = self._build_paper_attribution_record(snapshot=snapshot, session_date=trading_day)
+        snapshot["attribution_id"] = attribution.get("attribution_id")
+        snapshot["storage"] = self.storage.persist_record("paper_performance", trading_day, _jsonable(snapshot))
+        return _jsonable(snapshot)
+
+    def backfill_paper_performance(
+        self,
+        *,
+        days: int | None = None,
+        broker: str = "alpaca",
+        mode: str = "paper",
+        benchmark: str | None = None,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        window = max(1, min(int(days or getattr(settings, "PAPER_EVIDENCE_BACKFILL_DAYS", 120) or 120), 366))
+        benchmark = benchmark or self.default_benchmark
+        generated_at = _iso_now()
+        normalized_mode = self._normalize_broker_mode(mode)
+        if str(broker or "alpaca").lower() != "alpaca" or normalized_mode != "paper":
+            return {
+                "generated_at": generated_at,
+                "status": "blocked",
+                "reason": "paper_backfill_v1_only_supports_alpaca_paper",
+                "backfilled_snapshots": 0,
+                "backfilled_outcomes": 0,
+            }
+
+        since_day = (datetime.now(self.trading_calendar.timezone).date() - timedelta(days=window)).isoformat()
+        until_day = datetime.now(self.trading_calendar.timezone).date().isoformat()
+        errors: list[str] = []
+        account_payload: dict[str, Any] = {}
+        orders: list[dict[str, Any]] = []
+        positions: list[dict[str, Any]] = []
+        activities: list[dict[str, Any]] = []
+
+        try:
+            account_payload = self.get_execution_account(broker="alpaca", mode="paper")
+        except Exception as exc:
+            errors.append(f"account:{exc}")
+        try:
+            orders = self.alpaca.list_orders(status="all", limit=500, after=since_day, until=until_day, direction="desc")
+        except Exception as exc:
+            errors.append(f"orders:{exc}")
+        try:
+            positions = self.alpaca.list_positions()
+        except Exception as exc:
+            errors.append(f"positions:{exc}")
+        try:
+            activities = self.alpaca.list_account_activities(after=since_day, until=until_day, direction="desc", page_size=100)
+        except Exception as exc:
+            errors.append(f"activities:{exc}")
+
+        account = dict(account_payload.get("account") or account_payload)
+        equity = self._paper_payload_float(account, "equity", "portfolio_value", "net_liquidation") or self.default_capital
+        cash = self._paper_payload_float(account, "cash")
+        buying_power = self._paper_payload_float(account, "buying_power", "buyingPower")
+        orders_by_day: dict[str, list[dict[str, Any]]] = {}
+        for order in orders:
+            day_key = self._paper_gate_date_key(
+                {
+                    "created_at": order.get("filled_at")
+                    or order.get("submitted_at")
+                    or order.get("created_at")
+                    or order.get("updated_at")
+                }
+            )
+            if day_key:
+                orders_by_day.setdefault(day_key, []).append(order)
+        activities_by_day: dict[str, list[dict[str, Any]]] = {}
+        for activity in activities:
+            day_key = self._paper_gate_date_key({"created_at": activity.get("transaction_time") or activity.get("date")})
+            if day_key:
+                activities_by_day.setdefault(day_key, []).append(activity)
+
+        candidate_days = sorted(set(orders_by_day) | set(activities_by_day))
+        today_status = self.trading_calendar.status()
+        if today_status.get("is_session") and account_payload.get("connected"):
+            candidate_days.append(str(today_status.get("session_date")))
+        candidate_days = [
+            day for day in sorted(set(candidate_days))
+            if day >= since_day and day <= until_day and self.trading_calendar.is_session(day)
+        ]
+
+        snapshots: list[dict[str, Any]] = []
+        outcomes: list[dict[str, Any]] = []
+        benchmark_nav = 1.0
+        for index, session_date in enumerate(candidate_days):
+            benchmark_nav, benchmark_meta = self._latest_benchmark_nav(
+                benchmark=benchmark,
+                fallback=benchmark_nav,
+                force_refresh=force_refresh,
+            )
+            day_orders = orders_by_day.get(session_date, [])
+            day_activities = activities_by_day.get(session_date, [])
+            cash_flow_summary = self._persist_alpaca_cash_flows(
+                session_date=session_date,
+                activities=day_activities,
+                source="alpaca_activities_backfill",
+            )
+            snapshot = {
+                "snapshot_id": session_date,
+                "date": session_date,
+                "session_date": session_date,
+                "generated_at": generated_at,
+                "backfilled": True,
+                "evidence_source": "alpaca_paper_backfill",
+                "broker": "alpaca",
+                "mode": "paper",
+                "benchmark": benchmark,
+                "portfolio_nav": float(equity),
+                "equity": float(equity),
+                "cash": cash,
+                "buying_power": buying_power,
+                "benchmark_nav": float(benchmark_nav or 1.0),
+                "benchmark_meta": benchmark_meta,
+                "calendar": self.trading_calendar.session_info(session_date).model_dump(),
+                "orders_count": len(day_orders),
+                "activities_count": len(day_activities),
+                "positions_count": len(positions),
+                "cash_flow_adjustment_source": cash_flow_summary.get("source", "unavailable"),
+                "cash_flows": cash_flow_summary,
+                "broker_sync_errors": list(errors),
+                "account_ready": bool(account_payload.get("connected", True) and account_payload.get("paper_ready", True)),
+                "warnings": list(errors),
+            }
+            snapshot = self.synthetic_guard.annotate(snapshot, fallback_source="alpaca_paper_backfill")
+            snapshot["storage"] = self.storage.persist_record("paper_performance", session_date, _jsonable(snapshot))
+            attribution = self._build_paper_attribution_record(snapshot=snapshot, session_date=session_date)
+            snapshot["attribution_id"] = attribution.get("attribution_id")
+            snapshot["storage"] = self.storage.persist_record("paper_performance", session_date, _jsonable(snapshot))
+            snapshots.append(_jsonable(snapshot))
+
+            for order_index, order in enumerate(day_orders):
+                symbol = str(order.get("symbol") or "").upper().strip()
+                if not symbol:
+                    continue
+                side = str(order.get("side") or "buy").lower()
+                source_id = str(order.get("client_order_id") or order.get("id") or f"{session_date}-{order_index}")
+                outcome = self._build_paper_outcome_record(
+                    record_kind="order",
+                    source_id=source_id,
+                    index=index * 1000 + order_index,
+                    workflow_id="alpaca_backfill",
+                    execution_id=str(order.get("execution_id") or ""),
+                    symbol=symbol,
+                    action="short" if side in {"sell", "short"} else "long",
+                    entry_at=str(order.get("filled_at") or order.get("submitted_at") or order.get("created_at") or f"{session_date}T20:00:00+00:00"),
+                    entry_price=self._paper_payload_float(order, "filled_avg_price", "limit_price", "stop_price"),
+                    notional=self._paper_payload_float(order, "notional", "filled_notional", "qty"),
+                    features=order,
+                    model_refs={"source": "alpaca_paper_backfill"},
+                    market_data_source="alpaca",
+                    synthetic_used=False,
+                )
+                outcome["backfilled"] = True
+                outcome["broker_order_id"] = order.get("id")
+                outcomes.append(self._save_paper_outcome(outcome))
+
+        return {
+            "generated_at": generated_at,
+            "status": "completed" if snapshots or not errors else "blocked",
+            "window_days": window,
+            "broker": "alpaca",
+            "mode": "paper",
+            "source": "alpaca_paper",
+            "orders_seen": len(orders),
+            "activities_seen": len(activities),
+            "positions_seen": len(positions),
+            "backfilled_snapshots": len(snapshots),
+            "backfilled_outcomes": len(outcomes),
+            "snapshot_ids": [row.get("snapshot_id") for row in snapshots],
+            "outcome_ids": [row.get("outcome_id") for row in outcomes],
+            "errors": errors,
+            "warnings": errors,
+        }
+
+    def build_paper_performance_report(self, *, window_days: int = 90) -> dict[str, Any]:
+        self._sync_paper_reward_candidate_outcomes()
+        window = max(2, min(int(window_days or 90), 252))
+        rows = sorted(
+            [row for row in self.storage.list_records("paper_performance") if isinstance(row, dict)],
+            key=lambda item: str(item.get("date") or item.get("snapshot_id") or item.get("generated_at") or ""),
+        )[-window:]
+        points = self._normalize_paper_gate_points(rows)
+        metrics = self._compute_paper_gate_metrics(points)
+        metrics["annualized_return"] = self._annualized_return(metrics.get("net_return"), metrics.get("valid_days"))
+        missing_sessions = self._paper_missing_sessions(points=points, window_days=window)
+        metrics["expected_sessions"] = missing_sessions.get("expected_sessions", 0)
+        metrics["missing_sessions"] = missing_sessions.get("missing_count", 0)
+        metrics["calendar_coverage"] = missing_sessions.get("coverage", 0.0)
+        paper_gate = self.build_paper_gate_report(points=points, persist=False) if points else self.build_paper_gate_report(persist=False)
+        outcome_rows = self.list_paper_outcomes(limit=1000).get("outcomes", [])
+        execution_summary = self._paper_execution_summary(window_days=window)
+        attribution = self._paper_attribution_summary(rows=rows, outcomes=outcome_rows, execution_summary=execution_summary)
+        recommendation = self._live_canary_recommendation(metrics=metrics, outcomes=outcome_rows)
+        latest_snapshot = rows[-1] if rows else {}
+        broker_sync_errors = list((latest_snapshot or {}).get("broker_sync_errors") or []) + list(execution_summary.get("sync_errors") or [])
+        cash_flow_source = str((latest_snapshot or {}).get("cash_flow_adjustment_source") or "unavailable")
+        latest_reconciliation = self._latest_record_for_session("paper_reconciliations", self._record_session_date(latest_snapshot or {})) if latest_snapshot else None
+        cash_flow_summary = self._paper_cash_flow_summary(points=points)
+        cash_flow_adjusted_return = cash_flow_summary.get("cash_flow_adjusted_return")
+        if cash_flow_adjusted_return is None:
+            cash_flow_adjusted_return = metrics.get("net_return", 0.0)
+        trend = self._paper_attribution_trends(rows=rows, outcomes=outcome_rows, execution_summary=execution_summary)
+        return {
+            "generated_at": _iso_now(),
+            "window_days": window,
+            "points": points,
+            "equity_curve": [
+                {"date": point["date"], "portfolio_nav": point["portfolio_nav"], "benchmark_nav": point["benchmark_nav"]}
+                for point in points
+            ],
+            "drawdown_curve": self._drawdown_curve(points),
+            "latest_snapshot": latest_snapshot or None,
+            "missing_sessions": missing_sessions.get("missing_sessions", []),
+            "calendar_coverage": missing_sessions.get("coverage", 0.0),
+            "metrics": metrics,
+            "cash_flow_adjusted_return": cash_flow_adjusted_return,
+            "cash_flows": cash_flow_summary,
+            "cash_flow_adjustment_source": cash_flow_source,
+            "broker_sync_errors": broker_sync_errors,
+            "excluded_stale_symbols": (latest_snapshot or {}).get("excluded_symbols") or [],
+            "reconciliation_status": latest_reconciliation or {},
+            "backup_status": self.latest_storage_backup_status(),
+            "turnover": attribution.get("turnover", 0.0),
+            "fill_rate": attribution.get("fill_rate", 0.0),
+            "reject_rate": attribution.get("reject_rate", 0.0),
+            "avg_slippage_bps": attribution.get("avg_slippage_bps", 0.0),
+            "win_rate": attribution.get("win_rate", 0.0),
+            "avg_win_loss_ratio": attribution.get("avg_win_loss_ratio", 0.0),
+            "symbol_contributions": attribution.get("symbol_contributions", []),
+            "factor_exposures": attribution.get("factor_exposures", {}),
+            "industry_exposures": attribution.get("industry_exposures", {}),
+            "benchmark_attribution": attribution.get("benchmark_attribution", {}),
+            "attribution": attribution,
+            "attribution_trends": trend,
+            "warnings": [] if cash_flow_summary.get("source") != "unavailable" else ["cash_flow_source_unavailable"],
+            "paper_gate": paper_gate,
+            "live_canary_recommendation": recommendation,
+            "orders": execution_summary,
+            "outcomes": {
+                "count": len(outcome_rows),
+                "settled_count": sum(1 for row in outcome_rows if str(row.get("status") or "") == "settled"),
+                "synthetic_count": sum(1 for row in outcome_rows if bool(row.get("synthetic_used"))),
+                "latest": outcome_rows[:10],
+            },
+            "status": "canary_candidate" if recommendation.get("recommended") else "paper_tracking",
+        }
+
+    def latest_storage_backup_status(self) -> dict[str, Any]:
+        latest = self.storage.list_records("storage_backups")
+        if latest:
+            row = latest[0]
+            return {
+                "status": row.get("status"),
+                "session_date": row.get("session_date"),
+                "generated_at": row.get("generated_at"),
+                "artifact_backend": row.get("artifact_backend"),
+                "artifact_uri": row.get("artifact_uri"),
+                "uploaded": bool(row.get("uploaded")),
+                "warning": row.get("warning"),
+            }
+        return {"status": "missing", "uploaded": False}
+
+    def _alpaca_activity_cash_flow_amount(self, activity: dict[str, Any]) -> float:
+        activity_type = str(activity.get("activity_type") or activity.get("type") or "").upper()
+        raw_amount = self._paper_payload_float(
+            activity,
+            "net_amount",
+            "amount",
+            "price",
+            "fee",
+            "cash",
+        )
+        if raw_amount is None:
+            return 0.0
+        amount = float(raw_amount)
+        debit_types = {"FEE", "FEE_REVERSAL", "JNL", "JNLC", "CSD", "CSW"}
+        credit_types = {"DIV", "DIVCGL", "DIVCGS", "DIVNRA", "DIVROC", "DIVTXEX", "CSD"}
+        if activity_type in {"FILL", "TRANS", "ACATC", "ACATS"}:
+            return 0.0
+        if activity_type in debit_types and "fee" in {str(key).lower() for key in activity.keys()}:
+            return -abs(amount)
+        if activity_type in credit_types:
+            return amount
+        return amount
+
+    def _persist_alpaca_cash_flows(
+        self,
+        *,
+        session_date: str,
+        activities: list[dict[str, Any]],
+        source: str,
+    ) -> dict[str, Any]:
+        saved: list[dict[str, Any]] = []
+        net_cash_flow = 0.0
+        for index, activity in enumerate(activities or []):
+            if not isinstance(activity, dict):
+                continue
+            amount = self._alpaca_activity_cash_flow_amount(activity)
+            activity_type = str(activity.get("activity_type") or activity.get("type") or "").upper()
+            if amount == 0.0 and activity_type == "FILL":
+                continue
+            flow_id_source = (
+                activity.get("id")
+                or activity.get("activity_id")
+                or f"{session_date}-{index}-{activity_type or 'activity'}"
+            )
+            flow_id = f"cash-flow-{self._safe_record_id(flow_id_source)}"
+            payload = {
+                "cash_flow_id": flow_id,
+                "session_date": session_date,
+                "generated_at": _iso_now(),
+                "source": source,
+                "activity_type": activity_type,
+                "amount": round(float(amount), 6),
+                "raw_activity": activity,
+                "synthetic_used": False,
+                "evidence_eligible": True,
+            }
+            payload["storage"] = self.storage.persist_record("paper_cash_flows", flow_id, _jsonable(payload))
+            saved.append(_jsonable(payload))
+            net_cash_flow += float(amount)
+        return {
+            "source": source if saved else "unavailable",
+            "count": len(saved),
+            "net_cash_flow": round(net_cash_flow, 6),
+            "cash_flow_ids": [row.get("cash_flow_id") for row in saved],
+        }
+
+    def _capture_alpaca_cash_flows_for_session(self, *, session_date: str, broker: str, mode: str) -> dict[str, Any]:
+        normalized_mode = self._normalize_broker_mode(mode)
+        if str(broker or "").lower() != "alpaca" or normalized_mode != "paper":
+            return {"source": "unavailable", "count": 0, "net_cash_flow": 0.0}
+        try:
+            activities = self.alpaca.list_account_activities(
+                after=session_date,
+                until=session_date,
+                direction="desc",
+                page_size=100,
+            )
+        except Exception as exc:
+            return {
+                "source": "unavailable",
+                "count": 0,
+                "net_cash_flow": 0.0,
+                "warnings": [f"cash_flow_activities:{exc}"],
+            }
+        return self._persist_alpaca_cash_flows(
+            session_date=session_date,
+            activities=[row for row in activities if isinstance(row, dict)],
+            source="alpaca_activities",
+        )
+
+    def _paper_cash_flow_summary(self, *, points: list[dict[str, Any]]) -> dict[str, Any]:
+        if not points:
+            return {
+                "count": 0,
+                "net_cash_flow": 0.0,
+                "source": "unavailable",
+                "cash_flow_adjusted_return": None,
+            }
+        start_date = str(points[0].get("date") or "")[:10]
+        end_date = str(points[-1].get("date") or "")[:10]
+        flows = [
+            row for row in self.storage.list_records("paper_cash_flows")
+            if isinstance(row, dict)
+            and start_date <= str(row.get("session_date") or "")[:10] <= end_date
+            and not bool(row.get("synthetic_used"))
+            and row.get("evidence_eligible") is not False
+        ]
+        net_cash_flow = sum(float(row.get("amount") or 0.0) for row in flows)
+        start_nav = self._paper_payload_float(points[0], "portfolio_nav")
+        end_nav = self._paper_payload_float(points[-1], "portfolio_nav")
+        adjusted = None
+        if start_nav not in {None, 0} and end_nav is not None:
+            adjusted = round((float(end_nav) - float(start_nav) - net_cash_flow) / float(start_nav), 6)
+        return {
+            "count": len(flows),
+            "net_cash_flow": round(net_cash_flow, 6),
+            "source": "alpaca_activities" if flows else "unavailable",
+            "cash_flow_adjusted_return": adjusted,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+
+    def backup_quant_storage(self, *, session_date: str | None = None) -> dict[str, Any]:
+        if not bool(getattr(settings, "STORAGE_BACKUP_ENABLED", True)):
+            return {"enabled": False, "status": "skipped", "reason": "storage_backup_disabled"}
+        session = str(session_date or self._execution_session_date({}))[:10]
+        backup_dir = self.storage.base_dir / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = backup_dir / f"{session}.tar.gz"
+        include_dirs = [
+            "workflow_runs",
+            "session_evidence",
+            "executions",
+            "execution_journals",
+            "submit_locks",
+            "paper_outcomes",
+            "paper_performance",
+            "paper_cash_flows",
+            "paper_attribution",
+            "paper_reconciliations",
+            "paper_daily_digests",
+            "paper_daily_digest_deliveries",
+            "paper_weekly_digests",
+            "paper_weekly_digest_deliveries",
+            "promotion_evidence",
+            "alerts",
+            "scheduler_events",
+            "circuit_breakers",
+        ]
+        with tarfile.open(archive_path, "w:gz") as archive:
+            for name in include_dirs:
+                path = self.storage.base_dir / name
+                if path.exists():
+                    archive.add(path, arcname=name)
+        upload = self.storage.upload_artifact_file(
+            f"quant/backups/{archive_path.name}",
+            archive_path,
+            content_type="application/gzip",
+        )
+        retention_days = max(1, int(getattr(settings, "STORAGE_BACKUP_RETENTION_DAYS", 30) or 30))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        removed = 0
+        for old_path in backup_dir.glob("*.tar.gz"):
+            try:
+                mtime = datetime.fromtimestamp(old_path.stat().st_mtime, timezone.utc)
+                if old_path != archive_path and mtime < cutoff:
+                    old_path.unlink(missing_ok=True)
+                    removed += 1
+            except Exception:
+                continue
+        payload = {
+            "backup_id": f"storage-backup-{session}",
+            "generated_at": _iso_now(),
+            "session_date": session,
+            "status": "completed" if upload.get("uploaded") else "completed_local_only",
+            "local_path": str(archive_path),
+            "size_bytes": archive_path.stat().st_size if archive_path.exists() else 0,
+            "included_dirs": include_dirs,
+            "retention_days": retention_days,
+            "removed_expired_count": removed,
+            "artifact_backend": upload.get("artifact_backend"),
+            "artifact_uri": upload.get("artifact_uri"),
+            "uploaded": bool(upload.get("uploaded")),
+            "warning": None if upload.get("uploaded") else "remote_backup_unavailable",
+        }
+        payload["storage"] = self.storage.persist_record("storage_backups", payload["backup_id"], _jsonable(payload))
+        return _jsonable(payload)
+
+    def _build_paper_attribution_record(self, *, snapshot: dict[str, Any], session_date: str) -> dict[str, Any]:
+        executions = [
+            row
+            for row in self.storage.list_records("executions")
+            if isinstance(row, dict)
+            and (
+                str(row.get("execution_id") or "") == str(snapshot.get("execution_id") or "")
+                or self._paper_gate_date_key(row) == session_date
+            )
+        ]
+        outcomes = [
+            row
+            for row in self.storage.list_records("paper_outcomes")
+            if isinstance(row, dict) and self._paper_gate_date_key({"generated_at": row.get("entry_at") or row.get("created_at")}) == session_date
+        ]
+        summary = self._paper_attribution_summary(rows=[snapshot], outcomes=outcomes, execution_summary=self._execution_quality_from_payloads(executions))
+        attribution_id = session_date
+        payload = {
+            "attribution_id": attribution_id,
+            "session_date": session_date,
+            "generated_at": _iso_now(),
+            "snapshot_id": snapshot.get("snapshot_id"),
+            "workflow_id": snapshot.get("workflow_id"),
+            "execution_id": snapshot.get("execution_id"),
+            "calendar": snapshot.get("calendar", {}),
+            **summary,
+        }
+        payload["storage"] = self.storage.persist_record("paper_attribution", attribution_id, _jsonable(payload))
+        return _jsonable(payload)
+
+    def _paper_attribution_summary(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        outcomes: list[dict[str, Any]],
+        execution_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        attribution_rows = [row for row in self.storage.list_records("paper_attribution") if isinstance(row, dict)]
+        latest_attribution = attribution_rows[0] if attribution_rows else {}
+        order_count = int(execution_summary.get("order_count") or 0)
+        filled_count = int(execution_summary.get("filled_count") or 0)
+        rejected_count = int(execution_summary.get("rejected_count") or 0)
+        fill_rate = filled_count / order_count if order_count else 0.0
+        reject_rate = rejected_count / order_count if order_count else 0.0
+        slippage_values = [
+            float(value)
+            for value in execution_summary.get("slippage_bps_values", [])
+            if value is not None
+        ]
+        avg_slippage = statistics.mean(slippage_values) if slippage_values else float(latest_attribution.get("avg_slippage_bps") or 0.0)
+        settled = [row for row in outcomes if str(row.get("status") or "") == "settled" and row.get("score") is not None]
+        wins = [row for row in settled if float(row.get("score") or 0.0) > 0]
+        losses = [row for row in settled if float(row.get("score") or 0.0) < 0]
+        win_rate = len(wins) / len(settled) if settled else 0.0
+        avg_win = statistics.mean([float(row.get("score") or 0.0) for row in wins]) if wins else 0.0
+        avg_loss = abs(statistics.mean([float(row.get("score") or 0.0) for row in losses])) if losses else 0.0
+        symbol_scores: dict[str, dict[str, Any]] = {}
+        factor_values: dict[str, list[float]] = {}
+        industry_values: dict[str, float] = {}
+        for row in outcomes:
+            symbol = str(row.get("symbol") or "UNKNOWN").upper()
+            score = float(row.get("score") or row.get("partial_score") or 0.0)
+            bucket = symbol_scores.setdefault(symbol, {"symbol": symbol, "score": 0.0, "count": 0, "notional": 0.0})
+            bucket["score"] += score
+            bucket["count"] += 1
+            bucket["notional"] += float(row.get("notional") or 0.0)
+            features = dict(row.get("features") or {})
+            industry = str(features.get("industry") or features.get("sector") or "unclassified").strip() or "unclassified"
+            industry_values[industry] = industry_values.get(industry, 0.0) + float(row.get("notional") or 0.0)
+            for key in ("momentum", "quality", "value", "alternative_data", "regime_fit", "esg_delta", "overall_score", "risk_score"):
+                if features.get(key) is not None:
+                    try:
+                        factor_values.setdefault(key, []).append(float(features[key]))
+                    except (TypeError, ValueError):
+                        pass
+            for factor in features.get("factor_scores") or []:
+                if isinstance(factor, dict) and factor.get("name") and factor.get("value") is not None:
+                    try:
+                        factor_values.setdefault(str(factor["name"]), []).append(float(factor["value"]))
+                    except (TypeError, ValueError):
+                        pass
+        points = self._normalize_paper_gate_points(rows)
+        metrics = self._compute_paper_gate_metrics(points)
+        return {
+            "generated_at": _iso_now(),
+            "order_count": order_count,
+            "filled_count": filled_count,
+            "rejected_count": rejected_count,
+            "fill_rate": round(fill_rate, 6),
+            "reject_rate": round(reject_rate, 6),
+            "avg_slippage_bps": round(float(avg_slippage), 4),
+            "win_rate": round(win_rate, 6),
+            "avg_win_loss_ratio": round(avg_win / avg_loss, 6) if avg_loss > 0 else (999.0 if avg_win > 0 else 0.0),
+            "turnover": round(float(execution_summary.get("turnover") or 0.0), 6),
+            "symbol_contributions": sorted(symbol_scores.values(), key=lambda item: abs(float(item["score"])), reverse=True)[:25],
+            "factor_exposures": {
+                key: round(statistics.mean(values), 6)
+                for key, values in factor_values.items()
+                if values
+            },
+            "industry_exposures": {
+                key: round(value, 6)
+                for key, value in sorted(industry_values.items(), key=lambda item: abs(item[1]), reverse=True)[:25]
+            },
+            "benchmark_attribution": {
+                "portfolio_return": metrics.get("net_return", 0.0),
+                "benchmark_return": metrics.get("benchmark_return", 0.0),
+                "excess_return": metrics.get("excess_return", 0.0),
+                "tracking_source": "paper_performance",
+            },
+            "calendar_coverage": self._calendar_coverage(points),
+        }
+
+    def _paper_attribution_trends(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        outcomes: list[dict[str, Any]],
+        execution_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        snapshots = sorted(
+            [row for row in rows if isinstance(row, dict)],
+            key=lambda item: str(item.get("date") or item.get("snapshot_id") or item.get("generated_at") or ""),
+        )
+        attribution_rows = sorted(
+            [row for row in self.storage.list_records("paper_attribution") if isinstance(row, dict)],
+            key=lambda item: str(item.get("session_date") or item.get("generated_at") or ""),
+        )
+        attribution_by_session = {
+            str(row.get("session_date") or "")[:10]: row
+            for row in attribution_rows
+            if row.get("session_date")
+        }
+        outcome_by_session: dict[str, list[dict[str, Any]]] = {}
+        for outcome in outcomes:
+            session = self._paper_gate_date_key({"generated_at": outcome.get("entry_at") or outcome.get("created_at")})
+            if session:
+                outcome_by_session.setdefault(session, []).append(outcome)
+        trend_rows: list[dict[str, Any]] = []
+        for snapshot in snapshots[-90:]:
+            session = str(snapshot.get("date") or snapshot.get("snapshot_id") or "")[:10]
+            attribution = attribution_by_session.get(session) or {}
+            day_outcomes = outcome_by_session.get(session, [])
+            settled = [row for row in day_outcomes if str(row.get("status") or "") == "settled" and row.get("score") is not None]
+            wins = [row for row in settled if float(row.get("score") or 0.0) > 0]
+            losses = [row for row in settled if float(row.get("score") or 0.0) < 0]
+            avg_win = statistics.mean([float(row.get("score") or 0.0) for row in wins]) if wins else 0.0
+            avg_loss = abs(statistics.mean([float(row.get("score") or 0.0) for row in losses])) if losses else 0.0
+            trend_rows.append(
+                {
+                    "session_date": session,
+                    "turnover": float(attribution.get("turnover") or 0.0),
+                    "fill_rate": float(attribution.get("fill_rate") or 0.0),
+                    "reject_rate": float(attribution.get("reject_rate") or 0.0),
+                    "avg_slippage_bps": float(attribution.get("avg_slippage_bps") or 0.0),
+                    "win_rate": round(len(wins) / len(settled), 6) if settled else 0.0,
+                    "avg_win_loss_ratio": round(avg_win / avg_loss, 6) if avg_loss > 0 else (999.0 if avg_win > 0 else 0.0),
+                    "symbol_contributions": attribution.get("symbol_contributions") or [],
+                    "factor_exposures": attribution.get("factor_exposures") or {},
+                    "industry_exposures": attribution.get("industry_exposures") or {},
+                }
+            )
+        if not trend_rows and execution_summary:
+            trend_rows.append(
+                {
+                    "session_date": None,
+                    "turnover": float(execution_summary.get("turnover") or 0.0),
+                    "fill_rate": 0.0,
+                    "reject_rate": 0.0,
+                    "avg_slippage_bps": 0.0,
+                    "win_rate": 0.0,
+                    "avg_win_loss_ratio": 0.0,
+                    "symbol_contributions": [],
+                    "factor_exposures": {},
+                    "industry_exposures": {},
+                }
+            )
+        return {
+            "generated_at": _iso_now(),
+            "rows": trend_rows,
+            "metric_keys": [
+                "turnover",
+                "fill_rate",
+                "reject_rate",
+                "avg_slippage_bps",
+                "win_rate",
+                "avg_win_loss_ratio",
+            ],
+        }
+
+    def _execution_quality_from_payloads(self, executions: list[dict[str, Any]]) -> dict[str, Any]:
+        orders: list[dict[str, Any]] = []
+        for payload in executions:
+            for order in payload.get("submitted_orders") or payload.get("orders") or []:
+                if isinstance(order, dict):
+                    orders.append(order)
+        filled_states = {"filled", "partially_filled"}
+        rejected_states = {"rejected", "failed", "canceled", "cancelled", "expired"}
+        return {
+            "execution_count": len(executions),
+            "order_count": len(orders),
+            "filled_count": sum(1 for order in orders if str(order.get("status") or "").lower() in filled_states),
+            "rejected_count": sum(1 for order in orders if str(order.get("status") or "").lower() in rejected_states),
+            "submitted_count": sum(1 for payload in executions if payload.get("submitted")),
+            "latest_execution_id": executions[0].get("execution_id") if executions else None,
+            "slippage_bps_values": [
+                order.get("estimated_slippage_bps")
+                for order in orders
+                if order.get("estimated_slippage_bps") is not None
+            ],
+            "turnover": sum(float(order.get("notional") or order.get("submitted_notional") or 0.0) for order in orders),
+        }
+
+    @staticmethod
+    def _drawdown_curve(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        curve: list[dict[str, Any]] = []
+        peak = 0.0
+        for point in points:
+            nav = float(point.get("portfolio_nav") or 0.0)
+            peak = max(peak, nav)
+            drawdown = 0.0 if peak <= 0 else 1 - nav / peak
+            curve.append({"date": point.get("date"), "drawdown": round(drawdown, 6), "portfolio_nav": nav})
+        return curve
+
+    def _calendar_coverage(self, points: list[dict[str, Any]]) -> float:
+        if len(points) < 2:
+            return 0.0
+        start = date.fromisoformat(points[0]["date"])
+        end = date.fromisoformat(points[-1]["date"])
+        expected = 0
+        current = start
+        while current <= end:
+            if self.trading_calendar.is_session(current):
+                expected += 1
+            current += timedelta(days=1)
+        return round(min(1.0, len(points) / expected), 6) if expected else 0.0
+
+    def _paper_missing_sessions(self, *, points: list[dict[str, Any]], window_days: int) -> dict[str, Any]:
+        point_dates = {
+            str(point.get("date"))
+            for point in points
+            if point.get("date")
+        }
+        today_status = self.trading_calendar.status()
+        end_text = (
+            today_status.get("session_date")
+            if today_status.get("is_session")
+            else today_status.get("previous_session") or today_status.get("session_date")
+        )
+        try:
+            end_date = date.fromisoformat(str(end_text)[:10])
+        except Exception:
+            end_date = datetime.now(timezone.utc).date()
+        start_date = end_date - timedelta(days=max(7, int(window_days or 90) * 2))
+        expected: list[str] = []
+        current = start_date
+        while current <= end_date:
+            if self.trading_calendar.is_session(current):
+                expected.append(current.isoformat())
+            current += timedelta(days=1)
+        expected = expected[-max(1, int(window_days or 90)):]
+        missing = [session for session in expected if session not in point_dates]
+        coverage = (len(expected) - len(missing)) / len(expected) if expected else 0.0
+        return {
+            "calendar_id": getattr(self.trading_calendar, "calendar_id", "XNYS"),
+            "window_days": int(window_days or 90),
+            "expected_sessions": len(expected),
+            "observed_sessions": len([session for session in expected if session in point_dates]),
+            "missing_count": len(missing),
+            "coverage": round(max(0.0, min(1.0, coverage)), 6),
+            "missing_sessions": missing,
+        }
+
+    def record_workflow_paper_outcomes(
+        self,
+        *,
+        workflow_payload: dict[str, Any],
+        p1_report: dict[str, Any] | None = None,
+        p2_report: dict[str, Any] | None = None,
+        execution_payload: dict[str, Any] | None = None,
+        backtest_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        workflow_id = str(workflow_payload.get("workflow_id") or "").strip()
+        execution_id = str(workflow_payload.get("execution_id") or (execution_payload or {}).get("execution_id") or "").strip()
+        generated_at = str(workflow_payload.get("generated_at") or _iso_now())
+        saved: list[dict[str, Any]] = []
+
+        for report_kind, report in (("p1_signal", p1_report), ("p2_signal", p2_report)):
+            for index, signal in enumerate((report or {}).get("signals") or []):
+                if not isinstance(signal, dict) or not str(signal.get("symbol") or "").strip():
+                    continue
+                saved.append(
+                    self._save_paper_outcome(
+                        self._build_paper_outcome_record(
+                            record_kind=report_kind,
+                            source_id=str((report or {}).get("report_id") or workflow_id),
+                            index=index,
+                            workflow_id=workflow_id,
+                            execution_id=execution_id,
+                            symbol=str(signal.get("symbol") or "").upper(),
+                            action=str(signal.get("action") or "long").lower(),
+                            entry_at=generated_at,
+                            entry_price=self._paper_payload_float(signal, "entry_price", "close", "price"),
+                            notional=None,
+                            features=signal,
+                            model_refs={
+                                "p1_report_id": workflow_payload.get("p1_report_id"),
+                                "p2_report_id": workflow_payload.get("p2_report_id"),
+                                "rl_backtest_run_id": workflow_payload.get("rl_backtest_run_id"),
+                            },
+                            market_data_source=str(signal.get("market_data_source") or signal.get("source") or "unknown"),
+                            synthetic_used=self._payload_mentions_synthetic(signal) or self._payload_mentions_synthetic(backtest_payload),
+                        )
+                    )
+                )
+
+        orders = (execution_payload or {}).get("submitted_orders") or (execution_payload or {}).get("orders") or workflow_payload.get("order_summary") or []
+        for index, order in enumerate(orders):
+            if not isinstance(order, dict) or not str(order.get("symbol") or "").strip():
+                continue
+            side = str(order.get("side") or order.get("action") or "buy").lower()
+            action = "short" if side in {"sell", "short"} else "long"
+            saved.append(
+                self._save_paper_outcome(
+                    self._build_paper_outcome_record(
+                        record_kind="order",
+                        source_id=str(order.get("client_order_id") or order.get("broker_order_id") or execution_id or workflow_id),
+                        index=index,
+                        workflow_id=workflow_id,
+                        execution_id=execution_id,
+                        symbol=str(order.get("symbol") or "").upper(),
+                        action=action,
+                        entry_at=str(order.get("submitted_at") or generated_at),
+                        entry_price=self._paper_payload_float(order, "filled_avg_price", "limit_price", "entry_price", "price"),
+                        notional=self._paper_payload_float(order, "notional", "submitted_notional", "requested_notional"),
+                        features=order,
+                        model_refs={
+                            "p1_report_id": workflow_payload.get("p1_report_id"),
+                            "p2_report_id": workflow_payload.get("p2_report_id"),
+                            "rl_backtest_run_id": workflow_payload.get("rl_backtest_run_id"),
+                        },
+                        market_data_source=str((backtest_payload or {}).get("data_source") or "execution"),
+                        synthetic_used=self._payload_mentions_synthetic(backtest_payload),
+                    )
+                )
+            )
+        return {
+            "captured_count": len(saved),
+            "outcome_ids": [row.get("outcome_id") for row in saved],
+        }
+
+    def list_paper_outcomes(
+        self,
+        *,
+        limit: int = 200,
+        record_kind: str | None = None,
+        status: str | None = None,
+        symbol: str | None = None,
+    ) -> dict[str, Any]:
+        self._sync_paper_reward_candidate_outcomes()
+        rows = self.storage.list_records("paper_outcomes")
+        if record_kind:
+            rows = [row for row in rows if str(row.get("record_kind") or "") == record_kind]
+        if status:
+            rows = [row for row in rows if str(row.get("status") or "") == status]
+        if symbol:
+            normalized_symbol = str(symbol).upper()
+            rows = [row for row in rows if str(row.get("symbol") or "").upper() == normalized_symbol]
+        rows.sort(key=lambda item: str(item.get("created_at") or item.get("generated_at") or ""), reverse=True)
+        rows = rows[: max(1, min(int(limit or 200), 1000))]
+        return {"generated_at": _iso_now(), "count": len(rows), "outcomes": rows}
+
+    def settle_paper_outcomes(
+        self,
+        *,
+        outcome_id: str | None = None,
+        force_refresh: bool = False,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        from gateway.trading.reward_bandit import default_bandit_state, settle_candidate_with_bars, update_bandit_state
+
+        self._sync_paper_reward_candidate_outcomes()
+        rows = [self.storage.load_record("paper_outcomes", outcome_id)] if outcome_id else self.storage.list_records("paper_outcomes")
+        rows = [row for row in rows if isinstance(row, dict)]
+        rows = [
+            row
+            for row in rows
+            if outcome_id or str(row.get("status") or "") in {"pending", "partially_settled"}
+        ][: max(1, min(int(limit or 200), 1000))]
+        bandit_state = self.storage.load_record("paper_outcome_bandit", "state") or default_bandit_state()
+        updated: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        bandit_updated = False
+        for row in rows:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            provenance = self.synthetic_guard.inspect(row)
+            if provenance.synthetic_used:
+                row.update(provenance.model_dump())
+                row["status"] = str(row.get("status") or "pending")
+                self._save_paper_outcome(row)
+                warnings.append(f"{row.get('outcome_id')}: synthetic evidence is not settlement-eligible")
+                continue
+            if not self._paper_payload_float(row, "entry_price"):
+                warnings.append(f"{row.get('outcome_id')}: missing entry_price")
+                continue
+            try:
+                bars_result = self.market_data.get_daily_bars(
+                    symbol,
+                    limit=60,
+                    force_refresh=force_refresh,
+                    allow_stale_cache=True,
+                )
+                bars = self._bars_result_to_rows(bars_result)
+                settled, changed = settle_candidate_with_bars(row, bars)
+            except Exception as exc:
+                warnings.append(f"{symbol}: {exc}")
+                continue
+            if settled.get("score") is not None and not settled.get("bandit_updated_at"):
+                bandit_state = update_bandit_state(bandit_state, settled)
+                settled["bandit_updated_at"] = _iso_now()
+                bandit_updated = True
+            if changed or settled.get("bandit_updated_at"):
+                updated.append(self._save_paper_outcome(settled))
+        if bandit_updated:
+            bandit_state["state_id"] = "state"
+            bandit_state["storage"] = self.storage.persist_record("paper_outcome_bandit", "state", _jsonable(bandit_state))
+        return {
+            "settlement_id": f"paper-outcome-settle-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            "generated_at": _iso_now(),
+            "checked_count": len(rows),
+            "updated_count": len(updated),
+            "updated_outcomes": updated,
+            "bandit_updated": bandit_updated,
+            "warnings": warnings,
+        }
+
+    def build_promotion_report(self, *, window_days: int = 90, persist: bool = False) -> dict[str, Any]:
+        performance = self.build_paper_performance_report(window_days=window_days)
+        paper_gate = performance.get("paper_gate") or self.build_paper_gate_report(persist=False)
+        recommendation = performance.get("live_canary_recommendation") or {}
+        policy = load_promotion_policy()
+        quality = {
+            "filled_count": (performance.get("orders") or {}).get("filled_count", 0),
+            "settled_count": (performance.get("outcomes") or {}).get("settled_count", 0),
+            "synthetic_count": (performance.get("outcomes") or {}).get("synthetic_count", 0),
+            "reject_rate": performance.get("reject_rate", 0.0),
+            "avg_slippage_bps": performance.get("avg_slippage_bps", 0.0),
+            "calendar_coverage": (performance.get("attribution") or {}).get("calendar_coverage", 0.0),
+        }
+        paper_policy = evaluate_thresholds(performance.get("metrics") or {}, quality, policy, "paper_promoted")
+        if recommendation.get("recommended"):
+            promotion_status = "canary_candidate"
+        elif paper_gate.get("passed") and paper_policy.get("passed"):
+            promotion_status = "paper_promoted"
+        elif performance.get("metrics", {}).get("valid_days", 0) > 0:
+            promotion_status = "paper_candidate"
+        else:
+            promotion_status = "research_only"
+        if (paper_gate.get("blockers") or paper_policy.get("blockers")) and not performance.get("metrics", {}).get("valid_days"):
+            promotion_status = "blocked"
+        registry = self.build_model_registry()
+        report_id = f"promotion-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        payload = {
+            "report_id": report_id,
+            "generated_at": _iso_now(),
+            "promotion_status": promotion_status,
+            "allowed_statuses": ["research_only", "shadow", "paper_candidate", "paper_promoted", "canary_candidate", "blocked"],
+            "policy": policy,
+            "policy_evaluation": {
+                "paper_promoted": paper_policy,
+                "live_canary": recommendation.get("checks", {}),
+                "quality": quality,
+            },
+            "paper_gate": paper_gate,
+            "performance": performance,
+            "model_registry": registry,
+            "models": [
+                {
+                    **model,
+                    "promotion_status": promotion_status if model.get("available") else "blocked",
+                    "blockers": [] if model.get("available") else ["model_artifact_unavailable"],
+                }
+                for model in registry.get("models", [])
+            ],
+            "recommendation": {
+                "live_canary": bool(recommendation.get("recommended")),
+                "action": "operator_review_required" if recommendation.get("recommended") else "continue_paper",
+                "reason": recommendation.get("summary") or "Paper evidence has not reached live canary criteria.",
+                "blockers": recommendation.get("blockers", []),
+            },
+        }
+        if persist:
+            payload["storage"] = self.storage.persist_record("promotion_reports", report_id, _jsonable(payload))
+            evidence = {
+                "evidence_id": report_id,
+                "generated_at": payload["generated_at"],
+                "policy": policy,
+                "promotion_status": promotion_status,
+                "blockers": list(dict.fromkeys((paper_gate.get("blockers") or []) + (paper_policy.get("blockers") or []) + (recommendation.get("blockers") or []))),
+                "source_ids": {
+                    "latest_snapshot": (performance.get("latest_snapshot") or {}).get("snapshot_id"),
+                    "latest_execution_id": (performance.get("orders") or {}).get("latest_execution_id"),
+                    "paper_gate_report_id": paper_gate.get("report_id"),
+                },
+                "operator_review": {"required": True, "status": "pending"},
+                "metrics": performance.get("metrics", {}),
+                "quality": quality,
+            }
+            payload["evidence_storage"] = self.storage.persist_record("promotion_evidence", report_id, _jsonable(evidence))
+        return _jsonable(payload)
+
+    def evaluate_promotion(self, *, window_days: int = 90, persist: bool = True) -> dict[str, Any]:
+        return self.build_promotion_report(window_days=window_days, persist=persist)
+
+    def build_promotion_timeline(self, *, limit: int = 50) -> dict[str, Any]:
+        statuses = ["research_only", "shadow", "paper_candidate", "paper_promoted", "canary_candidate", "blocked"]
+        evidence_rows = [
+            row for row in self.storage.list_records("promotion_evidence")
+            if isinstance(row, dict)
+        ]
+        report_rows = [
+            row for row in self.storage.list_records("promotion_reports")
+            if isinstance(row, dict)
+        ]
+        shadow_rows = [
+            row for row in self.storage.list_records("shadow_retrain_runs")
+            if isinstance(row, dict)
+        ]
+        events: list[dict[str, Any]] = []
+        for row in evidence_rows:
+            events.append(
+                {
+                    "event_id": row.get("evidence_id") or row.get("report_id"),
+                    "generated_at": row.get("generated_at"),
+                    "status": row.get("promotion_status") or "research_only",
+                    "source": "promotion_evidence",
+                    "evidence_id": row.get("evidence_id"),
+                    "blockers": row.get("blockers") or [],
+                    "metrics": row.get("metrics") or {},
+                    "quality": row.get("quality") or {},
+                }
+            )
+        for row in report_rows:
+            events.append(
+                {
+                    "event_id": row.get("report_id"),
+                    "generated_at": row.get("generated_at"),
+                    "status": row.get("promotion_status") or "research_only",
+                    "source": "promotion_report",
+                    "evidence_id": row.get("report_id"),
+                    "blockers": ((row.get("recommendation") or {}).get("blockers") or []),
+                    "metrics": ((row.get("performance") or {}).get("metrics") or {}),
+                    "quality": (((row.get("policy_evaluation") or {}).get("quality")) or {}),
+                }
+            )
+        for row in shadow_rows:
+            events.append(
+                {
+                    "event_id": row.get("run_id"),
+                    "generated_at": row.get("generated_at"),
+                    "status": "shadow",
+                    "source": "shadow_retrain",
+                    "evidence_id": row.get("run_id"),
+                    "blockers": row.get("blockers") or [],
+                    "metrics": row.get("metrics") or {},
+                    "quality": row.get("quality") or {},
+                }
+            )
+        events.sort(key=lambda item: str(item.get("generated_at") or ""), reverse=True)
+        current_status = events[0]["status"] if events else self.build_promotion_report(window_days=90, persist=False).get("promotion_status")
+        return {
+            "generated_at": _iso_now(),
+            "allowed_statuses": statuses,
+            "current_status": current_status or "research_only",
+            "count": len(events[: max(1, min(int(limit or 50), 200))]),
+            "events": _jsonable(events[: max(1, min(int(limit or 50), 200))]),
+        }
+
+    def run_shadow_retrain(self, *, model_key: str = "rl_checkpoint", force: bool = False) -> dict[str, Any]:
+        enabled = bool(getattr(settings, "SHADOW_RETRAIN_ENABLED", False))
+        shadow_only = bool(getattr(settings, "MODEL_RETRAIN_SHADOW_ONLY", True))
+        registry = self.build_model_registry()
+        rl_meta = self._rl_checkpoint_preflight()
+        run_id = f"shadow-retrain-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+        blockers: list[str] = []
+        if not enabled and not force:
+            blockers.append("shadow_retrain_disabled")
+        if not shadow_only:
+            blockers.append("model_retrain_shadow_only_required")
+        payload = {
+            "run_id": run_id,
+            "generated_at": _iso_now(),
+            "model_key": model_key,
+            "status": "skipped" if blockers else "shadow_completed",
+            "shadow_only": True,
+            "force": bool(force),
+            "blockers": blockers,
+            "model_registry": registry,
+            "rl_checkpoint": rl_meta,
+            "metrics": {
+                "backtest_required": True,
+                "ope_required": True,
+                "paper_checkpoint_replaced": False,
+                "live_release_changed": False,
+            },
+            "next_actions": ["enable_shadow_retrain_schedule"] if blockers else ["evaluate_shadow_report_for_paper_promotion"],
+        }
+        payload["storage"] = self.storage.persist_record("shadow_retrain_runs", run_id, _jsonable(payload))
+        return _jsonable(payload)
+
+    def latest_shadow_retrain(self) -> dict[str, Any]:
+        rows = [row for row in self.storage.list_records("shadow_retrain_runs") if isinstance(row, dict)]
+        if not rows:
+            return {
+                "generated_at": _iso_now(),
+                "status": "missing",
+                "enabled": bool(getattr(settings, "SHADOW_RETRAIN_ENABLED", False)),
+                "shadow_only": bool(getattr(settings, "MODEL_RETRAIN_SHADOW_ONLY", True)),
+            }
+        return _jsonable(rows[0])
+
+    def get_cached_deployment_preflight(self, *, profile: str = "paper_cloud") -> dict[str, Any]:
+        expected_profile = str(profile or "paper_cloud")
+        rows = [
+            row
+            for row in self.storage.list_records("deployment_preflight")
+            if isinstance(row, dict) and str(row.get("profile") or "paper_cloud") == expected_profile
+        ]
+        latest = rows[0] if rows else None
+        if latest is None:
+            return {
+                "generated_at": _iso_now(),
+                "profile": expected_profile,
+                "ready": False,
+                "cached": True,
+                "blockers": ["preflight_missing"],
+                "warnings": [],
+                "detail": "No persisted deployment preflight has been evaluated yet.",
+            }
+
+        payload = dict(latest)
+        generated = self._parse_any_timestamp(payload.get("generated_at"))
+        max_age = max(1, int(getattr(settings, "DEPLOYMENT_PREFLIGHT_MAX_AGE_MINUTES", 15) or 15))
+        stale = True
+        age_minutes = None
+        if generated is not None:
+            age_minutes = (datetime.now(timezone.utc) - generated.astimezone(timezone.utc)).total_seconds() / 60
+            stale = age_minutes > max_age
+        blockers = list(payload.get("blockers") or [])
+        if stale and "preflight_stale" not in blockers:
+            blockers.append("preflight_stale")
+        payload["cached"] = True
+        payload["stale"] = stale
+        payload["age_minutes"] = round(age_minutes, 2) if age_minutes is not None else None
+        payload["max_age_minutes"] = max_age
+        payload["blockers"] = blockers
+        payload["ready"] = bool(payload.get("ready")) and not stale and not blockers
+        return _jsonable(payload)
+
+    def evaluate_deployment_preflight(self, *, profile: str = "paper_cloud") -> dict[str, Any]:
+        registry_bootstrap = self.ensure_runtime_model_registry(actor="deployment_preflight")
+        payload = self.build_deployment_preflight(profile=profile, dry_run=False)
+        payload["model_registry_bootstrap"] = registry_bootstrap
+        preflight_id = f"preflight-{profile}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+        payload["preflight_id"] = preflight_id
+        payload["evaluated"] = True
+        payload["storage"] = self.storage.persist_record("deployment_preflight", preflight_id, _jsonable(payload))
+        latest_payload = dict(payload)
+        latest_payload["latest_alias"] = f"{profile}_latest"
+        self.storage.persist_record("deployment_preflight", f"{profile}_latest", _jsonable(latest_payload))
+        return _jsonable(payload)
+
+    def build_cached_readiness(self, *, profile: str = "paper_cloud") -> dict[str, Any]:
+        heartbeat = self._scheduler_heartbeat_status()
+        preflight = self.get_cached_deployment_preflight(profile=profile)
+        circuit_breaker = self.paper_submit_circuit_breaker_status()
+        components = {
+            "api": {"ok": True, "detail": "FastAPI process is alive."},
+            "quant_scheduler": {
+                "ok": bool(heartbeat.get("exists") and not heartbeat.get("stale")),
+                "detail": f"Heartbeat {heartbeat.get('last_seen') or 'missing'}",
+                "meta": heartbeat,
+            },
+            "deployment_preflight": {
+                "ok": bool(preflight.get("ready")),
+                "detail": "Recent paper-cloud preflight passed." if preflight.get("ready") else "Recent paper-cloud preflight is missing, stale, or blocked.",
+                "meta": preflight,
+            },
+            "paper_submit_circuit_breaker": {
+                "ok": not bool(circuit_breaker.get("enabled")),
+                "detail": circuit_breaker.get("reason") or "Paper submit circuit breaker is released.",
+                "meta": circuit_breaker,
+            },
+        }
+        blockers = [name for name, item in components.items() if not item.get("ok")]
+        return {
+            "generated_at": _iso_now(),
+            "ready": not blockers,
+            "cached": True,
+            "profile": profile,
+            "blockers": blockers,
+            "components": components,
+        }
+
+    def paper_submit_circuit_breaker_status(self) -> dict[str, Any]:
+        payload = self.storage.load_record("circuit_breakers", "paper_submit")
+        if not isinstance(payload, dict):
+            payload = {
+                "breaker_id": "paper_submit",
+                "enabled": False,
+                "reason": "",
+                "updated_at": None,
+                "source": "default",
+            }
+        return _jsonable(payload)
+
+    def set_paper_submit_circuit_breaker(
+        self,
+        *,
+        enabled: bool,
+        reason: str = "",
+        details: dict[str, Any] | None = None,
+        source: str = "scheduler",
+    ) -> dict[str, Any]:
+        payload = {
+            "breaker_id": "paper_submit",
+            "enabled": bool(enabled),
+            "reason": reason or ("released" if not enabled else "paper submit circuit breaker enabled"),
+            "details": details or {},
+            "updated_at": _iso_now(),
+            "source": source,
+        }
+        payload["storage"] = self.storage.persist_record("circuit_breakers", "paper_submit", _jsonable(payload))
+        return _jsonable(payload)
+
+    def build_deployment_preflight(self, *, profile: str = "paper_cloud", dry_run: bool = False) -> dict[str, Any]:
+        hard: list[dict[str, Any]] = []
+        soft: list[dict[str, Any]] = []
+
+        def add(target: list[dict[str, Any]], name: str, ok: bool, detail: str, meta: dict[str, Any] | None = None) -> None:
+            target.append({"name": name, "ok": bool(ok), "detail": detail, "meta": meta or {}})
+
+        account = self.get_execution_account(broker="alpaca", mode="paper")
+        add(hard, "alpaca_paper", bool(account.get("connected") and account.get("paper_ready")), "Alpaca paper account is reachable." if account.get("connected") else "Alpaca paper credentials/account are not ready.", account)
+
+        market_meta = self._market_data_preflight()
+        add(hard, "market_data", bool(market_meta.get("ok")), market_meta.get("detail", "market data unavailable"), market_meta)
+
+        try:
+            storage_meta = self._storage_preflight(dry_run=dry_run)
+        except TypeError:
+            storage_meta = self._storage_preflight()
+        add(hard, "storage", bool(storage_meta.get("ok")), storage_meta.get("detail", "storage unavailable"), storage_meta)
+
+        heartbeat = self._scheduler_heartbeat_status()
+        add(hard, "scheduler_heartbeat", bool(heartbeat.get("exists") and not heartbeat.get("stale")), "Scheduler heartbeat is fresh." if heartbeat.get("exists") and not heartbeat.get("stale") else "Scheduler heartbeat is missing or stale.", heartbeat)
+
+        registry = self.build_model_registry()
+        add(hard, "model_registry", bool(registry.get("models")), "Model registry has runtime entries.", registry)
+
+        rl_meta = self._rl_checkpoint_preflight()
+        add(hard, "rl_checkpoint", bool(rl_meta.get("ok")), rl_meta.get("detail", "RL checkpoint unavailable"), rl_meta)
+
+        controls = self.get_execution_controls()
+        add(hard, "kill_switch", not bool(controls.get("kill_switch_enabled")), "Execution kill switch is released." if not controls.get("kill_switch_enabled") else "Execution kill switch is enabled.", controls)
+        live_enabled = bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False))
+        add(
+            hard,
+            "live_trading_disabled",
+            not live_enabled,
+            "Live trading is disabled for unattended paper mode." if not live_enabled else "ALPACA_ENABLE_LIVE_TRADING must remain false for paper-cloud readiness.",
+            {"ALPACA_ENABLE_LIVE_TRADING": live_enabled},
+        )
+
+        synthetic_meta = self._synthetic_trade_preflight()
+        add(hard, "synthetic_trade_block", bool(synthetic_meta.get("ok")), synthetic_meta.get("detail", "synthetic trade guard failed"), synthetic_meta)
+
+        calendar_meta = self.get_trading_calendar_status()
+        add(hard, "trading_calendar", bool(calendar_meta.get("is_session") or calendar_meta.get("next_session")), "Trading calendar is available.", calendar_meta)
+
+        workflow_meta = self._paper_workflow_preflight(registry=registry, rl_meta=rl_meta, account=account, controls=controls, synthetic_meta=synthetic_meta)
+        add(hard, "paper_workflow", bool(workflow_meta.get("ok")), workflow_meta.get("detail", "paper workflow not ready"), workflow_meta)
+
+        qdrant = self._qdrant_status()
+        add(soft, "qdrant", bool(qdrant.get("reachable")), "Qdrant is reachable." if qdrant.get("reachable") else "Qdrant is not reachable.", qdrant)
+        remote_llm = self._remote_llm_status()
+        add(soft, "remote_llm", bool(remote_llm.get("reachable")), "Remote LLM is reachable." if remote_llm.get("reachable") else "Remote LLM is not reachable or not configured.", remote_llm)
+        storage_status = self.storage.status()
+        add(soft, "supabase_or_r2", bool(storage_status.get("supabase_ready") or storage_status.get("r2_ready") or storage_status.get("supabase_storage_ready")), "Cloud artifact backend is configured." if storage_status.get("mode") == "hybrid_cloud" else "Using local artifact fallback.", storage_status)
+        notifier_meta = self._notifier_preflight()
+        if str(profile or "").lower() == "paper_cloud" and bool(getattr(settings, "UNATTENDED_PAPER_MODE", True)):
+            add(hard, "telegram_notifier", bool(notifier_meta.get("ok")), notifier_meta.get("detail", "Telegram notifier is not ready."), notifier_meta)
+            email_meta = self._email_digest_preflight()
+            add(hard, "email_digest", bool(email_meta.get("ok")), email_meta.get("detail", "Email digest is not ready."), email_meta)
+            rotation_confirmed = bool(getattr(settings, "TELEGRAM_TOKEN_ROTATION_CONFIRMED", False))
+            add(
+                hard,
+                "telegram_token_rotation",
+                rotation_confirmed,
+                "Telegram token rotation has been confirmed for production." if rotation_confirmed else "Rotate the Telegram bot token that was exposed during setup, then set TELEGRAM_TOKEN_ROTATION_CONFIRMED=true.",
+                {
+                    "confirmed": rotation_confirmed,
+                    "token_fingerprint": notifier_meta.get("telegram_token_fingerprint"),
+                },
+            )
+        else:
+            add(soft, "alert_notifier", bool(notifier_meta.get("configured")), "Alert notifier is configured." if notifier_meta.get("configured") else "Alert notifier is UI/local only.", notifier_meta)
+        add(soft, "audit_log", bool(getattr(settings, "AUDIT_LOG_ENABLED", True)), "Audit logging is enabled.")
+
+        blockers = [item["name"] for item in hard if not item["ok"]]
+        warnings = [item["name"] for item in soft if not item["ok"]]
+        blocker_summary = self.build_blocker_summary(
+            blockers=blockers,
+            warnings=warnings,
+            hard_checks=hard,
+            soft_checks=soft,
+        )
+        return {
+            "generated_at": _iso_now(),
+            "profile": profile,
+            "dry_run": bool(dry_run),
+            "ready": not blockers,
+            "blockers": blockers,
+            "warnings": warnings,
+            "blocker_summary": blocker_summary,
+            "hard_checks": hard,
+            "soft_checks": soft,
+            "next_actions": self._preflight_next_actions(blockers, warnings),
+        }
+
+    def _email_digest_preflight(self) -> dict[str, Any]:
+        recipients = self._quant_daily_digest_recipients()
+        smtp_host = str(getattr(settings, "SMTP_HOST", "") or "").strip()
+        smtp_user = str(getattr(settings, "SMTP_USER", "") or "").strip()
+        smtp_password = str(getattr(settings, "SMTP_PASSWORD", "") or "").strip()
+        ok = bool(smtp_host and smtp_user and smtp_password and recipients)
+        return {
+            "ok": ok,
+            "configured": ok,
+            "detail": "Email digest SMTP and recipients are configured." if ok else "SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and QUANT_DAILY_DIGEST_RECIPIENTS are required.",
+            "smtp_host": smtp_host,
+            "smtp_user_fingerprint": self._secret_fingerprint(smtp_user),
+            "recipient_count": len(recipients),
+        }
+
+    def get_trading_calendar_status(self) -> dict[str, Any]:
+        market_clock = None
+        try:
+            account = self.get_execution_account(broker="alpaca", mode="paper")
+            market_clock = account.get("market_clock")
+        except Exception:
+            market_clock = None
+        return self.trading_calendar.status(market_clock=market_clock)
+
+    @staticmethod
+    def _safe_record_id(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        cleaned = "".join(ch if ch.isalnum() else "-" for ch in text)
+        cleaned = "-".join(part for part in cleaned.split("-") if part)
+        return cleaned or "unknown"
+
+    def _config_snapshot(self) -> dict[str, Any]:
+        keys = [
+            "ALPACA_DEFAULT_TEST_NOTIONAL",
+            "SCHEDULER_MAX_EXECUTION_SYMBOLS",
+            "SCHEDULER_MAX_DAILY_NOTIONAL_USD",
+            "SYNTHETIC_EVIDENCE_POLICY",
+            "TRADING_CALENDAR_ID",
+            "PROMOTION_POLICY_PATH",
+            "EXECUTION_SESSION_SUBMIT_LOCK_ENABLED",
+            "SESSION_EVIDENCE_ENABLED",
+            "ALPACA_PAPER_RECONCILE_ENABLED",
+            "DIGEST_RETRY_ENABLED",
+            "STORAGE_BACKUP_ENABLED",
+            "MODEL_RETRAIN_SHADOW_ONLY",
+            "ALPACA_ENABLE_LIVE_TRADING",
+            "SCHEDULER_AUTO_SUBMIT",
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "TORCH_NUM_THREADS",
+            "TOKENIZERS_PARALLELISM",
+        ]
+        values = {key: getattr(settings, key, None) for key in keys}
+        registry = self._load_runtime_registry()
+        model_refs = registry.get("models") if isinstance(registry, dict) else None
+        payload = {
+            "generated_at": _iso_now(),
+            "values": values,
+            "model_registry_refs": model_refs or [],
+        }
+        payload["hash"] = hashlib.sha1(json.dumps(payload["values"], sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        return payload
+
+    def _classify_blocker(self, reason: Any) -> str:
+        text = str(reason or "").strip().lower()
+        if not text:
+            return "warning"
+        system_terms = (
+            "scheduler_heartbeat",
+            "heartbeat stale",
+            "model_registry",
+            "rl_checkpoint",
+            "telegram_notifier",
+            "telegram_token_rotation",
+            "deployment_preflight",
+            "storage_unwritable",
+            "paper_workflow",
+        )
+        submit_terms = (
+            "kill_switch",
+            "synthetic",
+            "negative_cash",
+            "market_clock",
+            "clock_unavailable",
+            "market_closed",
+            "broker",
+            "alpaca",
+            "account",
+            "credential",
+            "buying_power",
+            "duplicate",
+            "session_submit_locked",
+            "daily_notional",
+            "stale",
+        )
+        if any(term in text for term in system_terms):
+            return "system_blocker"
+        if any(term in text for term in submit_terms):
+            return "submit_blocker"
+        return "warning"
+
+    def build_blocker_summary(
+        self,
+        *,
+        blockers: list[Any] | None = None,
+        warnings: list[Any] | None = None,
+        hard_checks: list[dict[str, Any]] | None = None,
+        soft_checks: list[dict[str, Any]] | None = None,
+        alerts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+
+        def add(reason: Any, default_class: str | None = None, source: str = "blocker") -> None:
+            if reason in {None, ""}:
+                return
+            reason_text = str(reason)
+            items.append(
+                {
+                    "reason": reason_text,
+                    "class": default_class or self._classify_blocker(reason_text),
+                    "source": source,
+                }
+            )
+
+        for reason in blockers or []:
+            add(reason, source="blocker")
+        for reason in warnings or []:
+            add(reason, default_class="warning", source="warning")
+        for check in hard_checks or []:
+            if not check.get("ok"):
+                add(check.get("name") or check.get("detail"), default_class="system_blocker", source="hard_check")
+        for check in soft_checks or []:
+            if not check.get("ok"):
+                add(check.get("name") or check.get("detail"), default_class="warning", source="soft_check")
+        for alert in alerts or []:
+            severity = str(alert.get("severity") or "").lower()
+            default_class = "system_blocker" if severity in {"high", "critical"} else None
+            add(alert.get("kind") or alert.get("message"), default_class=default_class, source="alert")
+
+        deduped: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in items:
+            deduped[(item["class"], item["reason"])] = item
+        normalized = list(deduped.values())
+        return {
+            "submit_blockers": [item for item in normalized if item["class"] == "submit_blocker"],
+            "system_blockers": [item for item in normalized if item["class"] == "system_blocker"],
+            "warnings": [item for item in normalized if item["class"] == "warning"],
+            "counts": {
+                "submit_blocker": sum(1 for item in normalized if item["class"] == "submit_blocker"),
+                "system_blocker": sum(1 for item in normalized if item["class"] == "system_blocker"),
+                "warning": sum(1 for item in normalized if item["class"] == "warning"),
+            },
+        }
+
+    def _session_evidence_stage_name(self, stage: str, payload: dict[str, Any]) -> str:
+        normalized = str(stage or "").strip().lower()
+        if normalized == "hybrid_workflow":
+            return "workflow"
+        if normalized == "sync":
+            return "broker_sync"
+        if normalized.startswith("daily_digest"):
+            return "digest"
+        if normalized == "execution":
+            return "paper_submit"
+        if normalized in {"storage_backup", "backup_quant_storage"}:
+            return "backup"
+        return normalized or str(payload.get("stage") or "unknown")
+
+    def _session_evidence_stage_payload(
+        self,
+        *,
+        stage: str,
+        status: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        started_at = payload.get("started_at") or payload.get("timestamp") or payload.get("ran_at") or payload.get("generated_at")
+        finished_at = payload.get("finished_at") or payload.get("ran_at") or _iso_now()
+        warnings = [str(item) for item in payload.get("warnings") or [] if str(item).strip()]
+        blockers = [str(item) for item in payload.get("blockers") or [] if str(item).strip()]
+        error = payload.get("error") or (payload.get("reason") if str(status).lower() in {"failed", "error"} else None)
+        artifacts = {
+            key: payload.get(key)
+            for key in (
+                "workflow_id",
+                "execution_id",
+                "research_id",
+                "validation_id",
+                "snapshot_id",
+                "attribution_id",
+                "digest_id",
+                "promotion_report_id",
+                "paper_performance_snapshot_id",
+            )
+            if payload.get(key)
+        }
+        blocker_summary = self.build_blocker_summary(blockers=blockers, warnings=warnings)
+        return {
+            "stage": stage,
+            "status": status,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "duration_seconds": payload.get("duration_seconds"),
+            "error": error,
+            "submitted_count": int(payload.get("submitted_count") or 0),
+            "artifacts": artifacts,
+            "warnings": warnings,
+            "blockers": blockers,
+            "blocker_class": (
+                "system_blocker"
+                if blocker_summary["counts"]["system_blocker"]
+                else "submit_blocker"
+                if blocker_summary["counts"]["submit_blocker"]
+                else "warning"
+                if blocker_summary["counts"]["warning"]
+                else None
+            ),
+            "blocker_summary": blocker_summary,
+        }
+
+    def record_session_evidence_stage(
+        self,
+        *,
+        session_date: str,
+        stage: str,
+        status: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not bool(getattr(settings, "SESSION_EVIDENCE_ENABLED", True)):
+            return {"enabled": False, "session_date": session_date}
+        session_key = str(session_date or date.today().isoformat())[:10]
+        record = self.storage.load_record("session_evidence", session_key) or {
+            "session_date": session_key,
+            "calendar_id": (payload or {}).get("calendar_id") or getattr(settings, "TRADING_CALENDAR_ID", "XNYS"),
+            "generated_at": _iso_now(),
+            "stages": {},
+            "stage_order": [],
+            "config_snapshot": self._config_snapshot(),
+        }
+        stage_payload = dict(payload or {})
+        evidence_stage = self._session_evidence_stage_name(stage, stage_payload)
+        normalized_status = str(status or stage_payload.get("status") or "completed").strip().lower()
+        record.setdefault("stages", {})[evidence_stage] = self._session_evidence_stage_payload(
+            stage=evidence_stage,
+            status=normalized_status,
+            payload=stage_payload,
+        )
+        if evidence_stage not in record.setdefault("stage_order", []):
+            record["stage_order"].append(evidence_stage)
+
+        if stage == "hybrid_workflow" and ("execution_id" in stage_payload or "submitted_count" in stage_payload):
+            paper_submit_payload = dict(stage_payload)
+            paper_status = "completed" if int(stage_payload.get("submitted_count") or 0) > 0 else "blocked"
+            record["stages"]["paper_submit"] = self._session_evidence_stage_payload(
+                stage="paper_submit",
+                status=paper_status,
+                payload=paper_submit_payload,
+            )
+            if "paper_submit" not in record["stage_order"]:
+                record["stage_order"].append("paper_submit")
+
+        automation = stage_payload.get("automation") if isinstance(stage_payload.get("automation"), dict) else {}
+        if automation:
+            for source_name, evidence_name in {
+                "outcome_settlement": "outcomes",
+                "paper_performance_snapshot": "snapshot",
+                "promotion_evaluation": "promotion",
+                "storage_backup": "backup",
+            }.items():
+                if source_name in automation:
+                    child_payload = automation.get(source_name) if isinstance(automation.get(source_name), dict) else {}
+                    child_payload = {"session_date": session_key, **dict(child_payload)}
+                    child_payload.setdefault("duration_seconds", None)
+                    record["stages"][evidence_name] = self._session_evidence_stage_payload(
+                        stage=evidence_name,
+                        status="completed",
+                        payload=child_payload,
+                    )
+                    if evidence_name not in record["stage_order"]:
+                        record["stage_order"].append(evidence_name)
+
+        record["updated_at"] = _iso_now()
+        required = ["preopen", "workflow", "paper_submit", "broker_sync", "outcomes", "snapshot", "promotion", "digest", "backup"]
+        record["missing_stages"] = [name for name in required if name not in record.get("stages", {})]
+        record["complete"] = not record["missing_stages"]
+        record["storage"] = self.storage.persist_record("session_evidence", session_key, _jsonable(record))
+        return _jsonable(record)
+
+    def get_session_evidence(self, session_date: str | None = None) -> dict[str, Any] | None:
+        if session_date:
+            return self.storage.load_record("session_evidence", str(session_date)[:10])
+        rows = self.storage.list_records("session_evidence")
+        return rows[0] if rows else None
+
+    def latest_session_evidence(self) -> dict[str, Any] | None:
+        return self.get_session_evidence(None)
+
+    def record_scheduler_event(
+        self,
+        *,
+        stage: str,
+        status: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        event_id = f"scheduler-event-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+        event_payload = dict(payload or {})
+        body = {
+            "event_id": event_id,
+            "generated_at": _iso_now(),
+            "stage": stage,
+            "status": status,
+            "session_date": event_payload.get("session_date"),
+            "calendar_id": event_payload.get("calendar_id"),
+            "duration_seconds": event_payload.get("duration_seconds"),
+            "error": event_payload.get("error"),
+            "submitted_count": int(event_payload.get("submitted_count") or 0),
+            "payload": event_payload,
+        }
+        body["storage"] = self.storage.persist_record("scheduler_events", event_id, _jsonable(body))
+        session_date = body.get("session_date") or event_payload.get("session_date")
+        if session_date:
+            try:
+                body["session_evidence"] = self.record_session_evidence_stage(
+                    session_date=str(session_date),
+                    stage=stage,
+                    status=status,
+                    payload=event_payload,
+                ).get("storage", {})
+            except Exception as exc:
+                body["session_evidence_error"] = str(exc)
+        return _jsonable(body)
+
+    def build_paper_workflow_observability(self, *, window_days: int = 30) -> dict[str, Any]:
+        window = max(1, min(int(window_days or 30), 252))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window * 2)
+        events = [
+            row for row in self.storage.list_records("scheduler_events")
+            if isinstance(row, dict) and (self._parse_any_timestamp(row.get("generated_at")) or datetime.now(timezone.utc)) >= cutoff
+        ]
+        workflows = [
+            row for row in self.storage.list_records("workflow_runs")
+            if isinstance(row, dict) and (self._parse_any_timestamp(row.get("generated_at")) or datetime.now(timezone.utc)) >= cutoff
+        ]
+        alerts = self._build_observability_alerts(events=events, workflows=workflows, persist=False)
+        success_rate = round(
+            sum(1 for row in workflows if str(row.get("status") or "") in {"submitted", "planned"}) / len(workflows),
+            6,
+        ) if workflows else 0.0
+        heartbeat = self._scheduler_heartbeat_status()
+        circuit = self.paper_submit_circuit_breaker_status()
+        missed_sessions: list[str] = []
+        report = {
+            "generated_at": _iso_now(),
+            "window_days": window,
+            "summary": {
+                "workflow_count": len(workflows),
+                "submitted_count": sum(1 for row in workflows if str(row.get("status") or "") == "submitted"),
+                "blocked_count": sum(1 for row in workflows if str(row.get("status") or "") == "blocked"),
+                "scheduler_event_count": len(events),
+                "alert_count": len(alerts),
+                "success_rate": success_rate,
+            },
+            "heartbeat": heartbeat,
+            "calendar": self.get_trading_calendar_status(),
+            "self_healing": self._paper_self_healing_status(),
+            "circuit_breakers": {
+                "paper_submit": circuit,
+            },
+            "storage_mirror": self.storage.status(),
+            "storage_backup": self.latest_storage_backup_status(),
+            "notifier": self._notifier_preflight(),
+            "slo": self.build_paper_workflow_slo(window_days=window),
+            "recovery_notifications": self._recent_recovery_notifications(limit=20),
+            "alerts": alerts,
+            "recent_events": events[:50],
+            "recent_workflows": workflows[:20],
+        }
+        report["workflow_success_rate"] = success_rate
+        report["missed_sessions"] = missed_sessions
+        report["scheduler_heartbeat"] = heartbeat
+        report["heartbeat_stale"] = bool(heartbeat.get("stale"))
+        report["circuit_breaker"] = circuit
+        report["blocker_summary"] = self.build_blocker_summary(alerts=alerts)
+        return report
+
+    def build_paper_workflow_slo(self, *, window_days: int = 30) -> dict[str, Any]:
+        window = max(1, min(int(window_days or 30), 252))
+        missing = self._paper_missing_sessions(
+            points=self._normalize_paper_gate_points(self.storage.list_records("paper_performance")),
+            window_days=window,
+        )
+        expected_sessions = list(missing.get("missing_sessions") or [])
+        observed_sessions = {
+            str(row.get("session_date") or row.get("date") or row.get("snapshot_id") or "")[:10]
+            for row in self.storage.list_records("session_evidence")
+            if isinstance(row, dict)
+        }
+        all_expected = set(expected_sessions) | observed_sessions
+        required_stages = {"preopen", "workflow", "paper_submit", "broker_sync", "outcomes", "snapshot", "promotion", "digest", "backup"}
+        evidence_rows = [
+            row for row in self.storage.list_records("session_evidence")
+            if isinstance(row, dict) and str(row.get("session_date") or "")[:10] in all_expected
+        ]
+
+        def complete_evidence(row: dict[str, Any]) -> bool:
+            stages = row.get("stages") or {}
+            return required_stages.issubset(stages) and all(
+                str((stages.get(stage) or {}).get("status") or "").lower()
+                in {"completed", "submitted", "planned", "blocked", "skipped"}
+                for stage in required_stages
+            )
+
+        workflows = [
+            row for row in self.storage.list_records("workflow_runs")
+            if isinstance(row, dict)
+        ]
+        locks = self.storage.list_records("submit_locks")
+        executions = self.storage.list_records("executions")
+        duplicate_blocked = 0
+        for payload in executions:
+            for order in (payload.get("orders") or []):
+                if str((order or {}).get("status") or "").lower() == "session_submit_locked":
+                    duplicate_blocked += 1
+        duplicate_blocked += sum(1 for row in locks if str((row or {}).get("status") or "").lower() == "session_submit_locked")
+        reconciliations = self.storage.list_records("paper_reconciliations")
+        reconcile_repairs = sum(
+            int(row.get("journal_updates") or 0)
+            + int(row.get("execution_updates") or 0)
+            + int(row.get("submit_lock_updates") or 0)
+            + int(row.get("outcome_updates") or 0)
+            for row in reconciliations
+            if isinstance(row, dict)
+        )
+        deliveries = [row for row in self.storage.list_records("paper_daily_digest_deliveries") if isinstance(row, dict)]
+        backups = [row for row in self.storage.list_records("storage_backups") if isinstance(row, dict)]
+        workflow_successes = sum(1 for row in workflows if str(row.get("status") or "").lower() in {"submitted", "planned", "completed"})
+        digest_successes = sum(1 for row in deliveries if str(row.get("status") or "").lower() == "sent")
+        backup_successes = sum(1 for row in backups if str(row.get("status") or "").lower() == "completed")
+        expected_count = int(missing.get("expected_sessions") or len(all_expected) or len(evidence_rows))
+        complete_count = sum(1 for row in evidence_rows if complete_evidence(row))
+        return {
+            "generated_at": _iso_now(),
+            "window_days": window,
+            "session_evidence": {
+                "expected_sessions": expected_count,
+                "observed_sessions": len(evidence_rows),
+                "complete_sessions": complete_count,
+                "completion_rate": round(complete_count / expected_count, 6) if expected_count else 0.0,
+                "missing_sessions": missing.get("missing_sessions", []),
+            },
+            "workflow": {
+                "count": len(workflows),
+                "success_count": workflow_successes,
+                "success_rate": round(workflow_successes / len(workflows), 6) if workflows else 0.0,
+            },
+            "orders": {
+                "duplicate_submit_blocked_count": duplicate_blocked,
+                "submit_unknown_count": sum(1 for row in locks if str((row or {}).get("status") or "") == "submit_unknown"),
+            },
+            "reconciliation": {
+                "run_count": len(reconciliations),
+                "repair_count": reconcile_repairs,
+            },
+            "digest": {
+                "delivery_count": len(deliveries),
+                "sent_count": digest_successes,
+                "success_rate": round(digest_successes / len(deliveries), 6) if deliveries else 0.0,
+            },
+            "backup": {
+                "run_count": len(backups),
+                "success_count": backup_successes,
+                "success_rate": round(backup_successes / len(backups), 6) if backups else 0.0,
+            },
+            "status": "pass" if expected_count and complete_count == expected_count and (not deliveries or digest_successes == len(deliveries)) else "watch",
+        }
+
+    def evaluate_paper_workflow_observability(self, *, window_days: int = 30) -> dict[str, Any]:
+        window = max(1, min(int(window_days or 30), 252))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window * 2)
+        events = [
+            row for row in self.storage.list_records("scheduler_events")
+            if isinstance(row, dict) and (self._parse_any_timestamp(row.get("generated_at")) or datetime.now(timezone.utc)) >= cutoff
+        ]
+        workflows = [
+            row for row in self.storage.list_records("workflow_runs")
+            if isinstance(row, dict) and (self._parse_any_timestamp(row.get("generated_at")) or datetime.now(timezone.utc)) >= cutoff
+        ]
+        alerts = self._build_observability_alerts(events=events, workflows=workflows, persist=True)
+        resolved_alerts = self._record_resolved_observability_alerts(active_alerts=alerts)
+        report = self.build_paper_workflow_observability(window_days=window)
+        report["alerts"] = alerts
+        report["summary"]["alert_count"] = len(alerts)
+        report["resolved_alerts"] = resolved_alerts
+        report["evaluation"] = {"persisted_alerts": True, "dedupe_window_hours": 24, "resolved_count": len(resolved_alerts)}
+        return report
+
+    def _paper_self_healing_status(self) -> dict[str, Any]:
+        rows = self.storage.list_records("scheduler_events")[:50]
+        recovery_events = [
+            row for row in rows
+            if isinstance(row, dict) and str(row.get("stage") or "") in {"recovery", "post_sync_automation", "observability"}
+        ]
+        failure_events = [
+            row for row in rows
+            if isinstance(row, dict) and str(row.get("status") or "").lower() in {"failed", "error"}
+        ]
+        return {
+            "enabled": bool(getattr(settings, "UNATTENDED_PAPER_MODE", True)),
+            "recent_recovery_count": len(recovery_events),
+            "recent_failure_count": len(failure_events),
+            "latest_recovery": recovery_events[0] if recovery_events else None,
+        }
+
+    def _recent_recovery_notifications(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        rows = [
+            row for row in self.storage.list_records("alerts")
+            if isinstance(row, dict)
+            and (
+                str(row.get("status") or "") == "resolved_notification"
+                or str(row.get("kind") or "").endswith("_resolved")
+                or row.get("resolved_at")
+            )
+        ]
+        return rows[: max(1, min(int(limit or 20), 100))]
+
+    def _build_observability_alerts(
+        self,
+        *,
+        events: list[dict[str, Any]],
+        workflows: list[dict[str, Any]],
+        persist: bool = False,
+    ) -> list[dict[str, Any]]:
+        alerts: list[dict[str, Any]] = []
+
+        def add(kind: str, severity: str, message: str, payload: dict[str, Any] | None = None) -> None:
+            body = {
+                "alert_id": "",
+                "generated_at": _iso_now(),
+                "kind": kind,
+                "severity": severity,
+                "message": message,
+                "payload": payload or {},
+                "notifier": self._alert_notifier_status(),
+            }
+            alert_id = self._observability_alert_id(body)
+            body["alert_id"] = alert_id
+            if persist:
+                existing = self._recent_matching_alert(alert_id=alert_id, kind=kind)
+                if existing is not None:
+                    existing = dict(existing)
+                    existing["deduped"] = True
+                    alerts.append(_jsonable(existing))
+                    return
+                body["notifier"] = self._deliver_alert(body)
+                body["storage"] = self.storage.persist_record("alerts", alert_id, _jsonable(body))
+            alerts.append(_jsonable(body))
+
+        heartbeat = self._scheduler_heartbeat_status()
+        if heartbeat.get("stale") or not heartbeat.get("exists"):
+            add("stale_heartbeat", "high", "Scheduler heartbeat is missing or stale.", heartbeat)
+        if not workflows:
+            add("missing_workflow", "medium", "No paper workflow runs were found in the observability window.")
+        for workflow in workflows[:20]:
+            if workflow.get("blockers"):
+                add("workflow_blocked", "medium", "Paper workflow returned blockers.", {"workflow_id": workflow.get("workflow_id"), "blockers": workflow.get("blockers")})
+            if (workflow.get("gate_snapshot") or {}).get("synthetic_execution"):
+                add("synthetic_evidence", "high", "Synthetic evidence appeared in a paper workflow.", {"workflow_id": workflow.get("workflow_id")})
+        controls = self.get_execution_controls()
+        if controls.get("kill_switch_enabled"):
+            add("kill_switch", "high", "Execution kill switch is enabled.", controls)
+        circuit = self.paper_submit_circuit_breaker_status()
+        if circuit.get("enabled"):
+            add("paper_submit_circuit_breaker", "high", "Paper submit circuit breaker is enabled.", circuit)
+        rl_meta = self._rl_checkpoint_preflight()
+        if not rl_meta.get("ok"):
+            add("rl_checkpoint_missing", "high", "RL checkpoint is missing for unattended paper workflow.", rl_meta)
+        market_meta = self._market_data_preflight()
+        if not market_meta.get("ok"):
+            add("market_data_stale", "high", market_meta.get("detail", "Market data provider is unavailable."), market_meta)
+        storage_status = self.storage.status()
+        if not (storage_status.get("supabase_ready") or storage_status.get("r2_ready") or storage_status.get("supabase_storage_ready")):
+            add("storage_mirror_unavailable", "medium", "Remote evidence mirror is not configured; local ledger remains active.", storage_status)
+        backup_status = self.latest_storage_backup_status()
+        if backup_status.get("status") in {"missing", "completed_local_only"} or backup_status.get("uploaded") is False:
+            add("storage_backup_unavailable", "medium", "Remote evidence backup is missing or local-only.", backup_status)
+        return alerts
+
+    @staticmethod
+    def _observability_alert_id(alert: dict[str, Any]) -> str:
+        kind = str(alert.get("kind") or "paper_workflow")
+        payload = {
+            "kind": kind,
+            "message": alert.get("message"),
+            "payload": QuantSystemService._observability_alert_fingerprint_payload(
+                kind,
+                alert.get("payload") or {},
+            ),
+        }
+        digest = hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+        return f"alert-{kind}-{digest}"
+
+    @staticmethod
+    def _observability_alert_fingerprint_payload(kind: str, payload: Any) -> Any:
+        if kind in {"workflow_blocked", "synthetic_evidence"} and isinstance(payload, dict):
+            return {
+                key: payload.get(key)
+                for key in ("workflow_id", "execution_id", "order_id", "symbol")
+                if payload.get(key) is not None
+            }
+        if kind in {"stale_heartbeat", "missing_workflow", "kill_switch"}:
+            return {}
+
+        volatile = {
+            "age_minutes",
+            "as_of",
+            "created_at",
+            "fetched_at",
+            "generated_at",
+            "last_seen",
+            "timestamp",
+            "updated_at",
+        }
+
+        def scrub(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {
+                    str(key): scrub(child)
+                    for key, child in sorted(value.items(), key=lambda item: str(item[0]))
+                    if str(key) not in volatile
+                }
+            if isinstance(value, list):
+                return [scrub(item) for item in value]
+            return value
+
+        return scrub(payload)
+
+    def _recent_matching_alert(self, *, alert_id: str, kind: str, hours: int = 24) -> dict[str, Any] | None:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours or 24)))
+        direct = self.storage.load_record("alerts", alert_id)
+        if isinstance(direct, dict):
+            generated = self._parse_any_timestamp(direct.get("generated_at"))
+            if generated is None or generated.astimezone(timezone.utc) >= cutoff:
+                return direct
+        for row in self.storage.list_records("alerts")[:200]:
+            if not isinstance(row, dict) or str(row.get("kind") or "") != kind:
+                continue
+            generated = self._parse_any_timestamp(row.get("generated_at"))
+            if generated is not None and generated.astimezone(timezone.utc) < cutoff:
+                continue
+            if row.get("alert_id") == alert_id:
+                return row
+        return None
+
+    def _record_resolved_observability_alerts(self, *, active_alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        active_ids = {str(alert.get("alert_id") or "") for alert in active_alerts if alert.get("alert_id")}
+        resolved: list[dict[str, Any]] = []
+        for row in self.storage.list_records("alerts")[:200]:
+            if not isinstance(row, dict):
+                continue
+            alert_id = str(row.get("alert_id") or "").strip()
+            kind = str(row.get("kind") or "").strip()
+            if not alert_id or alert_id in active_ids or row.get("resolved_at") or kind.endswith("_resolved"):
+                continue
+            updated = {**row, "resolved_at": _iso_now(), "status": "resolved"}
+            self.storage.persist_record("alerts", alert_id, _jsonable(updated))
+            resolved_alert = {
+                "alert_id": f"{alert_id}-resolved",
+                "generated_at": _iso_now(),
+                "kind": f"{kind}_resolved",
+                "severity": "info",
+                "message": f"Recovered: {row.get('message') or kind}",
+                "payload": {"resolved_alert_id": alert_id, "kind": kind},
+                "status": "resolved_notification",
+            }
+            resolved_alert["notifier"] = self._deliver_alert(resolved_alert)
+            resolved_alert["storage"] = self.storage.persist_record(
+                "alerts",
+                resolved_alert["alert_id"],
+                _jsonable(resolved_alert),
+            )
+            resolved.append(_jsonable(resolved_alert))
+        return resolved
+
+    def _alert_notifier_status(self) -> dict[str, Any]:
+        notifier = self._notifier_preflight()
+        return {
+            "telegram_configured": bool(notifier.get("telegram_configured")),
+            "slack_configured": bool(notifier.get("slack_configured")),
+            "configured": bool(notifier.get("configured")),
+            "preferred": notifier.get("preferred"),
+            "delivery": "local_ledger",
+        }
+
+    def _notifier_preflight(self) -> dict[str, Any]:
+        preferred = str(getattr(settings, "ALERT_NOTIFIER", "telegram") or "telegram").strip().lower()
+        telegram_token = str(getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+        telegram_chat_id = str(getattr(settings, "TELEGRAM_CHAT_ID", "") or "").strip()
+        slack_webhook = str(getattr(settings, "SLACK_WEBHOOK_URL", "") or "").strip()
+        telegram_configured = bool(telegram_token and telegram_chat_id)
+        slack_configured = bool(slack_webhook)
+        if preferred == "telegram":
+            ok = telegram_configured
+            detail = "Telegram alert notifier is configured." if ok else "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required for unattended paper mode."
+        elif preferred == "slack":
+            ok = slack_configured
+            detail = "Slack alert notifier is configured." if ok else "SLACK_WEBHOOK_URL is required for Slack alert delivery."
+        else:
+            ok = telegram_configured or slack_configured
+            detail = "Alert notifier is configured." if ok else "No external alert notifier is configured."
+        return {
+            "ok": ok,
+            "configured": telegram_configured or slack_configured,
+            "preferred": preferred,
+            "detail": detail,
+            "telegram_configured": telegram_configured,
+            "slack_configured": slack_configured,
+            "telegram_token_fingerprint": self._secret_fingerprint(telegram_token),
+            "telegram_token_rotation_confirmed": bool(getattr(settings, "TELEGRAM_TOKEN_ROTATION_CONFIRMED", False)),
+        }
+
+    @staticmethod
+    def _secret_fingerprint(value: str) -> str | None:
+        if not value:
+            return None
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+        return f"sha256:{digest}"
+
+    def _deliver_alert(self, alert: dict[str, Any]) -> dict[str, Any]:
+        status = self._alert_notifier_status()
+        preferred = str(status.get("preferred") or "telegram")
+        status["delivery"] = "local_ledger"
+        status["delivery_status"] = "skipped"
+        if preferred != "telegram" or not status.get("telegram_configured"):
+            return status
+        token = str(getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+        chat_id = str(getattr(settings, "TELEGRAM_CHAT_ID", "") or "").strip()
+        timeout = max(1, int(getattr(settings, "ALERT_NOTIFIER_TIMEOUT_SECONDS", 5) or 5))
+        text = self._format_telegram_alert(alert)
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+                timeout=timeout,
+            )
+            status["delivery"] = "telegram"
+            status["delivery_status"] = "sent" if response.ok else "failed"
+            status["status_code"] = response.status_code
+            if not response.ok:
+                status["error"] = response.text[:300]
+        except Exception as exc:
+            status["delivery"] = "telegram"
+            status["delivery_status"] = "failed"
+            status["error"] = str(exc)
+        return status
+
+    @staticmethod
+    def _format_telegram_alert(alert: dict[str, Any]) -> str:
+        severity = str(alert.get("severity") or "info").upper()
+        kind = str(alert.get("kind") or "paper_workflow")
+        message = str(alert.get("message") or "")
+        alert_id = str(alert.get("alert_id") or "")
+        return f"[{severity}] {kind}\n{message}\n{alert_id}"[:3500]
+
+    def _send_telegram_message(self, text: str) -> dict[str, Any]:
+        notifier = self._notifier_preflight()
+        if not notifier.get("telegram_configured"):
+            return {
+                "channel": "telegram",
+                "status": "skipped",
+                "detail": "telegram_not_configured",
+                "configured": False,
+            }
+        token = str(getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+        chat_id = str(getattr(settings, "TELEGRAM_CHAT_ID", "") or "").strip()
+        timeout = max(1, int(getattr(settings, "ALERT_NOTIFIER_TIMEOUT_SECONDS", 5) or 5))
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text[:3500], "disable_web_page_preview": True},
+                timeout=timeout,
+            )
+            return {
+                "channel": "telegram",
+                "status": "sent" if response.ok else "failed",
+                "status_code": response.status_code,
+                "configured": True,
+                "detail": "sent" if response.ok else response.text[:300],
+            }
+        except Exception as exc:
+            return {
+                "channel": "telegram",
+                "status": "failed",
+                "configured": True,
+                "detail": str(exc),
+            }
+
+    def _quant_daily_digest_channels(self, channels: list[str] | None = None) -> list[str]:
+        raw = channels if channels is not None else str(getattr(settings, "QUANT_DAILY_DIGEST_CHANNELS", "telegram,email") or "").split(",")
+        normalized = []
+        for item in raw:
+            value = str(item).strip().lower()
+            if value in {"telegram", "email"} and value not in normalized:
+                normalized.append(value)
+        return normalized or ["telegram", "email"]
+
+    def _quant_daily_digest_recipients(self, recipients: list[str] | None = None) -> list[str]:
+        raw = recipients if recipients is not None else str(getattr(settings, "QUANT_DAILY_DIGEST_RECIPIENTS", "") or "").split(",")
+        values = [str(item).strip() for item in raw if str(item).strip()]
+        return list(dict.fromkeys(values))
+
+    def _load_scheduler_runtime_state(self) -> dict[str, Any]:
+        path = self._resolve_runtime_path(
+            getattr(settings, "SCHEDULER_STATE_PATH", "storage/quant/scheduler/runtime_state.json"),
+            "storage/quant/scheduler/runtime_state.json",
+        )
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _record_session_date(record: dict[str, Any]) -> str:
+        return str(
+            record.get("session_date")
+            or record.get("trade_date")
+            or record.get("date")
+            or record.get("snapshot_id")
+            or ""
+        )[:10]
+
+    def _latest_record_for_session(self, record_type: str, session_date: str) -> dict[str, Any] | None:
+        rows = [row for row in self.storage.list_records(record_type) if isinstance(row, dict)]
+        for row in rows:
+            if self._record_session_date(row) == session_date:
+                return row
+        return rows[0] if rows else None
+
+    def _build_digest_performance_snapshot(self, *, window_days: int = 90) -> dict[str, Any]:
+        rows = [
+            row for row in self.storage.list_records("paper_performance")
+            if isinstance(row, dict) and not row.get("synthetic_used") and row.get("evidence_eligible") is not False
+        ]
+        rows.sort(key=lambda item: str(item.get("date") or item.get("snapshot_id") or item.get("generated_at") or ""))
+        rows = rows[-max(1, int(window_days or 90)) :]
+        latest = rows[-1] if rows else {}
+
+        def nav(row: dict[str, Any]) -> float | None:
+            for key in ("portfolio_nav", "equity", "portfolio_value", "nav"):
+                value = self._safe_float(row.get(key))
+                if value is not None:
+                    return value
+            return None
+
+        first_nav = nav(rows[0]) if rows else None
+        latest_nav = nav(latest) if latest else None
+        net_return = None
+        if first_nav not in {None, 0} and latest_nav is not None:
+            net_return = round((latest_nav / float(first_nav)) - 1.0, 6)
+        metrics = {
+            "valid_days": len(rows),
+            "net_return": net_return,
+            "annualized_return": None,
+            "max_drawdown": None,
+            "equity": latest_nav,
+            "cash": self._safe_float(latest.get("cash")),
+            "buying_power": self._safe_float(latest.get("buying_power")),
+        }
+        return {
+            "metrics": metrics,
+            "missing_sessions": [],
+            "broker_sync_errors": latest.get("broker_sync_errors") or [],
+            "cash_flow_adjustment_source": latest.get("cash_flow_adjustment_source") or "unavailable",
+            "latest_snapshot_id": latest.get("snapshot_id") or latest.get("date"),
+            "fast_digest_snapshot": True,
+        }
+
+    def _build_digest_observability_snapshot(self, *, window_days: int = 7) -> dict[str, Any]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(window_days or 7)))
+        alerts = []
+        for row in self.storage.list_records("alerts")[:100]:
+            if not isinstance(row, dict):
+                continue
+            generated = self._parse_any_timestamp(row.get("generated_at"))
+            if generated is not None and generated.astimezone(timezone.utc) < cutoff:
+                continue
+            alerts.append(row)
+        workflows = [
+            row for row in self.storage.list_records("workflow_runs")[:50]
+            if isinstance(row, dict)
+        ]
+        heartbeat = self._scheduler_heartbeat_status()
+        if heartbeat.get("stale") or not heartbeat.get("exists"):
+            alerts.insert(
+                0,
+                {
+                    "kind": "stale_heartbeat",
+                    "severity": "high",
+                    "message": "Scheduler heartbeat is missing or stale.",
+                    "payload": heartbeat,
+                },
+            )
+        return {
+            "summary": {
+                "workflow_count": len(workflows),
+                "alert_count": len(alerts),
+                "success_rate": round(
+                    sum(1 for row in workflows if str(row.get("status") or "") in {"submitted", "planned"}) / len(workflows),
+                    6,
+                ) if workflows else 0.0,
+            },
+            "alerts": alerts[:5],
+            "heartbeat": heartbeat,
+            "fast_digest_snapshot": True,
+        }
+
+    def _paper_outcome_digest_counts(self, *, session_date: str) -> dict[str, int]:
+        pending = 0
+        due = 0
+        settled = 0
+        for row in self.storage.list_records("paper_outcomes")[:500]:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "").lower()
+            if status == "pending":
+                pending += 1
+            if status == "settled":
+                settled += 1
+            settlements = row.get("settlements") or {}
+            for payload in settlements.values():
+                if not isinstance(payload, dict):
+                    continue
+                due_session = str(payload.get("due_session_date") or "")[:10]
+                if due_session and due_session <= session_date and str(payload.get("status") or "").lower() == "pending":
+                    due += 1
+                    break
+        return {"pending": pending, "due": due, "settled": settled}
+
+    def build_quant_daily_digest(self, *, phase: str = "postclose", session_date: str | None = None) -> dict[str, Any]:
+        phase_name = str(phase or "postclose").strip().lower()
+        if phase_name not in {"preopen", "postclose"}:
+            phase_name = "postclose"
+        calendar = self.get_trading_calendar_status()
+        session = str(session_date or calendar.get("session_date") or date.today().isoformat())[:10]
+        scheduler_state = self._load_scheduler_runtime_state()
+        preopen = scheduler_state.get("preopen", {}) or {}
+        workflow = self._latest_record_for_session("workflow_runs", session) or {}
+        digest_id = f"digest-{session}-{phase_name}"
+
+        try:
+            performance = self._build_digest_performance_snapshot(window_days=90)
+        except Exception as exc:
+            performance = {"error": str(exc), "metrics": {}}
+        try:
+            observability = self._build_digest_observability_snapshot(window_days=7)
+        except Exception as exc:
+            observability = {"error": str(exc), "summary": {}, "alerts": []}
+
+        perf_metrics = dict(performance.get("metrics") or {})
+        alerts = list(observability.get("alerts") or [])[:5]
+        blocker_values = list(dict.fromkeys(list(workflow.get("blockers") or []) + [alert.get("kind") for alert in alerts if alert.get("kind")]))
+        order_summary = workflow.get("order_summary") or workflow.get("orders") or []
+        controls = self.get_execution_controls()
+        outcome_counts = self._paper_outcome_digest_counts(session_date=session)
+        candidate_symbols = [
+            str(symbol).upper()
+            for symbol in preopen.get("candidate_symbols", [])
+            if str(symbol).strip()
+        ]
+        summary = {
+            "phase": phase_name,
+            "session_date": session,
+            "workflow_status": workflow.get("status") or "unavailable",
+            "workflow_id": workflow.get("workflow_id"),
+            "execution_id": workflow.get("execution_id"),
+            "submitted_count": int(workflow.get("submitted_count") or 0),
+            "candidate_symbols": candidate_symbols,
+            "valid_days": int(perf_metrics.get("valid_days") or 0),
+            "net_return": perf_metrics.get("net_return"),
+            "annualized_return": perf_metrics.get("annualized_return"),
+            "max_drawdown": perf_metrics.get("max_drawdown"),
+            "alert_count": len(alerts),
+            "blockers": blocker_values,
+            "paper_submit_circuit_breaker": self.paper_submit_circuit_breaker_status(),
+            "preflight_ready": bool((self.get_cached_deployment_preflight(profile="paper_cloud") or {}).get("ready")),
+            "account_equity": perf_metrics.get("equity"),
+            "account_cash": perf_metrics.get("cash"),
+            "buying_power": perf_metrics.get("buying_power"),
+            "outcome_pending_count": outcome_counts["pending"],
+            "outcome_due_count": outcome_counts["due"],
+            "kill_switch_enabled": bool(controls.get("kill_switch_enabled")),
+        }
+        blocker_summary = self.build_blocker_summary(
+            blockers=blocker_values,
+            warnings=list(workflow.get("warnings") or []),
+            alerts=alerts,
+        )
+        payload = {
+            "digest_id": digest_id,
+            "generated_at": _iso_now(),
+            "phase": phase_name,
+            "session_date": session,
+            "summary": summary,
+            "preopen": {
+                "ran_at": preopen.get("ran_at"),
+                "candidate_symbols": candidate_symbols,
+                "research_id": preopen.get("research_id"),
+                "p1_report_id": preopen.get("p1_report_id"),
+                "p2_report_id": preopen.get("p2_report_id"),
+            },
+            "workflow": {
+                "workflow_id": workflow.get("workflow_id"),
+                "status": workflow.get("status"),
+                "execution_id": workflow.get("execution_id"),
+                "submitted_count": workflow.get("submitted_count"),
+                "blockers": workflow.get("blockers") or [],
+                "warnings": workflow.get("warnings") or [],
+                "next_actions": workflow.get("next_actions") or [],
+                "order_summary": order_summary[:10] if isinstance(order_summary, list) else [],
+            },
+            "performance": {
+                "metrics": perf_metrics,
+                "missing_sessions": performance.get("missing_sessions") or [],
+                "broker_sync_errors": performance.get("broker_sync_errors") or [],
+                "cash_flow_adjustment_source": performance.get("cash_flow_adjustment_source"),
+            },
+            "observability": {
+                "summary": observability.get("summary") or {},
+                "alerts": alerts,
+            },
+            "outcomes": outcome_counts,
+            "controls": {
+                "kill_switch_enabled": bool(controls.get("kill_switch_enabled")),
+                "kill_switch_reason": controls.get("kill_switch_reason"),
+            },
+            "blocker_summary": blocker_summary,
+        }
+        payload["text"] = self._format_quant_daily_digest_text(payload)
+        return payload
+
+    @staticmethod
+    def _format_quant_daily_digest_text(payload: dict[str, Any]) -> str:
+        summary = payload.get("summary") or {}
+        workflow = payload.get("workflow") or {}
+        performance = (payload.get("performance") or {}).get("metrics") or {}
+        alerts = (payload.get("observability") or {}).get("alerts") or []
+        outcomes = payload.get("outcomes") or {}
+        symbols = ", ".join(summary.get("candidate_symbols") or []) or "none"
+        blockers = ", ".join(summary.get("blockers") or []) or "none"
+        orders = workflow.get("order_summary") or []
+        order_lines = []
+        for order in orders[:5]:
+            if isinstance(order, dict):
+                order_lines.append(f"- {order.get('symbol', '?')} {order.get('side', order.get('action', ''))} {order.get('status', '')}".strip())
+        if not order_lines:
+            order_lines = ["- none"]
+        alert_lines = [f"- {item.get('severity', 'info')}: {item.get('kind', item.get('message', 'alert'))}" for item in alerts[:5]]
+        if not alert_lines:
+            alert_lines = ["- none"]
+        return "\n".join(
+            [
+                f"Hybrid Paper {payload.get('phase')} digest - {payload.get('session_date')}",
+                f"Workflow: {summary.get('workflow_status')} workflow={summary.get('workflow_id') or 'n/a'} execution={summary.get('execution_id') or 'n/a'} submitted={summary.get('submitted_count')}",
+                f"Preopen candidates: {symbols}",
+                f"Account: equity={summary.get('account_equity', 'n/a')} cash={summary.get('account_cash', 'n/a')} buying_power={summary.get('buying_power', 'n/a')}",
+                f"Performance: valid_days={summary.get('valid_days')} net_return={performance.get('net_return', 'n/a')} annualized={performance.get('annualized_return', 'n/a')} max_dd={performance.get('max_drawdown', 'n/a')}",
+                f"Outcomes: pending={outcomes.get('pending', 0)} due={outcomes.get('due', 0)} settled={outcomes.get('settled', 0)}",
+                f"Kill switch: {'enabled' if summary.get('kill_switch_enabled') else 'released'}",
+                f"Blockers: {blockers}",
+                "Orders:",
+                *order_lines,
+                "Alerts:",
+                *alert_lines,
+            ]
+        )[:8000]
+
+    def send_quant_daily_digest(
+        self,
+        *,
+        phase: str = "postclose",
+        session_date: str | None = None,
+        recipients: list[str] | None = None,
+        channels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        digest = self.build_quant_daily_digest(phase=phase, session_date=session_date)
+        selected_channels = self._quant_daily_digest_channels(channels)
+        selected_recipients = self._quant_daily_digest_recipients(recipients)
+        deliveries: list[dict[str, Any]] = []
+        if "telegram" in selected_channels:
+            deliveries.append(self._send_telegram_message(digest["text"]))
+        if "email" in selected_channels:
+            if not selected_recipients:
+                deliveries.append({"channel": "email", "status": "skipped", "detail": "no_recipients"})
+            for recipient in selected_recipients:
+                result = send_email_message(
+                    recipient=recipient,
+                    subject=f"Hybrid Paper {digest['phase']} digest {digest['session_date']}",
+                    text_body=digest["text"],
+                    html_body=f"<pre>{digest['text']}</pre>",
+                    sender=getattr(settings, "EMAIL_FROM", "") or getattr(settings, "SMTP_USER", ""),
+                )
+                deliveries.append(
+                    {
+                        "channel": "email",
+                        "recipient": recipient,
+                        "status": "sent" if result.get("ok") else "failed",
+                        "detail": result.get("detail"),
+                    }
+                )
+        retry_after = (
+            datetime.now(timezone.utc)
+            + timedelta(minutes=max(1, int(getattr(settings, "QUANT_DAILY_DIGEST_RETRY_MINUTES", 15) or 15)))
+        ).isoformat()
+        normalized_deliveries: list[dict[str, Any]] = []
+        for index, item in enumerate(deliveries):
+            delivery = dict(item)
+            delivery.setdefault("delivery_id", f"{digest['digest_id']}-{index + 1}")
+            delivery.setdefault("generated_at", _iso_now())
+            if delivery.get("status") == "failed":
+                delivery.setdefault("error", delivery.get("detail") or "delivery_failed")
+                delivery.setdefault("next_retry_at", retry_after)
+            normalized_deliveries.append(delivery)
+        deliveries = normalized_deliveries
+        sent_count = sum(1 for item in deliveries if item.get("status") == "sent")
+        failed_count = sum(1 for item in deliveries if item.get("status") == "failed")
+        digest["delivery"] = {
+            "channels": selected_channels,
+            "recipients": selected_recipients,
+            "results": deliveries,
+            "sent_count": sent_count,
+            "failed_count": failed_count,
+            "local_ledger": True,
+            "retry_after": retry_after if failed_count else None,
+        }
+        digest["storage"] = self.storage.persist_record("paper_daily_digests", digest["digest_id"], _jsonable(digest))
+        for item in deliveries:
+            delivery_id = str(item.get("delivery_id") or f"{digest['digest_id']}-{item.get('channel', 'unknown')}")
+            self.storage.persist_record(
+                "paper_daily_digest_deliveries",
+                delivery_id,
+                _jsonable(
+                    {
+                        "digest_id": digest["digest_id"],
+                        "session_date": digest["session_date"],
+                        "phase": digest["phase"],
+                        **item,
+                    }
+                ),
+            )
+        return _jsonable(digest)
+
+    def build_quant_weekly_digest(self, *, session_date: str | None = None, window_days: int | None = None) -> dict[str, Any]:
+        calendar = self.get_trading_calendar_status()
+        session = str(session_date or calendar.get("session_date") or date.today().isoformat())[:10]
+        window = max(1, int(window_days or getattr(settings, "QUANT_WEEKLY_DIGEST_WINDOW_DAYS", 7) or 7))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window)
+
+        def recent(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            values: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                parsed = self._parse_any_timestamp(
+                    row.get("generated_at")
+                    or row.get("updated_at")
+                    or row.get("date")
+                    or row.get("session_date")
+                    or row.get("snapshot_id")
+                )
+                if parsed is None or parsed.astimezone(timezone.utc) >= cutoff:
+                    values.append(row)
+            return values
+
+        workflows = recent(self.storage.list_records("workflow_runs"))
+        performance_rows = recent(self.storage.list_records("paper_performance"))
+        alerts = [
+            row for row in recent(self.storage.list_records("alerts"))
+            if str((row or {}).get("status") or "active").lower() != "resolved"
+        ]
+        deliveries = recent(self.storage.list_records("paper_daily_digest_deliveries"))
+        backups = recent(self.storage.list_records("storage_backups"))
+        locks = self.storage.list_records("submit_locks")
+        reconciliations = recent(self.storage.list_records("paper_reconciliations"))
+        slo_7 = self.build_paper_workflow_slo(window_days=window)
+        slo_90 = self.build_paper_workflow_slo(window_days=90)
+        observability = self.build_paper_workflow_observability(window_days=window)
+        perf = self._build_digest_performance_snapshot(window_days=90)
+        metrics = perf.get("metrics") or {}
+
+        order_counts = {
+            "workflow_count": len(workflows),
+            "submitted": sum(1 for row in workflows if str(row.get("status") or "").lower() == "submitted"),
+            "blocked": sum(1 for row in workflows if str(row.get("status") or "").lower() == "blocked"),
+            "planned": sum(1 for row in workflows if str(row.get("status") or "").lower() == "planned"),
+            "rejected": sum(1 for row in workflows if "reject" in json.dumps(row, ensure_ascii=False).lower()),
+        }
+        digest_success_rate = (
+            round(sum(1 for row in deliveries if str(row.get("status") or "").lower() == "sent") / len(deliveries), 6)
+            if deliveries
+            else None
+        )
+        backup_success_rate = (
+            round(sum(1 for row in backups if str(row.get("status") or "").lower() in {"completed", "completed_local_only"}) / len(backups), 6)
+            if backups
+            else None
+        )
+        summary = {
+            "session_date": session,
+            "window_days": window,
+            "scheduler_uptime": observability.get("heartbeat") or {},
+            "ready_success_proxy": not bool(observability.get("heartbeat_stale")),
+            "valid_paper_days": metrics.get("valid_days", 0),
+            "valid_paper_days_delta": len(performance_rows),
+            "orders": order_counts,
+            "unresolved_alert_count": len(alerts),
+            "backup_success_rate": backup_success_rate,
+            "digest_success_rate": digest_success_rate,
+            "submit_unknown_unresolved": sum(1 for row in locks if str((row or {}).get("status") or "").lower() == "submit_unknown"),
+            "broker_sync_error_count": sum(1 for row in reconciliations if row.get("error") or row.get("warnings")),
+            "evidence_progress": {
+                "valid_days": metrics.get("valid_days", 0),
+                "paper_60_progress": round(min(float(metrics.get("valid_days") or 0) / 60.0, 1.0), 6),
+                "paper_90_progress": round(min(float(metrics.get("valid_days") or 0) / 90.0, 1.0), 6),
+            },
+        }
+        payload = {
+            "digest_id": f"weekly-digest-{session}",
+            "generated_at": _iso_now(),
+            "phase": "weekly",
+            "session_date": session,
+            "window_days": window,
+            "summary": summary,
+            "performance": perf,
+            "slo_7d": slo_7,
+            "slo_90d": slo_90,
+            "observability": {
+                "summary": observability.get("summary") or {},
+                "heartbeat": observability.get("heartbeat") or {},
+                "storage_backup": observability.get("storage_backup") or {},
+                "active_alerts": alerts[:10],
+                "recovery_notifications": observability.get("recovery_notifications") or [],
+            },
+            "blocker_summary": observability.get("blocker_summary") or self.build_blocker_summary(alerts=alerts),
+        }
+        payload["text"] = self._format_quant_weekly_digest_text(payload)
+        return _jsonable(payload)
+
+    @staticmethod
+    def _format_quant_weekly_digest_text(payload: dict[str, Any]) -> str:
+        summary = payload.get("summary") or {}
+        orders = summary.get("orders") or {}
+        evidence = summary.get("evidence_progress") or {}
+        observability = payload.get("observability") or {}
+        heartbeat = observability.get("heartbeat") or {}
+        backup = observability.get("storage_backup") or {}
+        alerts = observability.get("active_alerts") or []
+        alert_lines = [f"- {item.get('severity', 'info')}: {item.get('kind', item.get('message', 'alert'))}" for item in alerts[:8]]
+        if not alert_lines:
+            alert_lines = ["- none"]
+        return "\n".join(
+            [
+                f"Hybrid Paper weekly digest - {payload.get('session_date')}",
+                f"Window: {summary.get('window_days')} days",
+                f"Scheduler: heartbeat={'stale' if heartbeat.get('stale') else 'fresh'} ready_proxy={summary.get('ready_success_proxy')}",
+                f"Paper evidence: valid_days={evidence.get('valid_days')} 60d={evidence.get('paper_60_progress')} 90d={evidence.get('paper_90_progress')} delta={summary.get('valid_paper_days_delta')}",
+                f"Orders: workflows={orders.get('workflow_count')} submitted={orders.get('submitted')} blocked={orders.get('blocked')} rejected={orders.get('rejected')}",
+                f"Alerts: unresolved={summary.get('unresolved_alert_count')} submit_unknown={summary.get('submit_unknown_unresolved')} broker_sync_errors={summary.get('broker_sync_error_count')}",
+                f"Delivery: digest_success_rate={summary.get('digest_success_rate')} backup_success_rate={summary.get('backup_success_rate')} latest_backup={backup.get('status', 'unknown')}",
+                "Active alerts:",
+                *alert_lines,
+            ]
+        )[:8000]
+
+    def send_quant_weekly_digest(
+        self,
+        *,
+        session_date: str | None = None,
+        window_days: int | None = None,
+        recipients: list[str] | None = None,
+        channels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        digest = self.build_quant_weekly_digest(session_date=session_date, window_days=window_days)
+        selected_channels = self._quant_daily_digest_channels(channels)
+        selected_recipients = self._quant_daily_digest_recipients(recipients)
+        deliveries: list[dict[str, Any]] = []
+        if "telegram" in selected_channels:
+            deliveries.append(self._send_telegram_message(digest["text"]))
+        if "email" in selected_channels:
+            if not selected_recipients:
+                deliveries.append({"channel": "email", "status": "skipped", "detail": "no_recipients"})
+            for recipient in selected_recipients:
+                result = send_email_message(
+                    recipient=recipient,
+                    subject=f"Hybrid Paper weekly digest {digest['session_date']}",
+                    text_body=digest["text"],
+                    html_body=f"<pre>{digest['text']}</pre>",
+                    sender=getattr(settings, "EMAIL_FROM", "") or getattr(settings, "SMTP_USER", ""),
+                )
+                deliveries.append(
+                    {
+                        "channel": "email",
+                        "recipient": recipient,
+                        "status": "sent" if result.get("ok") else "failed",
+                        "detail": result.get("detail"),
+                    }
+                )
+        retry_after = (
+            datetime.now(timezone.utc)
+            + timedelta(minutes=max(1, int(getattr(settings, "QUANT_DAILY_DIGEST_RETRY_MINUTES", 15) or 15)))
+        ).isoformat()
+        normalized: list[dict[str, Any]] = []
+        for index, item in enumerate(deliveries):
+            delivery = dict(item)
+            delivery.setdefault("delivery_id", f"{digest['digest_id']}-{index + 1}")
+            delivery.setdefault("generated_at", _iso_now())
+            if delivery.get("status") == "failed":
+                delivery.setdefault("error", delivery.get("detail") or "delivery_failed")
+                delivery.setdefault("next_retry_at", retry_after)
+            normalized.append(delivery)
+        sent_count = sum(1 for item in normalized if item.get("status") == "sent")
+        failed_count = sum(1 for item in normalized if item.get("status") == "failed")
+        digest["delivery"] = {
+            "channels": selected_channels,
+            "recipients": selected_recipients,
+            "results": normalized,
+            "sent_count": sent_count,
+            "failed_count": failed_count,
+            "local_ledger": True,
+            "retry_after": retry_after if failed_count else None,
+        }
+        digest["storage"] = self.storage.persist_record("paper_weekly_digests", digest["digest_id"], _jsonable(digest))
+        for item in normalized:
+            delivery_id = str(item.get("delivery_id") or f"{digest['digest_id']}-{item.get('channel', 'unknown')}")
+            self.storage.persist_record(
+                "paper_weekly_digest_deliveries",
+                delivery_id,
+                _jsonable({"digest_id": digest["digest_id"], "session_date": digest["session_date"], "phase": "weekly", **item}),
+            )
+        return _jsonable(digest)
+
+    def retry_failed_daily_digest_deliveries(self, *, limit: int = 20) -> dict[str, Any]:
+        if not bool(getattr(settings, "DIGEST_RETRY_ENABLED", True)):
+            return {"enabled": False, "status": "skipped", "reason": "digest_retry_disabled"}
+        now = datetime.now(timezone.utc)
+        due: list[dict[str, Any]] = []
+        for record_type in ("paper_daily_digest_deliveries", "paper_weekly_digest_deliveries"):
+            for row in self.storage.list_records(record_type):
+                if isinstance(row, dict):
+                    row = {**row, "_delivery_record_type": record_type}
+                else:
+                    continue
+                if str(row.get("status") or "") != "failed":
+                    continue
+                next_retry = self._parse_any_timestamp(row.get("next_retry_at"))
+                if next_retry is not None and next_retry.tzinfo is None:
+                    next_retry = next_retry.replace(tzinfo=timezone.utc)
+                if next_retry is None or next_retry.astimezone(timezone.utc) <= now:
+                    due.append(row)
+                if len(due) >= max(1, int(limit or 20)):
+                    break
+            if len(due) >= max(1, int(limit or 20)):
+                break
+
+        attempted: list[dict[str, Any]] = []
+        retry_after = (
+            now + timedelta(minutes=max(1, int(getattr(settings, "QUANT_DAILY_DIGEST_RETRY_MINUTES", 15) or 15)))
+        ).isoformat()
+        for row in due:
+            phase = str(row.get("phase") or "postclose").lower()
+            if phase == "weekly":
+                digest = self.build_quant_weekly_digest(
+                    session_date=str(row.get("session_date") or "")[:10] or None,
+                    window_days=int(getattr(settings, "QUANT_WEEKLY_DIGEST_WINDOW_DAYS", 7) or 7),
+                )
+            else:
+                digest = self.build_quant_daily_digest(
+                    phase=phase,
+                    session_date=str(row.get("session_date") or "")[:10] or None,
+                )
+            channel = str(row.get("channel") or "").lower()
+            if channel == "telegram":
+                result = self._send_telegram_message(digest["text"])
+                ok = result.get("status") == "sent"
+                detail = result.get("detail")
+            elif channel == "email":
+                recipient = str(row.get("recipient") or "").strip()
+                result = send_email_message(
+                    recipient=recipient,
+                    subject=f"Hybrid Paper {digest['phase']} digest {digest['session_date']}",
+                    text_body=digest["text"],
+                    html_body=f"<pre>{digest['text']}</pre>",
+                    sender=getattr(settings, "EMAIL_FROM", "") or getattr(settings, "SMTP_USER", ""),
+                )
+                ok = bool(result.get("ok"))
+                detail = result.get("detail")
+            else:
+                ok = False
+                detail = f"unsupported_channel:{channel}"
+            updated = {
+                **row,
+                "status": "sent" if ok else "failed",
+                "last_retry_at": _iso_now(),
+                "retry_count": int(row.get("retry_count") or 0) + 1,
+                "detail": detail,
+                "error": None if ok else detail,
+                "next_retry_at": None if ok else retry_after,
+                "recovered_at": _iso_now() if ok else row.get("recovered_at"),
+            }
+            delivery_id = str(updated.get("delivery_id") or f"{updated.get('digest_id')}-{channel}")
+            record_type = str(row.get("_delivery_record_type") or "paper_daily_digest_deliveries")
+            updated.pop("_delivery_record_type", None)
+            self.storage.persist_record(record_type, delivery_id, _jsonable(updated))
+            attempted.append(updated)
+
+        return {
+            "generated_at": _iso_now(),
+            "attempted_count": len(attempted),
+            "sent_count": sum(1 for item in attempted if item.get("status") == "sent"),
+            "failed_count": sum(1 for item in attempted if item.get("status") == "failed"),
+            "deliveries": _jsonable(attempted),
+        }
+
+    def _latest_paper_performance_snapshot(self, *, before_date: str | None = None) -> dict[str, Any] | None:
+        rows = sorted(
+            [row for row in self.storage.list_records("paper_performance") if isinstance(row, dict)],
+            key=lambda item: str(item.get("date") or item.get("snapshot_id") or item.get("generated_at") or ""),
+        )
+        if before_date:
+            rows = [row for row in rows if str(row.get("date") or row.get("snapshot_id") or "") < before_date]
+        return rows[-1] if rows else None
+
+    @staticmethod
+    def _paper_payload_float(payload: dict[str, Any], *keys: str) -> float | None:
+        for key in keys:
+            value = payload.get(key)
+            if value in {None, ""}:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _latest_benchmark_nav(
+        self,
+        *,
+        benchmark: str,
+        fallback: float = 1.0,
+        force_refresh: bool = False,
+    ) -> tuple[float, dict[str, Any]]:
+        meta = {"provider": "unavailable", "fallback_used": True}
+        try:
+            result = self.market_data.get_daily_bars(
+                benchmark,
+                limit=5,
+                force_refresh=force_refresh,
+                allow_stale_cache=True,
+            )
+            rows = self._bars_result_to_rows(result)
+            close = None
+            for row in reversed(rows):
+                close = self._paper_payload_float(row, "close", "Close")
+                if close is not None and close > 0:
+                    break
+            provider = str(getattr(result, "provider", "") or (result.get("provider") if isinstance(result, dict) else "") or "unknown")
+            meta = {"provider": provider, "fallback_used": close is None, "row_count": len(rows)}
+            return (float(close) if close is not None else float(fallback or 1.0)), meta
+        except Exception as exc:
+            meta["error"] = str(exc)
+            return float(fallback or 1.0), meta
+
+    @staticmethod
+    def _annualized_return(net_return: Any, valid_days: Any) -> float:
+        try:
+            net = float(net_return or 0.0)
+            days = max(1, int(valid_days or 0) - 1)
+            if net <= -0.999:
+                return -1.0
+            return round((1 + net) ** (252 / days) - 1, 6)
+        except Exception:
+            return 0.0
+
+    def _paper_execution_summary(self, *, window_days: int) -> dict[str, Any]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(int(window_days or 90) * 2, 90))
+        executions = []
+        for payload in self.storage.list_records("executions"):
+            if str(payload.get("mode") or "").lower() != "paper":
+                continue
+            generated_at = self._parse_any_timestamp(payload.get("generated_at") or payload.get("created_at"))
+            if generated_at is not None and generated_at.astimezone(timezone.utc) < cutoff:
+                continue
+            executions.append(payload)
+        orders = []
+        sync_errors: list[str] = []
+        for payload in executions:
+            sync_errors.extend(str(item) for item in payload.get("warnings") or [] if item)
+            for order in (payload.get("submitted_orders") or payload.get("orders") or []):
+                if isinstance(order, dict):
+                    orders.append(order)
+        rejected_states = {"rejected", "failed", "canceled", "cancelled", "expired"}
+        filled_states = {"filled", "partially_filled"}
+        return {
+            "execution_count": len(executions),
+            "order_count": len(orders),
+            "submitted_count": sum(1 for payload in executions if payload.get("submitted")),
+            "filled_count": sum(1 for order in orders if str(order.get("status") or "").lower() in filled_states),
+            "rejected_count": sum(1 for order in orders if str(order.get("status") or "").lower() in rejected_states),
+            "slippage_bps_values": [
+                order.get("estimated_slippage_bps")
+                for order in orders
+                if order.get("estimated_slippage_bps") is not None
+            ],
+            "turnover": sum(float(order.get("notional") or order.get("submitted_notional") or 0.0) for order in orders),
+            "latest_execution_id": executions[0].get("execution_id") if executions else None,
+            "sync_errors": sync_errors,
+            "sync_error_count": len(sync_errors),
+        }
+
+    def _live_canary_recommendation(self, *, metrics: dict[str, Any], outcomes: list[dict[str, Any]]) -> dict[str, Any]:
+        sync_status = self._paper_gate_sync_status()
+        controls = self.get_execution_controls()
+        account = self.get_execution_account(broker="alpaca", mode="paper")
+        synthetic_count = sum(1 for row in outcomes if bool(row.get("synthetic_used")))
+        policy = load_promotion_policy()
+        execution_summary = self._paper_execution_summary(window_days=90)
+        attribution = self._paper_attribution_summary(rows=[], outcomes=outcomes, execution_summary=execution_summary)
+        quality = {
+            **attribution,
+            "filled_count": execution_summary.get("filled_count", 0),
+            "settled_count": sum(1 for row in outcomes if str(row.get("status") or "") == "settled"),
+            "synthetic_count": synthetic_count,
+        }
+        threshold_result = evaluate_thresholds(metrics, quality, policy, "live_canary")
+        checks = {
+            **threshold_result["checks"],
+            "broker_sync_clean": bool(sync_status.get("ok")),
+            "kill_switch_released": not bool(controls.get("kill_switch_enabled")),
+            "alpaca_paper_ready": bool(account.get("connected") and account.get("paper_ready")),
+        }
+        blockers = [key for key, ok in checks.items() if not ok]
+        recommended = not blockers
+        return {
+            "recommended": recommended,
+            "status": "canary_candidate" if recommended else "blocked",
+            "summary": "Paper evidence supports operator-reviewed live canary." if recommended else "Continue paper until all live canary gates pass.",
+            "checks": checks,
+            "blockers": blockers,
+            "policy": policy,
+            "quality": quality,
+            "sync_status": sync_status,
+            "synthetic_count": synthetic_count,
+            "operator_confirmation_required": True,
+        }
+
+    def _sync_paper_reward_candidate_outcomes(self) -> None:
+        from gateway.trading.reward_bandit import build_horizon_states
+
+        for candidate in self.storage.list_records("paper_reward_candidates"):
+            if not isinstance(candidate, dict) or not candidate.get("candidate_id"):
+                continue
+            outcome_id = f"outcome-paper-reward-{candidate['candidate_id']}"
+            if self.storage.load_record("paper_outcomes", outcome_id):
+                continue
+            entry_at = str(candidate.get("entry_at") or candidate.get("created_at") or _iso_now())
+            record = {
+                "outcome_id": outcome_id,
+                "record_kind": "paper_reward_candidate",
+                "source_id": candidate.get("candidate_id"),
+                "workflow_id": None,
+                "execution_id": candidate.get("execution_id"),
+                "created_at": candidate.get("created_at") or _iso_now(),
+                "symbol": str(candidate.get("symbol") or "").upper(),
+                "action": str(candidate.get("action") or "long").lower(),
+                "side": "sell" if str(candidate.get("action") or "").lower() == "short" else "buy",
+                "strategy_id": candidate.get("strategy_id"),
+                "model_refs": {"source": "paper_reward_candidates"},
+                "entry_price": candidate.get("entry_price"),
+                "entry_at": entry_at,
+                "notional": candidate.get("notional"),
+                "features": candidate.get("features") or {},
+                "market_data_source": "paper_reward",
+                "synthetic_used": self._payload_mentions_synthetic(candidate),
+                "settlements": candidate.get("settlements") or build_horizon_states(entry_at),
+                "partial_score": candidate.get("partial_score"),
+                "score": candidate.get("score"),
+                "status": candidate.get("status") or "pending",
+                "lineage": ["paper_reward_candidate", "paper_outcome_ledger"],
+                "metadata": {"batch_id": candidate.get("batch_id")},
+            }
+            self._save_paper_outcome(self.synthetic_guard.annotate(record, fallback_source="paper_reward"))
+
+    def _save_paper_outcome(self, record: dict[str, Any]) -> dict[str, Any]:
+        outcome_id = str(record.get("outcome_id") or "").strip()
+        if not outcome_id:
+            outcome_id = f"outcome-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+            record["outcome_id"] = outcome_id
+        record["updated_at"] = _iso_now()
+        record["storage"] = self.storage.persist_record("paper_outcomes", outcome_id, _jsonable(record))
+        return _jsonable(record)
+
+    def _build_paper_outcome_record(
+        self,
+        *,
+        record_kind: str,
+        source_id: str,
+        index: int,
+        workflow_id: str,
+        execution_id: str,
+        symbol: str,
+        action: str,
+        entry_at: str,
+        entry_price: float | None,
+        notional: float | None,
+        features: dict[str, Any],
+        model_refs: dict[str, Any],
+        market_data_source: str,
+        synthetic_used: bool,
+    ) -> dict[str, Any]:
+        from gateway.trading.reward_bandit import build_horizon_states
+
+        safe_symbol = "".join(ch for ch in symbol.upper() if ch.isalnum() or ch in {"-", "_"}) or "UNKNOWN"
+        safe_kind = "".join(ch for ch in record_kind if ch.isalnum() or ch in {"-", "_"}) or "record"
+        outcome_id = f"outcome-{workflow_id or execution_id or 'manual'}-{safe_kind}-{safe_symbol}-{index}"
+        record = {
+            "outcome_id": outcome_id,
+            "record_kind": record_kind,
+            "source_id": source_id,
+            "workflow_id": workflow_id or None,
+            "execution_id": execution_id or None,
+            "created_at": _iso_now(),
+            "symbol": symbol.upper(),
+            "action": "short" if action in {"short", "sell"} else "long",
+            "side": "sell" if action in {"short", "sell"} else "buy",
+            "strategy_id": features.get("strategy_id") or features.get("strategy_bucket"),
+            "model_refs": model_refs,
+            "entry_price": entry_price,
+            "entry_at": entry_at,
+            "notional": notional,
+            "features": features,
+            "market_data_source": market_data_source,
+            "synthetic_used": bool(synthetic_used),
+            "settlements": build_horizon_states(entry_at),
+            "partial_score": None,
+            "score": None,
+            "status": "pending",
+            "lineage": ["hybrid_paper_workflow", "paper_outcome_ledger"],
+            "metadata": {},
+        }
+        return self.synthetic_guard.annotate(record, fallback_source=market_data_source)
+
+    @staticmethod
+    def _payload_mentions_synthetic(payload: dict[str, Any] | None) -> bool:
+        if not payload:
+            return False
+        try:
+            return "synthetic" in json.dumps(payload, ensure_ascii=False).lower()
+        except Exception:
+            return "synthetic" in str(payload).lower()
+
+    @staticmethod
+    def _bars_result_to_rows(bars_result: Any) -> list[dict[str, Any]]:
+        if bars_result is None:
+            return []
+        if isinstance(bars_result, list):
+            return [dict(row) for row in bars_result if isinstance(row, dict)]
+        frame = getattr(bars_result, "frame", None)
+        if frame is None and isinstance(bars_result, pd.DataFrame):
+            frame = bars_result
+        if frame is not None and hasattr(frame, "to_dict"):
+            rows = frame.reset_index().to_dict(orient="records")
+            return [_jsonable(row) for row in rows]
+        bars_attr = getattr(bars_result, "bars", None)
+        if bars_attr is not None and hasattr(bars_attr, "to_dict"):
+            rows = bars_attr.reset_index().to_dict(orient="records")
+            return [_jsonable(row) for row in rows]
+        if isinstance(bars_result, dict):
+            for key in ("bars", "rows", "data"):
+                rows = bars_result.get(key)
+                if isinstance(rows, list):
+                    return [dict(row) for row in rows if isinstance(row, dict)]
+        rows = getattr(bars_result, "rows", None) or getattr(bars_result, "bars", None)
+        if isinstance(rows, list):
+            return [dict(row) for row in rows if isinstance(row, dict)]
+        return []
+
+    def _market_data_preflight(self) -> dict[str, Any]:
+        configured = str(getattr(settings, "MARKET_DATA_PROVIDER", "") or "")
+        if "synthetic" in configured.lower():
+            return {"ok": False, "detail": "MARKET_DATA_PROVIDER includes synthetic.", "provider": configured}
+        providers = [item.strip().lower() for item in configured.split(",") if item.strip()]
+        provider_ready = {
+            "alpaca": bool(getattr(settings, "ALPACA_API_KEY", "") and getattr(settings, "ALPACA_API_SECRET", "")),
+            "twelvedata": bool(
+                getattr(settings, "TWELVEDATA_API_KEY", "")
+                or getattr(settings, "TWELVEDATA_API", "")
+                or getattr(settings, "TWELVE_DATA_API", "")
+            ),
+            "yfinance": True,
+            "cache": bool(getattr(settings, "MARKET_DATA_CACHE_DB", "")),
+        }
+        ready = any(provider_ready.get(provider, False) for provider in providers)
+        return {
+            "ok": bool(providers and ready),
+            "detail": "Market data provider chain is configured." if providers and ready else "No usable non-synthetic market data provider is configured.",
+            "provider": configured,
+            "providers": providers,
+            "provider_ready": provider_ready,
+        }
+
+    def _storage_preflight(self, *, dry_run: bool = False) -> dict[str, Any]:
+        disk = shutil.disk_usage(self.storage.base_dir)
+        free_percent = round((disk.free / disk.total) * 100, 3) if disk.total else 0.0
+        critical_threshold = float(getattr(settings, "STORAGE_DISK_CRITICAL_FREE_PERCENT", 5.0) or 5.0)
+        disk_meta = {
+            "path": str(self.storage.base_dir),
+            "total_bytes": disk.total,
+            "used_bytes": disk.used,
+            "free_bytes": disk.free,
+            "free_percent": free_percent,
+            "critical_free_percent": critical_threshold,
+            "critically_low": free_percent < critical_threshold,
+        }
+        if dry_run:
+            status = self.storage.status()
+            probe_rows = [
+                row for row in self.storage.list_records("deployment_preflight_probe")
+                if isinstance(row, dict)
+            ]
+            latest_probe = probe_rows[0] if probe_rows else None
+            ok = not bool(disk_meta["critically_low"])
+            return {
+                "ok": ok,
+                "detail": "Storage status read succeeded." if ok else "Storage disk free space is critically low.",
+                "dry_run": True,
+                "latest_probe": latest_probe,
+                "disk": disk_meta,
+                **status,
+            }
+        try:
+            record_id = f"probe-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+            info = self.storage.persist_record("deployment_preflight_probe", record_id, {"record_id": record_id, "generated_at": _iso_now()})
+            ok = not bool(disk_meta["critically_low"])
+            return {
+                "ok": ok,
+                "detail": "Storage write probe succeeded." if ok else "Storage disk free space is critically low.",
+                "storage": info,
+                "disk": disk_meta,
+                **self.storage.status(),
+            }
+        except Exception as exc:
+            return {"ok": False, "detail": f"Storage write probe failed: {exc}", "disk": disk_meta}
+
+    def _rl_checkpoint_preflight(self) -> dict[str, Any]:
+        storage_dir = self._resolve_runtime_path(
+            getattr(settings, "QUANT_RL_STORAGE_DIR", "storage/quant/rl"),
+            "storage/quant/rl",
+        )
+        experiment_root = self._resolve_runtime_path(
+            getattr(settings, "QUANT_RL_EXPERIMENT_ROOT", "storage/quant/rl-experiments"),
+            "storage/quant/rl-experiments",
+        )
+        checkpoint_roots = [storage_dir / "checkpoints", experiment_root]
+        checkpoint = self._latest_file_from_roots(checkpoint_roots, ["*.pt", "*.pth", "*.ckpt"])
+        dataset = self._latest_file_from_roots([storage_dir, experiment_root], ["*.csv", "*.parquet"])
+        return {
+            "ok": checkpoint is not None,
+            "detail": "RL checkpoint is ready." if checkpoint else "RL checkpoint is missing.",
+            "latest_dataset": {"path": str(dataset or ""), "exists": dataset is not None},
+            "latest_checkpoint": {"path": str(checkpoint or ""), "exists": checkpoint is not None},
+            "artifact_health": {
+                "dataset_ready": dataset is not None,
+                "checkpoint_ready": checkpoint is not None,
+            },
+        }
+
+    @staticmethod
+    def _latest_file_from_roots(roots: list[Path], patterns: list[str]) -> Path | None:
+        matches: list[Path] = []
+        for root in roots:
+            if not root.exists() or not root.is_dir():
+                continue
+            for pattern in patterns:
+                try:
+                    matches.extend(path for path in root.rglob(pattern) if path.is_file())
+                except OSError:
+                    continue
+        if not matches:
+            return None
+        matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return matches[0]
+
+    def _synthetic_trade_preflight(self) -> dict[str, Any]:
+        recent_outcomes = self.storage.list_records("paper_outcomes")[:200]
+        guard_summary = self.synthetic_guard.summary([row for row in recent_outcomes if isinstance(row, dict)])
+        synthetic_outcomes = guard_summary.get("synthetic_ids", [])
+        provider = str(getattr(settings, "MARKET_DATA_PROVIDER", "") or "")
+        ok = "synthetic" not in provider.lower() and not synthetic_outcomes
+        return {
+            "ok": ok,
+            "detail": "Synthetic trade sources are blocked." if ok else "Synthetic provider or outcome evidence is present.",
+            "market_data_provider": provider,
+            "synthetic_outcome_ids": synthetic_outcomes[:10],
+            "guard": guard_summary,
+        }
+
+    @staticmethod
+    def _paper_workflow_preflight(
+        *,
+        registry: dict[str, Any],
+        rl_meta: dict[str, Any],
+        account: dict[str, Any],
+        controls: dict[str, Any],
+        synthetic_meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        available_models = {str(model.get("key")): bool(model.get("available")) for model in registry.get("models", [])}
+        required_models_ok = all(available_models.get(key) for key in ("alpha_ranker", "p1_suite", "p2_selector"))
+        ok = bool(
+            required_models_ok
+            and rl_meta.get("ok")
+            and account.get("connected")
+            and account.get("paper_ready")
+            and not controls.get("kill_switch_enabled")
+            and synthetic_meta.get("ok")
+        )
+        return {
+            "ok": ok,
+            "detail": "Hybrid paper workflow preflight passed." if ok else "Hybrid paper workflow has blocking readiness gaps.",
+            "required_models_ok": required_models_ok,
+            "available_models": available_models,
+        }
+
+    @staticmethod
+    def _preflight_next_actions(blockers: list[str], warnings: list[str]) -> list[str]:
+        mapping = {
+            "alpaca_paper": "configure_alpaca_paper_credentials",
+            "market_data": "configure_real_market_data_provider",
+            "storage": "repair_storage_or_cloud_artifact_backend",
+            "scheduler_heartbeat": "start_quant_signal_scheduler_worker",
+            "model_registry": "sync_model_registry_artifacts",
+            "rl_checkpoint": "train_or_sync_rl_checkpoint",
+            "kill_switch": "release_execution_kill_switch_after_review",
+            "synthetic_trade_block": "remove_synthetic_provider_and_rebuild_evidence",
+            "trading_calendar": "inspect_trading_calendar_configuration",
+            "paper_workflow": "rerun_preflight_after_blockers_clear",
+            "telegram_notifier": "configure_telegram_bot_token_and_chat_id",
+            "telegram_token_rotation": "rotate_exposed_telegram_bot_token_and_confirm_secret_store",
+        }
+        actions = [mapping.get(item, f"review_{item}") for item in blockers]
+        if "qdrant" in warnings:
+            actions.append("start_qdrant_if_rag_is_required")
+        if "remote_llm" in warnings:
+            actions.append("configure_remote_llm_or_cloud_fallback")
+        return list(dict.fromkeys(actions or ["ready_for_paper_cloud_scheduler"]))
+
     def run_backtest(
         self,
         strategy_name: str,
@@ -3142,6 +7183,9 @@ class QuantSystemService:
         )
         payload["stale_order_minutes"] = int(getattr(settings, "EXECUTION_STALE_ORDER_MINUTES", 20) or 20)
         payload["ws_enabled"] = bool(getattr(settings, "EXECUTION_WS_ENABLED", True))
+        payload["paper_notional_limits"] = self._execution_notional_limits("paper")
+        payload["live_notional_limits"] = self._execution_notional_limits("live")
+        payload["paper_gate"] = self.build_paper_gate_report(persist=False)
         return payload
 
     def set_execution_kill_switch(self, *, enabled: bool, reason: str = "") -> dict[str, Any]:
@@ -3391,6 +7435,8 @@ class QuantSystemService:
         allow_duplicates: bool = False,
         live_confirmed: bool = False,
         operator_confirmation: str | None = None,
+        reward_candidate_mode: bool = False,
+        strategy_id: str | None = None,
     ) -> dict[str, Any]:
         benchmark = benchmark or self.default_benchmark
         capital_base = capital_base or self.default_capital
@@ -3401,11 +7447,17 @@ class QuantSystemService:
         execution_id = f"execution-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
         normalized_order_type = (order_type or "market").strip().lower()
         normalized_tif = (time_in_force or "day").strip().lower()
+        notional_limits = self._execution_notional_limits(normalized_mode)
+        test_order_cap = (
+            int(getattr(settings, "PAPER_REWARD_MAX_CANDIDATES", 5) or 5)
+            if reward_candidate_mode
+            else int(getattr(settings, "ALPACA_MAX_TEST_ORDERS", 2) or 2)
+        )
         capped_max_orders = max(
             1,
             min(
                 int(max_orders or 1),
-                int(getattr(settings, "ALPACA_MAX_TEST_ORDERS", 2) or 2),
+                test_order_cap,
                 int(getattr(settings, "EXECUTION_MAX_DAILY_ORDERS", 25) or 25),
                 10,
             ),
@@ -3413,8 +7465,7 @@ class QuantSystemService:
         capped_notional = round(
             min(
                 float(per_order_notional or getattr(settings, "ALPACA_DEFAULT_TEST_NOTIONAL", 1.0) or 1.0),
-                float(getattr(settings, "ALPACA_MAX_ORDER_NOTIONAL", 10.0) or 10.0),
-                float(getattr(settings, "EXECUTION_MAX_NOTIONAL_PER_ORDER", 2500.0) or 2500.0),
+                float(notional_limits["effective_per_order_notional"]),
             ),
             2,
         )
@@ -3468,13 +7519,30 @@ class QuantSystemService:
         )
 
         payload = plan.model_dump()
+        signal_payloads = [signal.model_dump(mode="json") for signal in signals]
+        signal_provenance = self.synthetic_guard.summary(signal_payloads)
+        payload["signal_provenance"] = signal_provenance
+        payload["synthetic_used"] = bool(signal_provenance.get("synthetic_count"))
+        payload["evidence_eligible"] = not payload["synthetic_used"]
         payload["broker_id"] = broker_id
         payload["broker_descriptor"] = adapter.descriptor().model_dump()
         payload["generated_at"] = _iso_now()
         payload["portfolio"] = portfolio.model_dump()
         payload["submit_orders"] = bool(submit_orders)
+        payload["reward_candidate_mode"] = bool(reward_candidate_mode)
+        payload["strategy_id"] = str(strategy_id or ("paper_reward_candidate" if reward_candidate_mode else "execution_plan")).strip()
+        payload["session_date"] = self._execution_session_date(payload)
+        payload["config_snapshot"] = self._config_snapshot()
         payload["max_orders"] = capped_max_orders
         payload["per_order_notional"] = capped_notional
+        payload["notional_limits"] = {
+            **notional_limits,
+            "requested_per_order_notional": round(
+                float(per_order_notional or getattr(settings, "ALPACA_DEFAULT_TEST_NOTIONAL", 1.0) or 1.0),
+                2,
+            ),
+            "capped_per_order_notional": capped_notional,
+        }
         payload["order_type"] = normalized_order_type
         payload["time_in_force"] = normalized_tif
         payload["extended_hours"] = bool(extended_hours)
@@ -3516,6 +7584,9 @@ class QuantSystemService:
         payload["live_available"] = mode_state["live_available"]
         payload["block_reason"] = mode_state["block_reason"]
         payload["next_actions"] = list(mode_state["next_actions"])
+        payload["paper_gate"] = mode_state.get("paper_gate", {})
+        payload["paper_gate_passed"] = bool(mode_state.get("paper_gate_passed"))
+        payload["live_blocked_until_paper_gate"] = bool(mode_state.get("live_blocked_until_paper_gate"))
 
         live_enabled = bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False))
         if payload["mode"] == "live":
@@ -3536,7 +7607,13 @@ class QuantSystemService:
                 payload["broker_status"] = "blocked"
                 payload["warnings"].append("Live trading is disabled in server settings. Keep validating in Alpaca Paper first.")
                 payload["block_reason"] = "live_trading_disabled"
-                payload["next_actions"] = ["keep_using_paper_mode", "enable_live_trading_when_ready"]
+                payload["next_actions"] = ["keep_using_paper_mode", "wait_for_paper_gate_pass"]
+            elif not payload.get("paper_gate_passed"):
+                payload["ready"] = False
+                payload["broker_status"] = "blocked"
+                payload["warnings"].append("Live trading is locked until the 60-trading-day Paper gate passes.")
+                payload["block_reason"] = "paper_gate_not_passed"
+                payload["next_actions"] = ["keep_using_paper_mode", "review_paper_gate_report", "wait_for_60_trading_day_gate"]
             elif not bool(live_confirmed):
                 payload["ready"] = False
                 payload["broker_status"] = "awaiting_live_confirmation"
@@ -3544,19 +7621,61 @@ class QuantSystemService:
                 payload["block_reason"] = "live_confirmation_required"
                 payload["next_actions"] = ["confirm_live_submit_or_switch_to_paper"]
 
-        if submit_orders and payload["ready"] and (payload["mode"] == "paper" or (payload["mode"] == "live" and live_enabled and live_confirmed)):
-            self._submit_broker_orders(
-                adapter=adapter,
-                payload=payload,
-                journal=journal,
-                capped_max_orders=capped_max_orders,
-                capped_notional=capped_notional,
-                normalized_order_type=normalized_order_type,
-                normalized_tif=normalized_tif,
-                extended_hours=bool(extended_hours),
-                allow_duplicates=bool(allow_duplicates),
+            live_guard = self._build_live_daily_notional_guard(
+                broker_id=broker_id,
+                execution_id=execution_id,
+                planned_notional=round(capped_notional * capped_max_orders, 2),
+            )
+            payload["live_daily_notional_guard"] = live_guard
+            if not live_guard["ok"]:
+                payload["ready"] = False
+                payload["broker_status"] = "daily_notional_limit_exceeded"
+                payload["block_reason"] = "live_daily_notional_limit_exceeded"
+                payload["next_actions"] = ["wait_until_next_trading_day", "reduce_order_notional_or_count"]
+                payload["warnings"].append(
+                    "Live daily notional guard blocked routing: "
+                    f"used {live_guard['used_notional']:.2f} USD, "
+                    f"planned {live_guard['planned_notional']:.2f} USD, "
+                    f"limit {live_guard['limit_notional']:.2f} USD for {live_guard['trading_day']}."
+                )
+        else:
+            payload["live_daily_notional_guard"] = self._build_live_daily_notional_guard(
+                broker_id=broker_id,
+                execution_id=execution_id,
+                planned_notional=0.0,
+                enabled=False,
             )
 
+        live_submit_ready = (
+            payload["mode"] == "live"
+            and live_enabled
+            and live_confirmed
+            and bool(payload.get("paper_gate_passed"))
+        )
+        if submit_orders and payload["ready"] and (payload["mode"] == "paper" or live_submit_ready):
+            if payload.get("synthetic_used"):
+                payload["ready"] = False
+                payload["broker_status"] = "synthetic_evidence_blocked"
+                payload["block_reason"] = "synthetic_evidence_blocked"
+                payload["warnings"].append("Synthetic signal evidence is not eligible for broker routing.")
+                payload["next_actions"] = ["refresh_real_market_data", "rerun_without_synthetic_evidence"]
+            else:
+                self._submit_broker_orders(
+                    adapter=adapter,
+                    payload=payload,
+                    journal=journal,
+                    capped_max_orders=capped_max_orders,
+                    capped_notional=capped_notional,
+                    normalized_order_type=normalized_order_type,
+                    normalized_tif=normalized_tif,
+                    extended_hours=bool(extended_hours),
+                    allow_duplicates=bool(allow_duplicates),
+                )
+
+        payload["blocker_summary"] = self.build_blocker_summary(
+            blockers=[payload.get("block_reason")] if payload.get("block_reason") else [],
+            warnings=payload.get("warnings") or [],
+        )
         payload["journal"] = journal
         payload["state_machine"] = {
             "state": journal["current_state"],
@@ -3664,6 +7783,160 @@ class QuantSystemService:
             "controls": execution_payload.get("controls", self.get_execution_controls()),
         }
 
+    def reconcile_alpaca_paper_orders(self, *, session_date: str | None = None) -> dict[str, Any]:
+        if not bool(getattr(settings, "ALPACA_PAPER_RECONCILE_ENABLED", True)):
+            return {"enabled": False, "status": "skipped", "reason": "alpaca_paper_reconcile_disabled"}
+        session = str(session_date or self._execution_session_date({}))[:10]
+        adapter, normalized_mode = self._prepare_broker_adapter("alpaca", "paper")
+        connection = self._connection_status_for_mode(adapter, normalized_mode)
+        if not connection.get("configured"):
+            return {
+                "enabled": True,
+                "status": "blocked",
+                "session_date": session,
+                "reason": "alpaca_paper_not_configured",
+            }
+
+        errors: list[str] = []
+        try:
+            orders = adapter.list_orders(status="all", limit=500)
+        except Exception as exc:
+            orders = []
+            errors.append(f"orders:{exc}")
+        try:
+            positions = adapter.list_positions()
+        except Exception as exc:
+            positions = []
+            errors.append(f"positions:{exc}")
+        try:
+            account = adapter.get_account()
+        except Exception as exc:
+            account = {}
+            errors.append(f"account:{exc}")
+
+        summarized_orders = [self._summarize_broker_order("alpaca", order) for order in orders if isinstance(order, dict)]
+        by_id = {str(order.get("id") or ""): order for order in summarized_orders if order.get("id")}
+        by_client = {
+            str(order.get("client_order_id") or ""): order
+            for order in summarized_orders
+            if order.get("client_order_id")
+        }
+        by_symbol_side: dict[str, dict[str, Any]] = {}
+        by_symbol_side_filled: dict[str, dict[str, Any]] = {}
+        for order in summarized_orders:
+            key = f"{str(order.get('symbol') or '').upper()}:{str(order.get('side') or 'buy').lower()}"
+            by_symbol_side.setdefault(key, order)
+            if self._broker_order_has_fill(order) and self._broker_order_matches_session(order, session):
+                by_symbol_side_filled.setdefault(key, order)
+
+        journal_updates = 0
+        execution_updates = 0
+        for execution in self.storage.list_records("executions"):
+            if str(execution.get("mode") or "").lower() != "paper":
+                continue
+            if self._record_session_date(execution) and self._record_session_date(execution) != session:
+                continue
+            execution_id = str(execution.get("execution_id") or "").strip()
+            journal = self._load_execution_journal(execution_id) or execution.get("journal") or {}
+            if not journal:
+                continue
+            changed = False
+            for record in journal.get("records", []):
+                client_id = str(record.get("order_id") or "").strip()
+                current_broker_id = self._record_broker_order_id(record)
+                symbol = str(record.get("symbol") or "").upper()
+                side = str((record.get("submitted_payload") or {}).get("side") or "buy").lower()
+                summary = by_id.get(current_broker_id) or by_client.get(client_id) or by_symbol_side.get(f"{symbol}:{side}")
+                if not summary:
+                    continue
+                previous = dict(record.get("last_broker_snapshot") or {})
+                remote_state = self._normalize_order_state("alpaca", summary.get("status"))
+                if summary != previous or remote_state != str(record.get("current_state") or ""):
+                    self._update_journal_record(
+                        journal=journal,
+                        record=record,
+                        state=remote_state,
+                        message=f"Alpaca paper reconcile refreshed {symbol} to {remote_state}.",
+                        broker_snapshot=summary,
+                    )
+                    journal_updates += 1
+                    changed = True
+            if changed:
+                hydrated = self._hydrate_execution_payload_from_journal(execution, journal)
+                hydrated["reconciliation_status"] = {"session_date": session, "updated_at": _iso_now()}
+                self._persist_execution_payload(hydrated, journal)
+                execution_updates += 1
+
+        lock_updates = 0
+        unresolved_submit_unknown = 0
+        for lock in self.storage.list_records("submit_locks"):
+            if not isinstance(lock, dict) or str(lock.get("session_date") or "")[:10] != session:
+                continue
+            symbol = str(lock.get("symbol") or "").upper()
+            side = str(lock.get("side") or "buy").lower()
+            summary = by_client.get(str(lock.get("client_order_id") or ""))
+            reconcile_status = "submitted"
+            if not summary:
+                summary = by_symbol_side_filled.get(f"{symbol}:{side}")
+                reconcile_status = "reconciled"
+            if not summary:
+                if str(lock.get("status") or "") == "submit_unknown":
+                    unresolved_submit_unknown += 1
+                    self._record_submit_unknown_alert(lock)
+                continue
+            if lock.get("broker_order_id") != summary.get("id") or lock.get("status") in {"acquired", "submit_unknown"}:
+                self._update_session_submit_lock(
+                    lock,
+                    status=reconcile_status if summary.get("id") else "reconciled",
+                    broker_order_id=summary.get("id"),
+                    broker_status=summary.get("status"),
+                    reconciled_at=_iso_now(),
+                    reconcile_rule="client_order_id" if reconcile_status == "submitted" else "symbol_side_session_fill",
+                )
+                lock_updates += 1
+
+        outcome_updates = 0
+        for outcome in self.storage.list_records("paper_outcomes"):
+            if not isinstance(outcome, dict) or self._record_session_date({"date": outcome.get("entry_at")}) != session:
+                continue
+            symbol = str(outcome.get("symbol") or "").upper()
+            side = str(outcome.get("side") or outcome.get("action") or "buy").lower()
+            if side == "long":
+                side = "buy"
+            elif side == "short":
+                side = "sell"
+            summary = by_id.get(str(outcome.get("broker_order_id") or "")) or by_symbol_side.get(f"{symbol}:{side}")
+            if not summary:
+                continue
+            outcome["broker_order_id"] = summary.get("id") or outcome.get("broker_order_id")
+            outcome["broker_status"] = summary.get("status")
+            outcome["filled_qty"] = summary.get("filled_qty") or outcome.get("filled_qty")
+            outcome["filled_avg_price"] = summary.get("filled_avg_price") or outcome.get("filled_avg_price")
+            entry_price = self._safe_float(summary.get("filled_avg_price"))
+            if entry_price is not None:
+                outcome["entry_price"] = entry_price
+            outcome["reconciled_at"] = _iso_now()
+            self._save_paper_outcome(outcome)
+            outcome_updates += 1
+
+        payload = {
+            "reconciliation_id": f"alpaca-paper-reconcile-{session}",
+            "generated_at": _iso_now(),
+            "session_date": session,
+            "status": "completed" if not errors else "completed_with_warnings",
+            "orders_seen": len(summarized_orders),
+            "positions_seen": len(positions or []),
+            "account": self._summarize_broker_account("alpaca", account) if account else {},
+            "journal_updates": journal_updates,
+            "execution_updates": execution_updates,
+            "submit_lock_updates": lock_updates,
+            "unresolved_submit_unknown": unresolved_submit_unknown,
+            "outcome_updates": outcome_updates,
+            "errors": errors,
+        }
+        payload["storage"] = self.storage.persist_record("paper_reconciliations", payload["reconciliation_id"], _jsonable(payload))
+        return _jsonable(payload)
+
     def cancel_execution_order(
         self,
         order_id: str,
@@ -3738,6 +8011,7 @@ class QuantSystemService:
             raise ValueError(f"{adapter.label} is not configured in the current runtime")
 
         existing_payload = dict(record.get("submitted_payload") or {})
+        notional_limits = self._execution_notional_limits(normalized_mode)
         requested_notional = round(
             min(
                 float(
@@ -3746,7 +8020,7 @@ class QuantSystemService:
                     or getattr(settings, "ALPACA_DEFAULT_TEST_NOTIONAL", 1.0)
                     or 1.0
                 ),
-                float(getattr(settings, "EXECUTION_MAX_NOTIONAL_PER_ORDER", 2500.0) or 2500.0),
+                float(notional_limits["effective_per_order_notional"]),
             ),
             2,
         )
@@ -4015,8 +8289,9 @@ class QuantSystemService:
             ready = False
             warnings.append("Requested order count exceeds the daily routing ceiling.")
 
-        if capped_notional <= float(getattr(settings, "EXECUTION_MAX_NOTIONAL_PER_ORDER", 2500.0) or 2500.0):
-            checks.append("Per-order notional is within configured broker-safe limits")
+        notional_limit = float(self._execution_notional_limits(mode)["effective_per_order_notional"])
+        if capped_notional <= notional_limit:
+            checks.append(f"Per-order notional is within configured {mode} broker-safe limits")
         else:
             ready = False
             warnings.append("Requested notional exceeds the configured broker-safe limit.")
@@ -4158,6 +8433,120 @@ class QuantSystemService:
             return None
         return self._summarize_broker_clock(adapter.broker_id, clock)
 
+    def _execution_session_date(self, payload: dict[str, Any] | None = None) -> str:
+        payload = payload or {}
+        for key in ("session_date", "trade_date", "trading_day", "generated_at"):
+            value = payload.get(key)
+            parsed = self._parse_any_timestamp(value)
+            if parsed is not None:
+                return parsed.date().isoformat()
+            text = str(value or "").strip()
+            if len(text) >= 10:
+                try:
+                    return date.fromisoformat(text[:10]).isoformat()
+                except ValueError:
+                    pass
+        try:
+            status = self.get_trading_calendar_status()
+            return str(status.get("session_date") or date.today().isoformat())[:10]
+        except Exception:
+            return date.today().isoformat()
+
+    def _submit_lock_id(self, *, session_date: str, strategy_id: str, symbol: str, side: str) -> str:
+        return "_".join(
+            [
+                self._safe_record_id(session_date),
+                self._safe_record_id(strategy_id),
+                self._safe_record_id(symbol),
+                self._safe_record_id(side),
+            ]
+        )
+
+    def _submit_lock_path(self, lock_id: str) -> Path:
+        directory = self.storage.base_dir / "submit_locks"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / f"{lock_id}.json"
+
+    def _acquire_session_submit_lock(
+        self,
+        *,
+        session_date: str,
+        strategy_id: str,
+        symbol: str,
+        side: str,
+        execution_id: str,
+        client_order_id: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        if not bool(getattr(settings, "EXECUTION_SESSION_SUBMIT_LOCK_ENABLED", True)):
+            return True, {"enabled": False}
+        lock_id = self._submit_lock_id(
+            session_date=session_date,
+            strategy_id=strategy_id,
+            symbol=symbol,
+            side=side,
+        )
+        path = self._submit_lock_path(lock_id)
+        now = _iso_now()
+        payload = {
+            "lock_id": lock_id,
+            "session_date": session_date,
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "side": side,
+            "execution_id": execution_id,
+            "client_order_id": client_order_id,
+            "status": "acquired",
+            "created_at": now,
+            "last_checked_at": now,
+        }
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(json.dumps(_jsonable(payload), ensure_ascii=False, indent=2))
+            return True, payload
+        except FileExistsError:
+            existing = self.storage.load_record("submit_locks", lock_id) or {}
+            if not existing:
+                try:
+                    existing = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = {"lock_id": lock_id, "status": "existing_unreadable"}
+            existing["last_checked_at"] = now
+            self.storage.persist_record("submit_locks", lock_id, _jsonable(existing))
+            return False, _jsonable(existing)
+
+    def _update_session_submit_lock(self, lock: dict[str, Any], **updates: Any) -> dict[str, Any]:
+        if not lock or lock.get("enabled") is False:
+            return lock or {}
+        payload = {**lock, **{key: value for key, value in updates.items() if value is not None}}
+        payload["last_checked_at"] = _iso_now()
+        lock_id = str(payload.get("lock_id") or "").strip()
+        if lock_id:
+            payload["storage"] = self.storage.persist_record("submit_locks", lock_id, _jsonable(payload))
+        return _jsonable(payload)
+
+    def list_submit_locks(
+        self,
+        *,
+        session_date: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        rows = [row for row in self.storage.list_records("submit_locks") if isinstance(row, dict)]
+        if session_date:
+            session_key = str(session_date)[:10]
+            rows = [row for row in rows if str(row.get("session_date") or "")[:10] == session_key]
+        if status:
+            status_key = str(status).strip().lower()
+            rows = [row for row in rows if str(row.get("status") or "").lower() == status_key]
+        rows = rows[: max(1, min(int(limit or 100), 1000))]
+        return {
+            "generated_at": _iso_now(),
+            "count": len(rows),
+            "session_date": session_date,
+            "status": status,
+            "locks": rows,
+        }
+
     def _submit_broker_orders(
         self,
         *,
@@ -4171,7 +8560,11 @@ class QuantSystemService:
         extended_hours: bool,
         allow_duplicates: bool,
     ) -> None:
+        negative_cash_limit = abs(
+            float(getattr(settings, "EXECUTION_PAPER_NEGATIVE_CASH_CIRCUIT_BREAKER_USD", 0.0) or 0.0)
+        )
         controls = self.get_execution_controls()
+        controls["paper_negative_cash_circuit_breaker_usd"] = round(negative_cash_limit, 2)
         payload["controls"] = controls
         if controls.get("kill_switch_enabled"):
             payload["warnings"].append(
@@ -4218,6 +8611,24 @@ class QuantSystemService:
             payload["broker_status"] = "account_blocked"
             payload["ready"] = False
             return
+        cash = self._safe_float(payload["account_snapshot"].get("cash"))
+        negative_cash_breached = (
+            payload.get("mode") == "paper" and cash is not None and negative_cash_limit > 0 and cash < -negative_cash_limit
+        )
+        payload["paper_negative_cash_guard"] = {
+            "enabled": payload.get("mode") == "paper" and negative_cash_limit > 0,
+            "threshold_usd": round(negative_cash_limit, 2),
+            "cash": round(cash, 2) if cash is not None else None,
+            "breached": bool(negative_cash_breached),
+        }
+        if negative_cash_breached:
+            payload["warnings"].append(
+                f"Paper account cash {cash:.2f} is below the negative-cash circuit breaker {-negative_cash_limit:.2f}; orders were not submitted."
+            )
+            payload["broker_status"] = "negative_cash_circuit_breaker"
+            payload["block_reason"] = "negative_cash_circuit_breaker"
+            payload["ready"] = False
+            return
 
         payload["market_clock"] = self._safe_get_clock(adapter)
         payload["warnings"].extend(
@@ -4227,6 +8638,19 @@ class QuantSystemService:
                 submit_orders=True,
             )
         )
+        if bool(getattr(settings, "SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT", True)) and adapter.broker_id == "alpaca":
+            if payload.get("market_clock") is None:
+                payload["warnings"].append("Alpaca market clock is unavailable; paper submit is blocked.")
+                payload["broker_status"] = "clock_unavailable_blocks_submit"
+                payload["block_reason"] = "clock_unavailable_blocks_submit"
+                payload["ready"] = False
+                return
+            if payload.get("market_clock", {}).get("is_open") is not True:
+                payload["warnings"].append("Alpaca market clock is closed; paper submit is blocked until the next open session.")
+                payload["broker_status"] = "market_clock_closed"
+                payload["block_reason"] = "market_clock_closed"
+                payload["ready"] = False
+                return
         if getattr(settings, "EXECUTION_REQUIRE_MARKET_OPEN", False) and payload.get("market_clock", {}).get("is_open") is False:
             payload["warnings"].append("Runtime policy requires the market to be open before routing orders.")
             payload["broker_status"] = "market_closed"
@@ -4252,6 +8676,9 @@ class QuantSystemService:
             )
 
         submitted_orders: list[dict[str, Any]] = []
+        submit_locks: list[dict[str, Any]] = []
+        session_date = self._execution_session_date(payload)
+        strategy_id = str(payload.get("strategy_id") or "execution_plan").strip() or "execution_plan"
         for index, order in enumerate(payload.get("orders", [])[:capped_max_orders]):
             symbol = str(order.get("symbol", "")).upper().strip()
             record = self._find_journal_record(journal, order.get("client_order_id") or symbol)
@@ -4308,6 +8735,35 @@ class QuantSystemService:
                     )
                 continue
 
+            side = str(order.get("side") or "buy").strip().lower()
+            acquired, submit_lock = self._acquire_session_submit_lock(
+                session_date=session_date,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                side=side,
+                execution_id=payload["execution_id"],
+                client_order_id=str(order.get("client_order_id") or ""),
+            )
+            submit_locks.append(submit_lock)
+            order["session_submit_lock"] = submit_lock
+            if not acquired:
+                message = (
+                    f"Session submit lock suppressed {symbol} {side}; "
+                    f"existing lock {submit_lock.get('lock_id')} is {submit_lock.get('status', 'active')}."
+                )
+                payload["warnings"].append(message)
+                order["status"] = "session_submit_locked"
+                payload["block_reason"] = payload.get("block_reason") or "session_submit_locked"
+                if record is not None:
+                    self._update_journal_record(
+                        journal=journal,
+                        record=record,
+                        state="blocked",
+                        message=message,
+                        broker_snapshot=submit_lock,
+                    )
+                continue
+
             try:
                 broker_payload = self._build_broker_order_payload(
                     broker_id=adapter.broker_id,
@@ -4330,6 +8786,15 @@ class QuantSystemService:
                         refreshed_order = created_order
                 receipt = self._summarize_broker_order(adapter.broker_id, refreshed_order)
                 receipt["submitted_payload"] = broker_payload
+                submit_lock = self._update_session_submit_lock(
+                    submit_lock,
+                    status="submitted",
+                    broker_order_id=receipt.get("id"),
+                    broker_status=receipt.get("status"),
+                    submitted_at=receipt.get("submitted_at") or _iso_now(),
+                )
+                submit_locks[-1] = submit_lock
+                order["session_submit_lock"] = submit_lock
                 submitted_orders.append(receipt)
                 order.update(
                     {
@@ -4356,6 +8821,13 @@ class QuantSystemService:
             except Exception as exc:
                 logger.warning(f"{adapter.label} order submission failed for {symbol}: {exc}")
                 payload["broker_errors"].append(f"{symbol}: {exc}")
+                submit_lock = self._update_session_submit_lock(
+                    submit_lock,
+                    status="submit_unknown",
+                    error=str(exc),
+                )
+                submit_locks[-1] = submit_lock
+                order["session_submit_lock"] = submit_lock
                 if record is not None:
                     self._update_journal_record(
                         journal=journal,
@@ -4365,11 +8837,14 @@ class QuantSystemService:
                     )
 
         payload["submitted_orders"] = submitted_orders
+        payload["submit_locks"] = submit_locks
         payload["submitted"] = bool(submitted_orders)
         if submitted_orders:
             payload["broker_status"] = "submitted"
         elif any(str(order.get("status") or "").lower() == "canary_holdout" for order in payload.get("orders", [])):
             payload["broker_status"] = "canary_shadow"
+        elif any(str(order.get("status") or "").lower() == "session_submit_locked" for order in payload.get("orders", [])):
+            payload["broker_status"] = "session_submit_locked"
         elif any(str(order.get("status") or "").lower() == "suppressed_duplicate" for order in payload.get("orders", [])):
             payload["broker_status"] = "suppressed"
         else:
@@ -4719,16 +9194,92 @@ class QuantSystemService:
             key = f"{str(existing.get('symbol') or '').upper()}:{str(existing.get('side') or 'buy').lower()}"
             if key not in tracked or key in matches:
                 continue
-            matches[key] = {
-                "source": "broker_open_orders",
-                "symbol": str(existing.get("symbol") or "").upper(),
-                "side": str(existing.get("side") or "buy").lower(),
-                "status": status,
+                matches[key] = {
+                    "source": "broker_open_orders",
+                    "symbol": str(existing.get("symbol") or "").upper(),
+                    "side": str(existing.get("side") or "buy").lower(),
+                    "status": status,
                 "id": existing.get("id"),
                 "client_order_id": existing.get("client_order_id"),
                 "submitted_at": existing.get("submitted_at"),
-            }
+                }
         return matches
+
+    def _build_live_daily_notional_guard(
+        self,
+        *,
+        broker_id: str,
+        execution_id: str,
+        planned_notional: float,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        trading_day = datetime.now(timezone.utc).date()
+        limit = float(getattr(settings, "EXECUTION_LIVE_MAX_DAILY_NOTIONAL", 5.0) or 5.0)
+        used = self._live_daily_submitted_notional(
+            broker_id=broker_id,
+            trading_day=trading_day,
+            exclude_execution_id=execution_id,
+        ) if enabled else 0.0
+        remaining = max(limit - used, 0.0)
+        ok = (not enabled) or (planned_notional <= remaining + 1e-9)
+        return {
+            "enabled": bool(enabled),
+            "broker_id": broker_id,
+            "trading_day": trading_day.isoformat(),
+            "limit_notional": round(limit, 2),
+            "used_notional": round(used, 2),
+            "planned_notional": round(float(planned_notional or 0.0), 2),
+            "remaining_before_request": round(remaining, 2),
+            "remaining_after_request": round(max(limit - used - float(planned_notional or 0.0), 0.0), 2),
+            "ok": bool(ok),
+        }
+
+    def _live_daily_submitted_notional(
+        self,
+        *,
+        broker_id: str,
+        trading_day: date,
+        exclude_execution_id: str | None = None,
+    ) -> float:
+        total = 0.0
+        for payload in self.storage.list_records("executions"):
+            execution_id = str(payload.get("execution_id") or "").strip()
+            if exclude_execution_id and execution_id == exclude_execution_id:
+                continue
+            if str(payload.get("mode") or "").lower() != "live":
+                continue
+            if str(payload.get("broker_id") or broker_id).lower() != broker_id:
+                continue
+            if not payload.get("submitted"):
+                continue
+            generated_at = (
+                self._parse_any_timestamp(payload.get("generated_at"))
+                or self._parse_any_timestamp(payload.get("created_at"))
+            )
+            if generated_at is None or generated_at.astimezone(timezone.utc).date() != trading_day:
+                continue
+            submitted_orders = payload.get("submitted_orders") or []
+            if submitted_orders:
+                total += sum(self._execution_order_notional(order) for order in submitted_orders)
+                continue
+            submitted_count = 0
+            for order in payload.get("orders", []):
+                if str(order.get("status") or "").lower() in {"accepted", "new", "pending", "partially_filled", "filled", "submitted", "routed", "canceled", "cancelled"}:
+                    total += self._execution_order_notional(order)
+                    submitted_count += 1
+            if submitted_count == 0:
+                total += float(payload.get("per_order_notional") or 0.0) * int(payload.get("max_orders") or 0)
+        return round(total, 2)
+
+    @classmethod
+    def _execution_order_notional(cls, order: dict[str, Any]) -> float:
+        for key in ("notional", "submitted_notional", "requested_notional"):
+            value = cls._safe_float(order.get(key))
+            if value is not None:
+                return max(value, 0.0)
+        submitted_payload = order.get("submitted_payload") or {}
+        value = cls._safe_float(submitted_payload.get("notional"))
+        return max(value or 0.0, 0.0)
 
     def _persist_execution_payload(self, payload: dict[str, Any], journal: dict[str, Any]) -> None:
         payload["storage"] = self.storage.persist_record("executions", payload["execution_id"], payload)
@@ -4790,6 +9341,46 @@ class QuantSystemService:
             "cancelable_order_ids": execution_payload["cancelable_order_ids"],
             "retryable_order_ids": execution_payload["retryable_order_ids"],
         }
+
+    def _broker_order_has_fill(self, order: dict[str, Any]) -> bool:
+        status = str(order.get("status") or "").lower()
+        if status in {"filled", "partially_filled"}:
+            return True
+        filled_qty = self._safe_float(order.get("filled_qty") or order.get("filled_quantity") or order.get("qty_filled"))
+        return bool(filled_qty and filled_qty > 0)
+
+    def _broker_order_matches_session(self, order: dict[str, Any], session_date: str) -> bool:
+        raw = (
+            order.get("submitted_at")
+            or order.get("filled_at")
+            or order.get("created_at")
+            or order.get("updated_at")
+        )
+        day = self._paper_gate_date_key({"created_at": raw})
+        return bool(day and day == str(session_date)[:10])
+
+    def _record_submit_unknown_alert(self, lock: dict[str, Any]) -> None:
+        alert_id = f"alert-submit-unknown-{self._safe_record_id(lock.get('lock_id') or lock.get('client_order_id') or _iso_now())}"
+        if self.storage.load_record("alerts", alert_id):
+            return
+        payload = {
+            "alert_id": alert_id,
+            "generated_at": _iso_now(),
+            "kind": "submit_unknown_unresolved",
+            "severity": "high",
+            "message": "A paper submit lock remains submit_unknown after Alpaca reconciliation; no automatic resubmit will be attempted.",
+            "payload": {
+                "lock_id": lock.get("lock_id"),
+                "session_date": lock.get("session_date"),
+                "symbol": lock.get("symbol"),
+                "side": lock.get("side"),
+                "client_order_id": lock.get("client_order_id"),
+                "execution_id": lock.get("execution_id"),
+            },
+            "status": "active",
+            "notifier": self._alert_notifier_status(),
+        }
+        payload["storage"] = self.storage.persist_record("alerts", alert_id, _jsonable(payload))
 
     def _hydrate_execution_payload_from_journal(
         self,
@@ -4883,7 +9474,7 @@ class QuantSystemService:
             "storage/quant/scheduler/heartbeat.json",
         )
         payload = {
-            "path": str(heartbeat_path),
+            "path": heartbeat_path.as_posix(),
             "exists": heartbeat_path.exists(),
             "stale": True,
             "last_seen": None,
@@ -4949,11 +9540,60 @@ class QuantSystemService:
             payload["error"] = str(exc)
         return payload
 
+    def _auth_key_status(self) -> dict[str, Any]:
+        keys = {
+            "execution_api_key_set": bool(getattr(settings, "EXECUTION_API_KEY", "")),
+            "admin_api_key_set": bool(getattr(settings, "ADMIN_API_KEY", "")),
+            "ops_api_key_set": bool(getattr(settings, "OPS_API_KEY", "")),
+        }
+        missing = [name for name, configured in keys.items() if not configured]
+        return {
+            "configured": not missing,
+            "keys": keys,
+            "missing": missing,
+        }
+
+    def _llm_mode_status(self) -> dict[str, Any]:
+        from gateway.utils.llm_client import get_runtime_backend_status
+
+        runtime_status = get_runtime_backend_status()
+        remote_status = self._remote_llm_status()
+        cloud_fallback_ready = bool(getattr(settings, "OPENAI_API_KEY", "") or getattr(settings, "DEEPSEEK_API_KEY", ""))
+        local_auto_ok = bool(
+            (runtime_status.get("local_checkpoint_exists") and runtime_status.get("local_llm_cuda_available"))
+            or cloud_fallback_ready
+        )
+        remote_api_key_set = bool(getattr(settings, "REMOTE_LLM_API_KEY", ""))
+        hybrid_remote_ok = bool(remote_status.get("configured")) and remote_api_key_set and bool(remote_status.get("reachable"))
+        return {
+            "current": runtime_status,
+            "local_auto": {
+                "ok": local_auto_ok,
+                "detail": "local checkpoint with CUDA or cloud fallback keys available",
+                "meta": {
+                    "local_checkpoint_exists": bool(runtime_status.get("local_checkpoint_exists")),
+                    "local_llm_cuda_available": bool(runtime_status.get("local_llm_cuda_available")),
+                    "cloud_fallback_ready": cloud_fallback_ready,
+                },
+            },
+            "hybrid_remote": {
+                "ok": hybrid_remote_ok,
+                "detail": remote_status.get("base_url") or "REMOTE_LLM_URL not configured",
+                "meta": {
+                    **remote_status,
+                    "remote_llm_api_key_set": remote_api_key_set,
+                },
+            },
+        }
+
     def build_healthcheck(self) -> dict[str, Any]:
         heartbeat = self._scheduler_heartbeat_status()
-        remote_llm = self._remote_llm_status()
+        llm_modes = self._llm_mode_status()
+        remote_llm = llm_modes["hybrid_remote"]["meta"]
         qdrant = self._qdrant_status()
         model_registry = self.build_model_registry()
+        auth_keys = self._auth_key_status()
+        paper_gate = self.build_paper_gate_report(persist=False)
         components = {
             "api": {"ok": True, "detail": "FastAPI runtime is available."},
             "quant_scheduler": {
@@ -4961,15 +9601,23 @@ class QuantSystemService:
                 "detail": f"Heartbeat {heartbeat.get('last_seen') or 'missing'}",
                 "meta": heartbeat,
             },
+            "auth_keys": {
+                "ok": auth_keys.get("configured", False),
+                "detail": "all required API scopes configured" if auth_keys.get("configured") else f"missing {', '.join(auth_keys.get('missing', []))}",
+                "meta": auth_keys,
+            },
+            "llm_local_auto": {
+                "ok": llm_modes["local_auto"]["ok"],
+                "detail": llm_modes["local_auto"]["detail"],
+                "meta": llm_modes["local_auto"]["meta"],
+            },
+            "llm_hybrid_remote": {
+                "ok": llm_modes["hybrid_remote"]["ok"],
+                "detail": llm_modes["hybrid_remote"]["detail"],
+                "meta": llm_modes["hybrid_remote"]["meta"],
+            },
             "remote_llm": {
-                "ok": (
-                    remote_llm.get("backend_mode") in {"cloud", "auto"}
-                    or (
-                        bool(remote_llm.get("configured"))
-                        and remote_llm.get("backend_mode") == "remote"
-                        and bool(remote_llm.get("reachable"))
-                    )
-                ),
+                "ok": llm_modes["hybrid_remote"]["ok"],
                 "detail": remote_llm.get("base_url") or "REMOTE_LLM_URL not configured",
                 "meta": remote_llm,
             },
@@ -4982,14 +9630,23 @@ class QuantSystemService:
                 "ok": bool(model_registry.get("models")),
                 "detail": model_registry.get("registry_path"),
             },
+            "paper_gate": {
+                "ok": True,
+                "detail": "passed" if paper_gate.get("passed") else "live locked until Paper gate passes",
+                "meta": paper_gate,
+            },
         }
         required = [
             item.strip()
-            for item in str(getattr(settings, "API_HEALTHCHECK_REQUIRED_COMPONENTS", "api,quant_scheduler,remote_llm,qdrant")).split(",")
+            for item in str(
+                getattr(
+                    settings,
+                    "API_HEALTHCHECK_REQUIRED_COMPONENTS",
+                    "api,quant_scheduler,auth_keys,llm_local_auto,llm_hybrid_remote,qdrant,model_registry",
+                )
+            ).split(",")
             if item.strip()
         ]
-        if remote_llm.get("backend_mode") in {"cloud", "auto"}:
-            required = [item for item in required if item != "remote_llm"] + ["remote_llm"]
         ready = all(components.get(item, {}).get("ok", False) for item in required)
         return {
             "generated_at": _iso_now(),
@@ -5005,10 +9662,12 @@ class QuantSystemService:
         latest_validation = validations[0] if validations else {}
         latest_execution = executions[0] if executions else {}
         latest_backtest = backtests[0] if backtests else {}
+        paper_gate = self.build_paper_gate_report(persist=False)
         components = {
             "alpha_ranker": self.alpha_ranker.status(),
             "p1_suite": self.p1_suite.status(),
             "p2_stack": self.p2_stack.status(),
+            "paper_gate": paper_gate,
         }
         blockers: list[str] = []
         if not components["alpha_ranker"].get("available"):
@@ -5034,6 +9693,7 @@ class QuantSystemService:
                 "backtest_id": latest_backtest.get("backtest_id"),
                 "sharpe": ((latest_backtest.get("metrics") or {}).get("sharpe") if latest_backtest else None),
             },
+            "paper_gate": paper_gate,
             "components": components,
         }
 
@@ -5183,6 +9843,42 @@ class QuantSystemService:
             "models": models,
             "release_log_tail": release_log_tail,
         }
+
+    def ensure_runtime_model_registry(self, *, actor: str = "system") -> dict[str, Any]:
+        registry_path = self._resolve_runtime_path(
+            getattr(settings, "MODEL_REGISTRY_PATH", "storage/quant/model_registry/current_runtime.json"),
+            "storage/quant/model_registry/current_runtime.json",
+        )
+        if registry_path.exists():
+            return {"created": False, "registry_path": str(registry_path), "reason": "registry_exists"}
+        try:
+            snapshot = self.build_model_registry()
+            entries: dict[str, Any] = {}
+            for model in snapshot.get("models", []):
+                if not isinstance(model, dict) or not model.get("available"):
+                    continue
+                entries[str(model.get("key"))] = {
+                    "version": model.get("version") or "runtime_detected",
+                    "action": "runtime_detected",
+                    "notes": "Auto-bootstrapped from available local checkpoint artifacts for unattended paper preflight.",
+                    "updated_at": snapshot.get("generated_at") or _iso_now(),
+                    "actor": actor,
+                    "canary_percent": None,
+                    "checkpoint_dir": model.get("checkpoint_dir"),
+                }
+            if not entries:
+                return {"created": False, "registry_path": str(registry_path), "reason": "no_available_models"}
+            registry_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"generated_at": _iso_now(), "models": entries}
+            registry_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            return {
+                "created": True,
+                "registry_path": str(registry_path),
+                "model_count": len(entries),
+                "models": sorted(entries),
+            }
+        except Exception as exc:
+            return {"created": False, "registry_path": str(registry_path), "reason": "bootstrap_failed", "error": str(exc)}
 
     def update_model_release(
         self,
@@ -6143,6 +10839,10 @@ class QuantSystemService:
         timeout_override: int | None = None,
         cache_tag: str = "signal_bundle",
     ) -> tuple[list[ResearchSignal], dict[str, Any]]:
+        build_signals_method = getattr(self, "_build_signals")
+        build_signals_impl = getattr(build_signals_method, "__func__", build_signals_method)
+        if build_signals_impl is not QuantSystemService._build_signals:
+            return list(build_signals_method(universe, research_question, benchmark) or []), {}
         market_data_signals: list[ResearchSignal] = []
         bars_map: dict[str, Any] = {}
         if self._should_use_live_market_data():

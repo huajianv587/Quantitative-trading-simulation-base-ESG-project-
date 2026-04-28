@@ -77,21 +77,51 @@ class AlpacaPaperClient:
     def get_asset(self, symbol: str) -> dict[str, Any]:
         return self._request("GET", f"/v2/assets/{symbol.upper().strip()}")
 
-    def list_orders(self, status: str = "all", limit: int = 20) -> list[dict[str, Any]]:
-        payload = self._request(
-            "GET",
-            "/v2/orders",
-            params={
-                "status": status,
-                "limit": max(1, min(int(limit), 100)),
-                "direction": "desc",
-                "nested": "false",
-            },
-        )
+    def list_orders(
+        self,
+        status: str = "all",
+        limit: int = 20,
+        *,
+        after: str | None = None,
+        until: str | None = None,
+        direction: str = "desc",
+    ) -> list[dict[str, Any]]:
+        params = {
+            "status": status,
+            "limit": max(1, min(int(limit), 500)),
+            "direction": direction,
+            "nested": "false",
+        }
+        if after:
+            params["after"] = after
+        if until:
+            params["until"] = until
+        payload = self._request("GET", "/v2/orders", params=params)
         return payload if isinstance(payload, list) else []
 
     def list_positions(self) -> list[dict[str, Any]]:
         payload = self._request("GET", "/v2/positions")
+        return payload if isinstance(payload, list) else []
+
+    def list_account_activities(
+        self,
+        *,
+        activity_types: str = "FILL,CSD,CSW",
+        after: str | None = None,
+        until: str | None = None,
+        direction: str = "desc",
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        params = {
+            "activity_types": activity_types,
+            "direction": direction,
+            "page_size": max(1, min(int(page_size), 100)),
+        }
+        if after:
+            params["after"] = after
+        if until:
+            params["until"] = until
+        payload = self._request("GET", "/v2/account/activities", params=params)
         return payload if isinstance(payload, list) else []
 
     def submit_order(self, payload: dict[str, Any]) -> dict[str, Any]:

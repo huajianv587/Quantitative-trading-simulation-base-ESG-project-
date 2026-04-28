@@ -605,14 +605,27 @@ class QuantRLService:
                 return [name]
         return ["AAPL"]
 
-    def _run_eligibility(self, run: dict[str, Any], *, required_data_tier: str | None = None) -> dict[str, Any]:
+    def _run_eligibility(
+        self,
+        run: dict[str, Any],
+        *,
+        required_data_tier: str | None = None,
+        market_depth_cache: dict[tuple[tuple[str, ...], str], dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         config = dict(run.get("config") or {})
         artifacts = dict(run.get("artifacts") or {})
         dataset_path = Path(str(config.get("dataset_path") or ""))
         dataset_id = str(config.get("dataset_id") or self._dataset_id_for_path(dataset_path or "dataset"))
         required_tier = str(required_data_tier or config.get("required_data_tier") or "l1").lower()
         protection_status = str(config.get("protection_status") or artifacts.get("protection_status") or "pass").lower()
-        market_depth_status = self.market_depth.status(symbols=self._run_symbols(run), require_l2=required_tier == "l2")
+        symbols = tuple(self._run_symbols(run))
+        cache_key = (symbols, required_tier)
+        if market_depth_cache is not None and cache_key in market_depth_cache:
+            market_depth_status = market_depth_cache[cache_key]
+        else:
+            market_depth_status = self.market_depth.status(symbols=list(symbols), require_l2=required_tier == "l2")
+            if market_depth_cache is not None:
+                market_depth_cache[cache_key] = market_depth_status
         report_path = artifacts.get("report_path") or artifacts.get("workbook_path") or artifacts.get("metrics_path")
         backtest_ready = bool(report_path)
         blocking_reasons: list[str] = []
@@ -635,23 +648,62 @@ class QuantRLService:
             "latest_backtest_report": report_path or "",
         }
 
-    def _enrich_run(self, run: dict[str, Any]) -> dict[str, Any]:
+    def _enrich_run(
+        self,
+        run: dict[str, Any],
+        *,
+        include_eligibility: bool = True,
+        binding_lookup: dict[str, str] | None = None,
+        market_depth_cache: dict[tuple[tuple[str, ...], str], dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         payload = dict(run)
         payload["config"] = dict(run.get("config") or {})
         payload["artifacts"] = dict(run.get("artifacts") or {})
-        eligibility = self._run_eligibility(payload)
-        payload.update(eligibility)
-        bound_lookup = self._strategy_binding_lookup()
+        if not include_eligibility:
+            payload["eligibility_status"] = "not_requested"
+            payload["blocking_reasons"] = []
+            payload["required_data_tier"] = str(payload["config"].get("required_data_tier") or "l1").lower()
+        else:
+            eligibility = self._run_eligibility(payload, market_depth_cache=market_depth_cache)
+            payload.update(eligibility)
+        bound_lookup = binding_lookup if binding_lookup is not None else self._strategy_binding_lookup()
         payload["promotion_status"] = "bound" if payload.get("run_id") in bound_lookup else str(payload["artifacts"].get("promotion_status") or "research_only")
         payload["bound_strategy_id"] = bound_lookup.get(str(payload.get("run_id") or ""))
         return payload
 
-    def overview(self) -> dict:
-        runs = [self._enrich_run(run) for run in self.repo.list_runs()]
+    def overview(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        include_eligibility: bool = False,
+        include_artifacts: bool = True,
+        include_output_status: bool = False,
+        include_bindings: bool = False,
+    ) -> dict:
+        all_runs = self.repo.list_runs()
+        total_runs = len(all_runs)
+        safe_limit = max(1, min(int(limit or 20), 200))
+        safe_offset = max(0, int(offset or 0))
+        visible_runs = all_runs[safe_offset : safe_offset + safe_limit]
+        binding_lookup = self._strategy_binding_lookup() if include_bindings else {}
+        market_depth_cache: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
+        runs = [
+            self._enrich_run(
+                run,
+                include_eligibility=include_eligibility,
+                binding_lookup=binding_lookup,
+                market_depth_cache=market_depth_cache,
+            )
+            for run in visible_runs
+        ]
+        if not include_artifacts:
+            for run in runs:
+                run["artifacts"] = {"artifact_count": len(run.get("artifacts") or {})}
         protocol = self.recorder.protocol()
-        latest_dataset = self._latest_dataset_descriptor(runs)
-        latest_checkpoint = self._latest_checkpoint_descriptor(runs)
-        latest_report = self._latest_report_descriptor(runs)
+        latest_dataset = self._latest_dataset_descriptor(all_runs)
+        latest_checkpoint = self._latest_checkpoint_descriptor(all_runs)
+        latest_report = self._latest_report_descriptor(all_runs)
         artifact_health = {
             "dataset_ready": bool(latest_dataset.get("exists")),
             "checkpoint_ready": bool(latest_checkpoint.get("exists")),
@@ -661,6 +713,17 @@ class QuantRLService:
             "status": "ready" if any(artifact_health.values()) else "awaiting_remote_artifact",
             "missing": [name for name, ready in artifact_health.items() if not ready],
         }
+        output_status = (
+            self.recorder.output_status()
+            if include_output_status
+            else {
+                "status": "deferred",
+                "reason": "include_output_status=false",
+                "dataset_manifests": 0,
+                "metrics_files": 0,
+                "equity_curves": 0,
+            }
+        )
         return {
             "stack": {
                 "foundation": ["double/dueling DQN baseline", "PPO", "SAC"],
@@ -684,8 +747,17 @@ class QuantRLService:
                 "/app/#/rl-lab",
             ],
             "runs": runs,
+            "pagination": {
+                "limit": safe_limit,
+                "offset": safe_offset,
+                "returned": len(runs),
+                "total": total_runs,
+                "include_eligibility": bool(include_eligibility),
+                "include_artifacts": bool(include_artifacts),
+                "include_bindings": bool(include_bindings),
+            },
             "protocol": protocol,
-            "output_status": self.recorder.output_status(),
+            "output_status": output_status,
             "storage": {
                 "storage_dir": str(self.settings.storage_dir),
                 "sqlite_db_path": str(self.settings.sqlite_db_path),
@@ -738,7 +810,7 @@ class QuantRLService:
     def _artifact_descriptor(path: str | Path | None, *, label: str) -> dict[str, object]:
         if not path:
             return {"label": label, "path": "", "exists": False, "status": "missing"}
-        artifact = Path(path)
+        artifact = Path(str(path).replace("\\", "/"))
         exists = artifact.exists()
         return {
             "label": label,
@@ -778,7 +850,13 @@ class QuantRLService:
                 descriptor = self._artifact_descriptor(checkpoint_path, label="checkpoint")
                 if descriptor["exists"]:
                     return descriptor
-        latest = self._latest_existing_file(["checkpoints/**/*", "**/*.pt", "**/*.pth", "**/*.ckpt"])
+        latest = self._latest_existing_file(
+            [
+                "checkpoints/**/*.pt",
+                "checkpoints/**/*.pth",
+                "checkpoints/**/*.ckpt",
+            ]
+        )
         return self._artifact_descriptor(latest, label="checkpoint")
 
     def _latest_report_descriptor(self, runs: list[dict]) -> dict[str, object]:
@@ -789,11 +867,39 @@ class QuantRLService:
                 descriptor = self._artifact_descriptor(report_path, label="report")
                 if descriptor["exists"]:
                     return descriptor
-        latest = self._latest_existing_file(["reports/**/*", "**/*.xlsx", "**/*.json"])
+        latest = self._latest_existing_file(
+            [
+                "reports/**/*.json",
+                "reports/**/*.xlsx",
+                "artifacts/**/*report*.json",
+                "artifacts/**/*metrics*.json",
+                "artifacts/**/*.xlsx",
+            ]
+        )
         return self._artifact_descriptor(latest, label="report")
 
-    def list_runs(self) -> list[dict]:
-        return [self._enrich_run(run) for run in self.repo.list_runs()]
+    def list_runs(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        include_eligibility: bool = False,
+        include_bindings: bool = False,
+    ) -> list[dict]:
+        all_runs = self.repo.list_runs()
+        safe_limit = max(1, min(int(limit or 20), 500))
+        safe_offset = max(0, int(offset or 0))
+        binding_lookup = self._strategy_binding_lookup() if include_bindings else {}
+        market_depth_cache: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
+        return [
+            self._enrich_run(
+                run,
+                include_eligibility=include_eligibility,
+                binding_lookup=binding_lookup,
+                market_depth_cache=market_depth_cache,
+            )
+            for run in all_runs[safe_offset : safe_offset + safe_limit]
+        ]
 
     def promote_run(self, run_id: str, *, strategy_id: str = "rl_timing_overlay", required_data_tier: str = "l2") -> dict[str, Any]:
         run = self.repo.get(run_id)

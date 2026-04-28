@@ -87,7 +87,7 @@ class ReportScheduler:
                 blocked = self._build_blocked_result(
                     report_type="daily",
                     reason="tracked_companies_missing",
-                    next_actions=["先添加关注公司或同步持仓，然后再生成日报。"],
+                    next_actions=["Add followed companies or sync holdings before generating the daily report."],
                 )
                 logger.warning(f"[ReportScheduler] Daily report blocked: {blocked}")
                 return blocked
@@ -109,7 +109,7 @@ class ReportScheduler:
                 blocked = self._build_blocked_result(
                     report_type="weekly",
                     reason="tracked_companies_missing",
-                    next_actions=["先添加关注公司或同步持仓，然后再生成周报。"],
+                    next_actions=["Add followed companies or sync holdings before generating the weekly report."],
                 )
                 logger.warning(f"[ReportScheduler] Weekly report blocked: {blocked}")
                 return blocked
@@ -136,7 +136,7 @@ class ReportScheduler:
                 blocked = self._build_blocked_result(
                     report_type="monthly",
                     reason="portfolio_holdings_missing",
-                    next_actions=["先同步真实持仓，然后再生成月报。"],
+                    next_actions=["Sync real portfolio holdings before generating the monthly report."],
                 )
                 logger.warning(f"[ReportScheduler] Monthly report blocked: {blocked}")
                 return blocked
@@ -181,8 +181,8 @@ class ReportScheduler:
                     "overall_score": report.report_statistics.get("portfolio_average_score", 0),
                     "company_count": len(report.company_analyses),
                     "risk_alert_count": len(report.risk_alerts),
-                    "high_performer_count": len([a for a in report.company_analyses if a.esg_score >= 80]),
-                    "low_performer_count": len([a for a in report.company_analyses if a.esg_score < 40]),
+                    "high_performer_count": len([item for item in report.company_analyses if item.esg_score >= 80]),
+                    "low_performer_count": len([item for item in report.company_analyses if item.esg_score < 40]),
                 }
                 if eval(rule.condition, {"__builtins__": {}}, context):
                     matched.append(rule)
@@ -223,37 +223,47 @@ class ReportScheduler:
         except Exception as exc:
             error_text = str(exc).lower()
             if "duplicate key" in error_text or "unique constraint" in error_text:
-                try:
-                    existing_rows = (
-                        supabase_client.table("esg_reports")
-                        .select("id")
-                        .eq("report_type", report.report_type)
-                        .eq("period_start", period_start)
-                        .eq("period_end", period_end)
-                        .limit(1)
-                        .execute()
-                        .data
-                    )
-                    if existing_rows:
-                        existing_id = str(existing_rows[0]["id"])
-                        try:
-                            supabase_client.table("esg_reports").update(persisted_payload).eq("id", existing_id).execute()
-                        except Exception as update_exc:
-                            logger.warning(f"[ReportScheduler] Duplicate report update skipped: {update_exc}")
-                        logger.info(f"[ReportScheduler] Reused existing report {existing_id} for identical period payload")
-                        return existing_id
-                except Exception as lookup_exc:
-                    logger.warning(f"[ReportScheduler] Duplicate report lookup failed: {lookup_exc}")
+                existing_id = self._reuse_duplicate_report(report, persisted_payload, period_start, period_end)
+                if existing_id:
+                    return existing_id
             logger.error(f"[ReportScheduler] Error saving report: {exc}")
             raise
+
+    def _reuse_duplicate_report(
+        self,
+        report: ESGReport,
+        persisted_payload: dict[str, Any],
+        period_start: str,
+        period_end: str,
+    ) -> str | None:
+        try:
+            rows = (
+                supabase_client.table("esg_reports")
+                .select("id")
+                .eq("report_type", report.report_type)
+                .eq("period_start", period_start)
+                .eq("period_end", period_end)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if not rows:
+                return None
+            existing_id = str(rows[0]["id"])
+            try:
+                supabase_client.table("esg_reports").update(persisted_payload).eq("id", existing_id).execute()
+            except Exception as update_exc:
+                logger.warning(f"[ReportScheduler] Duplicate report update skipped: {update_exc}")
+            logger.info(f"[ReportScheduler] Reused existing report {existing_id} for identical period payload")
+            return existing_id
+        except Exception as lookup_exc:
+            logger.warning(f"[ReportScheduler] Duplicate report lookup failed: {lookup_exc}")
+            return None
 
     def _load_push_rules(self):
         try:
             rows = supabase_client.table("push_rules").select("*").eq("enabled", True).execute().data
-            self.push_rules_cache = {}
-            for row in rows:
-                rule = PushRule(**row)
-                self.push_rules_cache[str(rule.id)] = rule
+            self.push_rules_cache = {str(PushRule(**row).id): PushRule(**row) for row in rows}
             logger.info(f"[ReportScheduler] Loaded {len(self.push_rules_cache)} push rules")
         except Exception as exc:
             logger.warning(f"[ReportScheduler] Error loading push rules: {exc}")
@@ -319,11 +329,7 @@ class ReportScheduler:
             prefs = supabase_client.table("user_preferences").select("interested_companies").execute().data
             companies = set()
             for pref in prefs:
-                companies.update(
-                    str(item).strip()
-                    for item in (pref.get("interested_companies") or [])
-                    if str(item).strip()
-                )
+                companies.update(str(item).strip() for item in (pref.get("interested_companies") or []) if str(item).strip())
             return sorted(companies)
         except Exception as exc:
             logger.warning(f"[ReportScheduler] Error getting preference companies: {exc}")
@@ -375,11 +381,7 @@ class ReportScheduler:
             prefs = supabase_client.table("user_preferences").select("user_id,interested_companies").execute().data
             users = set()
             for pref in prefs:
-                followed = {
-                    str(item).strip().lower()
-                    for item in (pref.get("interested_companies") or [])
-                    if str(item).strip()
-                }
+                followed = {str(item).strip().lower() for item in (pref.get("interested_companies") or []) if str(item).strip()}
                 if followed & company_keys and pref.get("user_id"):
                     users.add(str(pref["user_id"]))
             return sorted(users)
@@ -395,12 +397,12 @@ class ReportScheduler:
 
     def _generate_notification_content(self, report: ESGReport, user_id: str) -> str:
         if report.report_type == "daily":
-            return f"您关注的企业今日新增 {len(report.company_analyses)} 条 ESG 动态，其中 {len(report.risk_alerts)} 条为高风险预警。"
+            return f"Daily ESG update: {len(report.company_analyses)} tracked companies, {len(report.risk_alerts)} risk alerts."
         if report.report_type == "weekly":
             avg = report.report_statistics.get("average_score", 0)
-            return f"本周监控企业 ESG 平均评分为 {avg:.1f}/100。"
+            return f"Weekly ESG update: tracked-company average score is {avg:.1f}/100."
         portfolio_avg = report.report_statistics.get("portfolio_average_score", 0)
-        return f"您的投资组合 ESG 平均评分为 {portfolio_avg:.1f}/100。"
+        return f"Portfolio ESG update: average score is {portfolio_avg:.1f}/100."
 
     def _get_push_severity(self, report: ESGReport) -> str:
         if report.report_statistics.get("portfolio_average_score", 0) < 40:

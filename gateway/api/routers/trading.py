@@ -8,6 +8,8 @@ from gateway.api.trading_schemas import (
     AutopilotArmRequest,
     AutopilotDisarmRequest,
     AutopilotPolicyUpdateRequest,
+    PaperRewardCandidateRunRequest,
+    PaperRewardSettleRequest,
     StrategyAllocationRequest,
     StrategyToggleRequest,
     TradingCycleRunRequest,
@@ -128,6 +130,38 @@ def trading_cycle_run(req: TradingCycleRunRequest) -> dict[str, Any]:
         quota_guard=req.quota_guard,
         auto_submit=req.auto_submit,
     )
+
+
+@router.post("/api/v1/trading/reward/candidates/run")
+def trading_reward_candidates_run(req: PaperRewardCandidateRunRequest) -> dict[str, Any]:
+    try:
+        return _trading_service().run_paper_reward_candidates(
+            universe=req.universe or None,
+            max_candidates=req.max_candidates,
+            per_order_notional=req.per_order_notional,
+            benchmark=req.benchmark,
+            allow_duplicates=req.allow_duplicates,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/v1/trading/reward/settle")
+def trading_reward_settle(req: PaperRewardSettleRequest | None = None) -> dict[str, Any]:
+    payload = req or PaperRewardSettleRequest()
+    try:
+        return _trading_service().settle_paper_reward_candidates(
+            candidate_id=payload.candidate_id,
+            force_refresh=payload.force_refresh,
+            limit=payload.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/api/v1/trading/reward/leaderboard")
+def trading_reward_leaderboard(limit: int = 100) -> dict[str, Any]:
+    return _trading_service().paper_reward_leaderboard(limit=limit)
 
 
 @router.get("/api/v1/trading/monitor/status")

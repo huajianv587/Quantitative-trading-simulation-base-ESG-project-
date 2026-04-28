@@ -1,52 +1,28 @@
-# notifier.py — 通知推送模块
-# 职责：根据匹配结果和风险评分，生成并推送通知给用户
-# 支持多渠道推送：邮件、应用内通知、webhook 等
+from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any
 
-from gateway.utils.logger import get_logger
+import requests
+
 from gateway.config import settings
 from gateway.db.supabase_client import get_client
 from gateway.utils.email_delivery import send_email_message
+from gateway.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class Notifier:
-    """通知推送器"""
+    """Multi-channel notification sender for report and event pushes."""
 
     def __init__(self):
         self.db = get_client()
-        self.local_notifications: list[dict] = []
+        self.local_notifications: list[dict[str, Any]] = []
 
     def generate_notification_content(self, event: dict, risk_score: dict, user_id: str) -> dict:
-        """
-        为用户生成通知内容。
-
-        Args:
-            event: 事件数据
-            risk_score: 风险评分
-            user_id: 目标用户
-
-        Returns:
-            通知内容 {"title", "content", "severity", "action_url"}
-        """
-        title = f"🚨 ESG Alert: {event.get('title', 'New Event')}"
-
-        # 根据风险等级选择标题前缀
-        severity = risk_score.get("risk_level", "medium")
-        severity_emoji = {
-            "low": "ℹ️",
-            "medium": "⚠️",
-            "high": "🔴",
-            "critical": "🚨",
-        }.get(severity, "ℹ️")
-
-        title = f"{severity_emoji} {event.get('title', 'New ESG Event')}"
-
-        # 生成内容
+        severity = str(risk_score.get("risk_level") or "medium").lower()
+        title = f"ESG Alert: {event.get('title', 'New ESG Event')}"
         content = f"""
 Event: {event.get('title', 'N/A')}
 Company: {event.get('company', 'N/A')}
@@ -65,35 +41,21 @@ Risk Assessment:
 
 Recommendation:
 {risk_score.get('recommendation', 'N/A')}
-
----
-View full analysis: https://esg-dashboard.example.com/events/{event.get('id')}
         """
-
         return {
             "title": title,
             "content": content.strip(),
             "severity": severity,
-            "action_url": f"https://esg-dashboard.example.com/events/{event.get('id')}",
+            "action_url": f"/events/{event.get('id')}",
         }
 
-    def _format_metrics(self, metrics: dict) -> str:
-        """格式化关键指标为可读文本"""
+    @staticmethod
+    def _format_metrics(metrics: dict) -> str:
         if not metrics:
             return "No metrics available"
-        return "\n".join([f"  • {k}: {v}" for k, v in metrics.items()])
+        return "\n".join([f"- {key}: {value}" for key, value in metrics.items()])
 
     def send_email_notification(self, user_email: str, notification: dict) -> bool:
-        """
-        发送邮件通知。
-
-        Args:
-            user_email: 收件人邮箱
-            notification: 通知内容
-
-        Returns:
-            成功返回 True，失败返回 False
-        """
         try:
             html_content = f"""
             <html>
@@ -109,93 +71,81 @@ View full analysis: https://esg-dashboard.example.com/events/{event.get('id')}
                 subject=notification["title"],
                 text_body=notification["content"],
                 html_body=html_content,
-                sender=settings.EMAIL_FROM or "noreply@esg-system.com",
+                sender=settings.EMAIL_FROM or settings.SMTP_USER or "noreply@esg-system.com",
             )
             if result.get("ok"):
                 logger.info(f"[Notifier] Email sent to {user_email}")
                 return True
-
             logger.error(f"[Notifier] Email send failed for {user_email}: {result.get('detail')}")
             return False
+        except Exception as exc:
+            logger.error(f"[Notifier] Failed to send email to {user_email}: {exc}")
+            return False
 
-        except Exception as e:
-            logger.error(f"[Notifier] Failed to send email to {user_email}: {e}")
+    def send_telegram_notification(self, notification: dict) -> bool:
+        token = str(getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+        chat_id = str(getattr(settings, "TELEGRAM_CHAT_ID", "") or "").strip()
+        if not token or not chat_id:
+            logger.warning("[Notifier] Telegram is not configured")
+            return False
+        text = f"{notification['title']}\n\n{notification['content']}\n\n{notification.get('action_url', '')}"[:3500]
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+                timeout=max(1, int(getattr(settings, "ALERT_NOTIFIER_TIMEOUT_SECONDS", 5) or 5)),
+            )
+            if response.ok:
+                logger.info("[Notifier] Telegram notification sent")
+                return True
+            logger.error(f"[Notifier] Telegram send failed: {response.status_code} {response.text[:200]}")
+            return False
+        except Exception as exc:
+            logger.error(f"[Notifier] Telegram send failed: {exc}")
             return False
 
     def send_in_app_notification(self, user_id: str, notification: dict) -> bool:
-        """
-        保存应用内通知到数据库。
-
-        Args:
-            user_id: 用户 ID
-            notification: 通知内容
-
-        Returns:
-            成功返回 True，失败返回 False
-        """
         try:
-            self.db.table("in_app_notifications").insert({
-                "user_id": user_id,
-                "title": notification["title"],
-                "content": notification["content"],
-                "severity": notification["severity"],
-                "action_url": notification["action_url"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "read_at": None,
-            }).execute()
-
+            self.db.table("in_app_notifications").insert(
+                {
+                    "user_id": user_id,
+                    "title": notification["title"],
+                    "content": notification["content"],
+                    "severity": notification["severity"],
+                    "action_url": notification["action_url"],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "read_at": None,
+                }
+            ).execute()
             logger.info(f"[Notifier] In-app notification saved for user {user_id}")
             return True
-
-        except Exception as e:
-            logger.error(f"[Notifier] Failed to save in-app notification: {e}")
+        except Exception as exc:
+            logger.error(f"[Notifier] Failed to save in-app notification: {exc}")
             return False
 
     def send_webhook_notification(self, webhook_url: str, notification: dict, event: dict) -> bool:
-        """
-        通过 webhook 推送通知。
-
-        Args:
-            webhook_url: webhook URL
-            notification: 通知内容
-            event: 原始事件数据
-
-        Returns:
-            成功返回 True，失败返回 False
-        """
         try:
-            import requests
-
-            payload = {
-                "notification": notification,
-                "event": {
-                    "id": event.get("id"),
-                    "title": event.get("title"),
-                    "company": event.get("company"),
-                    "event_type": event.get("event_type"),
+            response = requests.post(
+                webhook_url,
+                json={
+                    "notification": notification,
+                    "event": {
+                        "id": event.get("id"),
+                        "title": event.get("title"),
+                        "company": event.get("company"),
+                        "event_type": event.get("event_type"),
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-
-            # 发送 POST 请求到 webhook（非阻塞，设置短超时）
-            try:
-                response = requests.post(
-                    webhook_url,
-                    json=payload,
-                    timeout=5,
-                )
-                if response.status_code == 200:
-                    logger.info(f"[Notifier] Webhook notification sent to {webhook_url}")
-                    return True
-                else:
-                    logger.warning(f"[Notifier] Webhook returned {response.status_code}")
-                    return False
-            except requests.Timeout:
-                logger.warning(f"[Notifier] Webhook timeout: {webhook_url}")
-                return False
-
-        except Exception as e:
-            logger.error(f"[Notifier] Failed to send webhook: {e}")
+                timeout=5,
+            )
+            if response.status_code == 200:
+                logger.info(f"[Notifier] Webhook notification sent to {webhook_url}")
+                return True
+            logger.warning(f"[Notifier] Webhook returned {response.status_code}")
+            return False
+        except Exception as exc:
+            logger.error(f"[Notifier] Failed to send webhook: {exc}")
             return False
 
     def send_notification(
@@ -208,12 +158,6 @@ View full analysis: https://esg-dashboard.example.com/events/{event.get('id')}
         channels: list[str] | None = None,
         template_id: str | None = None,
     ) -> dict:
-        """
-        统一发送单条通知，供报告调度器直接调用。
-
-        在没有真实用户偏好 / 邮件地址时，仍会将通知保存到应用内缓冲区，
-        让本地演示和无 key 环境保持可闭环。
-        """
         channels = channels or ["in_app"]
         notification = {
             "title": title,
@@ -222,33 +166,29 @@ View full analysis: https://esg-dashboard.example.com/events/{event.get('id')}
             "action_url": f"/admin/reports/{report_id}" if report_id else "",
             "template_id": template_id,
         }
-
-        pref = None
-        try:
-            response = self.db.table("user_preferences").select("*").eq("user_id", user_id).limit(1).execute()
-            pref = response.data[0] if response.data else None
-        except Exception as exc:
-            logger.warning(f"[Notifier] Preference lookup failed for {user_id}: {exc}")
-
+        pref = self._load_user_preferences(user_id)
         sent_channels: list[str] = []
         for channel in channels:
+            normalized = str(channel or "").strip().lower()
             success = False
-            if channel == "email":
+            if normalized == "email":
                 user_email = (pref or {}).get("email") or settings.SMTP_USER
                 if user_email:
                     success = self.send_email_notification(user_email, notification)
-            elif channel == "in_app":
+            elif normalized == "telegram":
+                success = self.send_telegram_notification(notification)
+            elif normalized == "in_app":
                 success = self.send_in_app_notification(user_id, notification)
-            elif channel == "webhook":
+            elif normalized == "webhook":
                 webhook_url = (pref or {}).get("webhook_url")
                 if webhook_url:
                     success = self.send_webhook_notification(webhook_url, notification, {"id": report_id, "title": title})
 
             if success:
-                sent_channels.append(channel)
-                self.save_notification_log(report_id, user_id, channel, "sent")
+                sent_channels.append(normalized)
+                self.save_notification_log(report_id, user_id, normalized, "sent")
             else:
-                self.save_notification_log(report_id, user_id, channel, "failed")
+                self.save_notification_log(report_id, user_id, normalized, "failed")
 
         if not sent_channels:
             local_copy = {
@@ -270,121 +210,76 @@ View full analysis: https://esg-dashboard.example.com/events/{event.get('id')}
         }
 
     def send_notifications(self, event_id: str, user_ids: list[str]) -> dict:
-        """
-        为一批用户发送通知。
-
-        Args:
-            event_id: 事件 ID
-            user_ids: 目标用户 ID 列表
-
-        Returns:
-            发送结果统计 {"total", "sent", "failed", "by_channel"}
-        """
         if not user_ids:
             return {"total": 0, "sent": 0, "failed": 0, "by_channel": {}}
-
         try:
-            # 读取事件和评分
             event_response = self.db.table("extracted_events").select("*").eq("id", event_id).execute()
             if not event_response.data:
                 logger.warning(f"[Notifier] Event {event_id} not found")
                 return {"total": 0, "sent": 0, "failed": 0, "by_channel": {}}
-
             event = event_response.data[0]
-
-            # 读取风险评分
             score_response = self.db.table("risk_scores").select("*").eq("event_id", event_id).execute()
             risk_score = score_response.data[0] if score_response.data else {}
-
-            # 生成通知内容
             notification = self.generate_notification_content(event, risk_score, "")
-
-            # 逐用户发送通知
             sent_count = 0
-            by_channel = {"email": 0, "in_app": 0, "webhook": 0}
-
+            by_channel = {"email": 0, "in_app": 0, "webhook": 0, "telegram": 0}
             for user_id in user_ids:
-                try:
-                    # 获取用户偏好（推送渠道）
-                    pref_response = self.db.table("user_preferences").select("*").eq("user_id", user_id).execute()
-                    if not pref_response.data:
-                        logger.warning(f"[Notifier] No preferences found for user {user_id}")
-                        continue
-
-                    preferences = pref_response.data[0]
-                    channels = preferences.get("notification_channels", ["in_app"])
-                    user_email = preferences.get("email", "")
-                    webhook_url = preferences.get("webhook_url", "")
-
-                    # 根据偏好的渠道发送通知
-                    for channel in channels:
-                        success = False
-                        if channel == "email" and user_email:
-                            success = self.send_email_notification(user_email, notification)
-                            if success:
-                                by_channel["email"] += 1
-                        elif channel == "in_app":
-                            success = self.send_in_app_notification(user_id, notification)
-                            if success:
-                                by_channel["in_app"] += 1
-                        elif channel == "webhook" and webhook_url:
-                            success = self.send_webhook_notification(webhook_url, notification, event)
-                            if success:
-                                by_channel["webhook"] += 1
-
-                        if success:
-                            sent_count += 1
-
-                except Exception as e:
-                    logger.error(f"[Notifier] Failed to notify user {user_id}: {e}")
-
-            result = {
+                preferences = self._load_user_preferences(user_id)
+                if not preferences:
+                    logger.warning(f"[Notifier] No preferences found for user {user_id}")
+                    continue
+                channels = preferences.get("notification_channels", ["in_app"])
+                result = self.send_notification(
+                    user_id=user_id,
+                    report_id=event_id,
+                    title=notification["title"],
+                    content=notification["content"],
+                    severity=notification["severity"],
+                    channels=channels,
+                )
+                for channel in result.get("sent_channels", []):
+                    by_channel[channel] = by_channel.get(channel, 0) + 1
+                    sent_count += 1
+            return {
                 "total": len(user_ids),
                 "sent": sent_count,
-                "failed": len(user_ids) - sent_count,
+                "failed": max(len(user_ids) - sent_count, 0),
                 "by_channel": by_channel,
             }
-
-            logger.info(f"[Notifier] Notifications sent for event {event_id}: {result}")
-            return result
-
-        except Exception as e:
-            logger.error(f"[Notifier] Batch notification failed: {e}")
+        except Exception as exc:
+            logger.error(f"[Notifier] Batch notification failed: {exc}")
             return {"total": len(user_ids), "sent": 0, "failed": len(user_ids), "by_channel": {}}
 
-    def save_notification_log(self, event_id: str, user_id: str, channel: str, status: str) -> bool:
-        """
-        保存通知发送日志。
-
-        Args:
-            event_id: 事件 ID
-            user_id: 用户 ID
-            channel: 推送渠道
-            status: 发送状态 ("sent", "failed", "pending")
-
-        Returns:
-            成功返回 True
-        """
+    def _load_user_preferences(self, user_id: str) -> dict[str, Any] | None:
         try:
-            self.db.table("notification_logs").insert({
-                "event_id": event_id,
-                "user_id": user_id,
-                "channel": channel,
-                "status": status,
-                "sent_at": datetime.now(timezone.utc).isoformat() if status == "sent" else None,
-            }).execute()
+            response = self.db.table("user_preferences").select("*").eq("user_id", user_id).limit(1).execute()
+            return response.data[0] if response.data else None
+        except Exception as exc:
+            logger.warning(f"[Notifier] Preference lookup failed for {user_id}: {exc}")
+            return None
+
+    def save_notification_log(self, event_id: str, user_id: str, channel: str, status: str) -> bool:
+        try:
+            self.db.table("notification_logs").insert(
+                {
+                    "event_id": event_id,
+                    "user_id": user_id,
+                    "channel": channel,
+                    "status": status,
+                    "sent_at": datetime.now(timezone.utc).isoformat() if status == "sent" else None,
+                }
+            ).execute()
             return True
-        except Exception as e:
-            logger.error(f"[Notifier] Failed to save log: {e}")
+        except Exception as exc:
+            logger.error(f"[Notifier] Failed to save log: {exc}")
             return False
 
 
-# ── 全局单例 ──────────────────────────────────────────────────────────────
-
 _notifier = None
 
+
 def get_notifier() -> Notifier:
-    """获取通知推送器实例（单例）"""
+    """Return the process-wide notifier instance."""
     global _notifier
     if _notifier is None:
         _notifier = Notifier()

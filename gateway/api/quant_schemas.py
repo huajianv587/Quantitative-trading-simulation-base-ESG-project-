@@ -76,6 +76,80 @@ class QuantExecutionRequest(BaseModel):
     allow_duplicates: bool = False
     live_confirmed: bool = False
     operator_confirmation: str | None = None
+    strategy_id: str | None = None
+
+
+class QuantWorkflowRunRequest(BaseModel):
+    universe: list[str] = Field(default_factory=list)
+    benchmark: str = "SPY"
+    capital_base: float = 1_000_000
+    strategy_mode: str = "hybrid_p1_p2_rl"
+    rl_algorithm: str = "sac"
+    rl_action_type: str = "continuous"
+    rl_dataset_path: str | None = None
+    rl_checkpoint_path: str | None = None
+    submit_orders: bool = True
+    mode: str = "paper"
+    broker: str = "alpaca"
+    max_orders: int = 2
+    per_order_notional: float | None = 1.0
+    allow_synthetic_execution: bool = False
+    force_refresh: bool = False
+
+
+class QuantPaperPerformanceSnapshotRequest(BaseModel):
+    workflow_id: str | None = None
+    execution_id: str | None = None
+    benchmark: str = "SPY"
+    broker: str = "alpaca"
+    mode: str = "paper"
+    force_refresh: bool = False
+
+
+class QuantPaperPerformanceBackfillRequest(BaseModel):
+    days: int = 120
+    benchmark: str = "SPY"
+    broker: str = "alpaca"
+    mode: str = "paper"
+    force_refresh: bool = False
+
+
+class QuantDailyDigestSendRequest(BaseModel):
+    phase: str = "postclose"
+    session_date: str | None = None
+    recipients: list[str] = Field(default_factory=list)
+    channels: list[str] = Field(default_factory=list)
+
+
+class QuantWeeklyDigestSendRequest(BaseModel):
+    session_date: str | None = None
+    window_days: int = 7
+    recipients: list[str] = Field(default_factory=list)
+    channels: list[str] = Field(default_factory=list)
+
+
+class QuantAlpacaPaperReconcileRequest(BaseModel):
+    session_date: str | None = None
+
+
+class QuantStorageBackupRequest(BaseModel):
+    session_date: str | None = None
+
+
+class QuantPaperOutcomesSettleRequest(BaseModel):
+    outcome_id: str | None = None
+    force_refresh: bool = False
+    limit: int = 200
+
+
+class QuantPromotionEvaluateRequest(BaseModel):
+    window_days: int = 90
+    persist: bool = True
+
+
+class QuantShadowRetrainRequest(BaseModel):
+    model_key: str = "rl_checkpoint"
+    force: bool = False
 
 
 class QuantOrderActionRequest(BaseModel):

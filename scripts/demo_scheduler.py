@@ -146,19 +146,19 @@ def demo_api_usage():
 [API Endpoint Examples]
 
 1. Trigger a scan (POST /scheduler/scan)
-   curl -X POST http://localhost:8000/scheduler/scan
+   curl -X POST http://localhost:8012/scheduler/scan
 
 2. Check scan status (GET /scheduler/scan/status)
-   curl http://localhost:8000/scheduler/scan/status
+   curl http://localhost:8012/scheduler/scan/status
 
 3. Get statistics (GET /scheduler/statistics)
-   curl http://localhost:8000/scheduler/statistics?days=7
+   curl http://localhost:8012/scheduler/statistics?days=7
 
 4. Analyze ESG (POST /agent/analyze)
-   curl -X POST "http://localhost:8000/agent/analyze?question=分析特斯拉的ESG表现"
+   curl -X POST "http://localhost:8012/agent/analyze?question=分析特斯拉的ESG表现"
 
 5. Get in-app notifications (custom endpoint)
-   curl http://localhost:8000/notifications/user_tech_esg
+   curl http://localhost:8012/notifications/user_tech_esg
     """)
 
 
@@ -237,7 +237,7 @@ The system supports both:
 
 3. Run the scheduler:
    python -m gateway.main
-   # Then POST http://localhost:8000/scheduler/scan
+   # Then POST http://localhost:8012/scheduler/scan
 
 4. Or start periodic scanning:
    orchestrator = get_orchestrator()

@@ -1006,16 +1006,21 @@ class DataSourceManager:
             return None
 
         try:
-            cache_key = f"sec::governance::{self._normalize_company_key(company_name)}::{str(ticker or '').upper()}"
-            cached = get_cache(cache_key)
-            if isinstance(cached, dict):
-                return cached
-
             company_ref = self._resolve_sec_company(company_name, ticker=ticker)
             if not company_ref:
                 return None
 
             cik = str(company_ref.get("cik") or "").zfill(10)
+            if not cik or cik == "0000000000":
+                return None
+            cache_key = (
+                "sec::governance::v2::"
+                f"{self._normalize_company_key(company_name)}::{str(ticker or '').upper()}::{cik}"
+            )
+            cached = get_cache(cache_key)
+            if isinstance(cached, dict):
+                return cached
+
             submissions = self._fetch_sec_submissions(cik)
             if not submissions:
                 return None

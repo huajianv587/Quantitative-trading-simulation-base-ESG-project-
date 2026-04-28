@@ -47,6 +47,20 @@ class TradingJobRunRequest(BaseModel):
     scheduled_for: str | None = None
 
 
+class PaperRewardCandidateRunRequest(BaseModel):
+    universe: list[str] = Field(default_factory=list)
+    max_candidates: int = 5
+    per_order_notional: float | None = None
+    benchmark: str = "SPY"
+    allow_duplicates: bool = False
+
+
+class PaperRewardSettleRequest(BaseModel):
+    candidate_id: str | None = None
+    force_refresh: bool = False
+    limit: int = 200
+
+
 class AutopilotPolicyUpdateRequest(BaseModel):
     execution_mode: str = "paper"
     execution_permission: str = "auto_submit"

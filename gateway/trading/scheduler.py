@@ -47,9 +47,11 @@ class TradingScheduler:
     JOB_SPECS = {
         "premarket_agent": {"hour": 8, "minute": 30, "label": "Premarket Agent"},
         "intraday_monitor_start": {"hour": 9, "minute": 30, "label": "Start Intraday Monitor"},
+        "paper_reward_candidates_run": {"hour": 10, "minute": 0, "label": "Paper Reward Candidates"},
         "midday_summary_agent": {"hour": 11, "minute": 30, "label": "Midday Summary"},
         "intraday_monitor_stop": {"hour": 15, "minute": 0, "label": "Stop Intraday Monitor"},
         "review_agent": {"hour": 21, "minute": 30, "label": "Daily Review"},
+        "paper_reward_settlement": {"hour": 21, "minute": 45, "label": "Paper Reward Settlement"},
     }
 
     def __init__(self, run_job: Callable[[str, str | None], Awaitable[dict[str, Any]]]) -> None:
