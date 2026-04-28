@@ -1,11 +1,5 @@
-
-from gateway.quant.service import get_quant_system
+from blueprint_runtime import build_dataset_output
 
 
 def load_dataset(symbols: list[str] | None = None) -> dict:
-    universe = get_quant_system().get_default_universe(symbols)
-    return {
-        "module": "trends_loader",
-        "source": "trends_loader",
-        "records": [member.model_dump() for member in universe],
-    }
+    return build_dataset_output("trends_loader", symbols)

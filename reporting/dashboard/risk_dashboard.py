@@ -1,12 +1,5 @@
-
-from gateway.quant.service import get_quant_system
+from blueprint_runtime import build_report_output
 
 
 def build_output(payload: dict | None = None) -> dict:
-    payload = payload or {}
-    return {
-        "module": "risk_dashboard",
-        "status": "ready",
-        "overview": get_quant_system().build_platform_overview(),
-        "payload": payload,
-    }
+    return build_report_output("risk_dashboard", payload)

@@ -1,3 +1,5 @@
+from blueprint_runtime import build_memory_output
 
-def load_memory() -> dict:
-    return {"module": "vector_memory", "status": "ready"}
+
+def load_memory(entries: list[dict] | None = None) -> dict:
+    return build_memory_output("vector_memory", entries)

@@ -1,8 +1,5 @@
+from blueprint_runtime import apply_governance_pipeline
+
 
 def apply_pipeline(records: list[dict] | None = None) -> dict:
-    records = records or []
-    return {
-        "module": "survivorship_bias",
-        "records": records,
-        "status": "processed",
-    }
+    return apply_governance_pipeline("survivorship_bias", records)

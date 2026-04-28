@@ -1,9 +1,5 @@
+from blueprint_runtime import build_analysis_output
+
 
 def analyze_payload(payload: dict | None = None) -> dict:
-    payload = payload or {}
-    records = payload.get("records", [])
-    return {
-        "module": "trend_indicators",
-        "records": records,
-        "summary": "Analysis scaffold ready",
-    }
+    return build_analysis_output("trend_indicators", payload, family="technical")

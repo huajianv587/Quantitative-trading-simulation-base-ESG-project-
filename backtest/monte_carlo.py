@@ -1,8 +1,5 @@
+from blueprint_runtime import run_backtest_blueprint
+
 
 def run_module(payload: dict | None = None) -> dict:
-    payload = payload or {}
-    return {
-        "module": "monte_carlo",
-        "status": "ready",
-        "payload": payload,
-    }
+    return run_backtest_blueprint("monte_carlo", payload)

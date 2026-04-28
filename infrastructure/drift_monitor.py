@@ -1,8 +1,5 @@
+from blueprint_runtime import build_infrastructure_output
+
 
 def track(payload: dict | None = None) -> dict:
-    payload = payload or {}
-    return {
-        "module": "drift_monitor",
-        "status": "tracked",
-        "payload": payload,
-    }
+    return build_infrastructure_output("drift_monitor", payload)

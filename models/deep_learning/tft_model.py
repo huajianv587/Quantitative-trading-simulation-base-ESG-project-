@@ -1,10 +1,6 @@
+from blueprint_runtime import BlueprintModelAdapter
 
-class ModelAdapter:
+
+class ModelAdapter(BlueprintModelAdapter):
     def __init__(self, name: str = "tft_model") -> None:
-        self.name = name
-
-    def fit(self, X=None, y=None) -> dict:
-        return {"model": self.name, "status": "fit_ready"}
-
-    def predict(self, X=None) -> list[float]:
-        return [0.0]
+        super().__init__(name=name)

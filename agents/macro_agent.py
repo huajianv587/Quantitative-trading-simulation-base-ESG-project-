@@ -1,13 +1,5 @@
-
-from gateway.quant.service import get_quant_system
+from blueprint_runtime import build_agent_output
 
 
 def run_agent_task(payload: dict | None = None) -> dict:
-    payload = payload or {}
-    service = get_quant_system()
-    return {
-        "module": "macro_agent",
-        "status": "ready",
-        "benchmark": service.default_benchmark,
-        "payload": payload,
-    }
+    return build_agent_output("macro_agent", payload)
