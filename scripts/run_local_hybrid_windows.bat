@@ -18,7 +18,7 @@ echo [run] APP_MODE=%APP_MODE%
 echo [run] LLM_BACKEND_MODE=%LLM_BACKEND_MODE%
 echo [run] Fallback order: remote ^> DeepSeek ^> OpenAI
 
-"%PYTHON_BIN%" -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
+"%PYTHON_BIN%" -m uvicorn gateway.main:app --host 0.0.0.0 --port 8012 --reload
 exit /b %errorlevel%
 
 :resolve_python

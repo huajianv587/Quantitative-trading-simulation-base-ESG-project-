@@ -1,0 +1,14 @@
+[Unit]
+Description=Hybrid Paper Quant external watchdog
+Requires=docker.service
+After=docker.service network-online.target quant-paper-compose.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/quant-paper
+EnvironmentFile=-/opt/quant-paper/.env
+ExecStart=/usr/bin/python3 scripts/quant_watchdog.py --once --notify --compose-file docker-compose.yml
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

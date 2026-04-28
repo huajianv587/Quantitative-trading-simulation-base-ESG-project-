@@ -1,95 +1,129 @@
-# Quant Scheduler 常驻部署说明
+# Quant Scheduler 云端无人值守部署说明
 
 ## 目标
 
-这条 worker 负责 3 件事：
+`quant-scheduler` 是 Hybrid Paper 的生产主入口，负责按 XNYS 交易日历自动完成：
 
-1. 开盘前运行研究与信号计算
-2. 到点生成执行计划并按配置自动提交 Alpaca Paper 订单
-3. 盘中持续同步 execution journal，刷新订单状态机
+1. 盘前 shortlist 和研究信号
+2. Hybrid Paper Workflow
+3. Alpaca paper 自动派单
+4. Alpaca broker sync
+5. N+1/N+3/N+5 outcome settlement
+6. paper performance snapshot
+7. promotion evaluate
+8. observability alert evaluate
+9. 盘前和盘后 Telegram + Email digest
 
-## 关键文件
+live 实盘不会自动打开。60/90 个有效 paper 交易日通过后，系统只生成 live canary recommendation，仍需人工确认。
 
-- `scripts/quant_signal_scheduler.py`
-- `docker-compose.yml`
-- `scripts/start_quant_scheduler_windows.bat`
+## 必需环境变量
 
-## 关键环境变量
+密钥只写入云端 `.env` 或 secret manager，不要提交到仓库。
 
-- `SCHEDULER_TIMEZONE`
-- `SCHEDULER_SIGNAL_UNIVERSE`
-- `SCHEDULER_PREOPEN_SIGNAL_TIME`
-- `SCHEDULER_EXECUTION_TIME`
-- `SCHEDULER_AUTO_SUBMIT`
-- `SCHEDULER_MAX_EXECUTION_SYMBOLS`
-- `SCHEDULER_SYNC_INTERVAL_MINUTES`
-- `SCHEDULER_SYNC_END_TIME`
-- `SCHEDULER_FALLBACK_TO_DEFAULT_UNIVERSE`
-- `SCHEDULER_STATE_PATH`
-- `SCHEDULER_HEARTBEAT_PATH`
-- `SCHEDULER_LOCK_PATH`
+- `SCHEDULER_EXECUTION_ENGINE=hybrid_paper_workflow`
+- `SCHEDULER_AUTO_SUBMIT=true`
+- `SCHEDULER_REQUIRE_TRADING_SESSION=true`
+- `SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT=true`
+- `SYNTHETIC_EVIDENCE_POLICY=block`
+- `UNATTENDED_PAPER_MODE=true`
+- `ALERT_NOTIFIER=telegram`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `ALPACA_API_KEY`
+- `ALPACA_API_SECRET`
+- `ALPACA_PAPER_BASE_URL=https://paper-api.alpaca.markets`
+- `MARKET_DATA_PROVIDER=alpaca,yfinance`
+- `SEC_EDGAR_EMAIL`
+- `SMTP_HOST`
+- `SMTP_USER`
+- `SMTP_PASSWORD`
+- `EMAIL_FROM`
+- `QUANT_DAILY_DIGEST_RECIPIENTS=jianghuajian99@gmail.com`
+- `QUANT_DAILY_DIGEST_CHANNELS=telegram,email`
 
-## 本地运行
+默认 paper 风控：
 
-单次预开盘研究：
+- `SCHEDULER_MAX_EXECUTION_SYMBOLS=2`
+- `ALPACA_DEFAULT_TEST_NOTIONAL=100`
+- `SCHEDULER_MAX_DAILY_NOTIONAL_USD=200`
+- `EXECUTION_PAPER_MAX_NOTIONAL_PER_ORDER=100`
+- `ALPACA_ENABLE_LIVE_TRADING=false`
 
-```bat
-python scripts\quant_signal_scheduler.py --once-preopen
-```
-
-单次执行：
-
-```bat
-python scripts\quant_signal_scheduler.py --once-execute
-```
-
-单次盘中同步：
-
-```bat
-python scripts\quant_signal_scheduler.py --once-sync
-```
-
-常驻运行：
-
-```bat
-scripts\start_quant_scheduler_windows.bat
-```
-
-查看当前状态：
-
-```bat
-python scripts\quant_signal_scheduler.py --print-state
-```
-
-## Docker 常驻部署
-
-启动 API、Qdrant、Quant Scheduler：
+## Docker Compose 部署
 
 ```bash
-docker compose up -d api qdrant quant-scheduler
-```
-
-查看 scheduler 日志：
-
-```bash
+docker compose up -d --build api qdrant quant-scheduler
+docker compose ps
 docker compose logs -f quant-scheduler
 ```
 
-## 运行产物
+5090 训练节点：
 
-默认会写到：
+```bash
+docker compose -f docker-compose.5090.yml up -d --build api qdrant remote-llm quant-scheduler
+```
 
-- `storage/quant/scheduler/runtime_state.json`
-- `storage/quant/scheduler/heartbeat.json`
+API 容器 healthcheck 只打 `/livez`；业务 readiness 用 `/ready`。`quant-scheduler` healthcheck 必须校验 heartbeat 新鲜度。
 
-其中：
+## 发布前检查
 
-- `runtime_state.json` 保存当日 pre-open shortlist、execution_id 和最近一次 sync 结果
-- `heartbeat.json` 可用于健康检查与部署监控
+先生成一次真实 preflight 证据：
 
-## 当前策略约束
+```bash
+curl -X POST "http://127.0.0.1:8012/api/v1/quant/deployment/preflight/evaluate?profile=paper_cloud"
+curl "http://127.0.0.1:8012/ready"
+```
 
-- 当前只启用 `alpaca` 作为常驻执行 broker
-- 执行模式默认为 `paper`
-- 没有通过 `long-only` 过滤时会保持 `no-trade`
-- 如果配置 universe 没有可执行多头，且 `SCHEDULER_FALLBACK_TO_DEFAULT_UNIVERSE=true`，worker 会自动回退到默认量化股票池
+本地脚本：
+
+```bash
+python scripts/staging_check.py paper-cloud --base-url http://127.0.0.1:8012
+python scripts/healthcheck_5090.py --base-url http://127.0.0.1:8012
+```
+
+## 日常运维
+
+查看 scheduler state：
+
+```bash
+python scripts/quant_signal_scheduler.py --print-state
+```
+
+单次补跑非下单恢复步骤：
+
+```bash
+python scripts/quant_signal_scheduler.py --once-recover
+```
+
+单次观测告警评估：
+
+```bash
+python scripts/quant_signal_scheduler.py --once-observability
+```
+
+手动发送 digest：
+
+```bash
+python scripts/quant_signal_scheduler.py --once-digest --digest-phase preopen
+python scripts/quant_signal_scheduler.py --once-digest --digest-phase postclose
+```
+
+从 Alpaca paper 回填历史 evidence：
+
+```bash
+curl -X POST http://127.0.0.1:8012/api/v1/quant/paper/performance/backfill \
+  -H "Content-Type: application/json" \
+  -d "{\"days\":120,\"broker\":\"alpaca\",\"mode\":\"paper\"}"
+```
+
+## 熔断策略
+
+连续出现 broker submit、broker sync、market data stale、RL checkpoint missing、workflow failure、equity anomaly 时，scheduler 会启用 `paper_submit` circuit breaker。熔断后只阻止新 paper submit，仍继续执行 broker sync、settlement、snapshot、promotion、alert 和 digest。
+
+查看熔断：
+
+```bash
+curl http://127.0.0.1:8012/api/v1/quant/observability/paper-workflow?window_days=30
+```
+
+后续循环如果所有失败计数恢复为 0，scheduler 会自动释放该熔断；不要直接删除 state 文件。

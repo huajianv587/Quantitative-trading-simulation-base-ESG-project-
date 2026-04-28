@@ -22,9 +22,9 @@ fi
 
 # 启动后端服务器
 echo ""
-echo "启动后端服务器 (端口 8000)..."
+echo "启动后端服务器 (端口 8012)..."
 cd full_suite_source_bundle_20260421
-python -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload &
+python -m uvicorn gateway.main:app --host 0.0.0.0 --port 8012 --reload &
 BACKEND_PID=$!
 echo "后端PID: $BACKEND_PID"
 
@@ -44,8 +44,8 @@ echo ""
 echo "=========================================="
 echo "服务启动完成！"
 echo "=========================================="
-echo "后端API: http://localhost:8000"
-echo "API文档: http://localhost:8000/docs"
+echo "后端API: http://localhost:8012"
+echo "API文档: http://localhost:8012/docs"
 echo "前端应用: http://localhost:8080"
 echo ""
 echo "按 Ctrl+C 停止所有服务"

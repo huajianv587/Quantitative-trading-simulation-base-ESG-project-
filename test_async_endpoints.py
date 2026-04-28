@@ -7,7 +7,7 @@ import httpx
 import json
 from datetime import datetime
 
-BASE_URL = "http://localhost:8000/api"
+BASE_URL = "http://localhost:8012/api"
 
 async def test_health_check():
     """测试健康检查端点"""
@@ -177,7 +177,7 @@ async def run_all_tests():
 
 if __name__ == "__main__":
     print("启动异步端点测试...")
-    print("确保后端服务运行在 http://localhost:8000")
+    print("确保后端服务运行在 http://localhost:8012")
     print()
 
     try:

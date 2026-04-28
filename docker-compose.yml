@@ -7,17 +7,43 @@ services:
     env_file:
       - .env
     environment:
+      APP_MODE: hybrid
+      LLM_BACKEND_MODE: remote
       PORT: 8000
       LOCAL_API_URL: http://api:8000
+      REMOTE_LLM_URL: http://host.docker.internal:8010
       QDRANT_URL: http://qdrant:6333
+      API_HEALTHCHECK_REQUIRED_COMPONENTS: api,auth_keys,llm_local_auto,llm_hybrid_remote,qdrant,model_registry
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      NUMEXPR_NUM_THREADS: "2"
+      TORCH_NUM_THREADS: "2"
+      TOKENIZERS_PARALLELISM: "false"
     ports:
-      - "8000:8000"
+      - "8012:8000"
     volumes:
       - app_storage:/app/storage
+      - ./model-serving/checkpoint:/app/model-serving/checkpoint:ro
+      - ./storage/quant/rl:/app/storage/quant/rl
+      - ./storage/quant/model_registry:/app/storage/quant/model_registry
     depends_on:
       qdrant:
         condition: service_started
+    cpus: "2.0"
+    mem_limit: 4g
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/livez', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
 
   quant-scheduler:
     build:
@@ -29,16 +55,47 @@ services:
     environment:
       LOCAL_API_URL: http://api:8000
       QDRANT_URL: http://qdrant:6333
+      SCHEDULER_EXECUTION_ENGINE: hybrid_paper_workflow
+      SCHEDULER_AUTO_SUBMIT: "true"
+      SCHEDULER_REQUIRE_TRADING_SESSION: "true"
+      SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT: "true"
+      SCHEDULER_CLOSE_GRACE_MINUTES: "10"
+      SCHEDULER_MAX_EXECUTION_SYMBOLS: "2"
+      SCHEDULER_MAX_DAILY_NOTIONAL_USD: "200"
+      ALPACA_DEFAULT_TEST_NOTIONAL: "100"
+      ALPACA_PAPER_MAX_ORDER_NOTIONAL: "100"
+      EXECUTION_PAPER_MAX_NOTIONAL_PER_ORDER: "100"
+      ALPACA_ENABLE_LIVE_TRADING: "false"
+      UNATTENDED_PAPER_MODE: "true"
+      ALERT_NOTIFIER: telegram
+      QUANT_DAILY_DIGEST_RECIPIENTS: jianghuajian99@gmail.com
+      QUANT_DAILY_DIGEST_CHANNELS: telegram,email
       SCHEDULER_STATE_PATH: /app/storage/quant/scheduler/runtime_state.json
       SCHEDULER_HEARTBEAT_PATH: /app/storage/quant/scheduler/heartbeat.json
       SCHEDULER_LOCK_PATH: /app/storage/quant/scheduler/worker.lock
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      NUMEXPR_NUM_THREADS: "2"
+      TORCH_NUM_THREADS: "2"
+      TOKENIZERS_PARALLELISM: "false"
     command: ["python", "scripts/quant_signal_scheduler.py", "--poll-seconds", "20"]
     volumes:
       - app_storage:/app/storage
+      - ./model-serving/checkpoint:/app/model-serving/checkpoint:ro
+      - ./storage/quant/rl:/app/storage/quant/rl
+      - ./storage/quant/model_registry:/app/storage/quant/model_registry
     depends_on:
       qdrant:
         condition: service_started
+    cpus: "2.0"
+    mem_limit: 4g
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     healthcheck:
       test:
         [
@@ -59,7 +116,14 @@ services:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    cpus: "1.0"
+    mem_limit: 2g
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
 volumes:
   qdrant_data:

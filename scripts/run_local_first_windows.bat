@@ -19,7 +19,7 @@ echo [run] LLM_BACKEND_MODE=%LLM_BACKEND_MODE%
 echo [run] Fallback order: local ^> DeepSeek ^> OpenAI
 echo [run] To re-enable a remote GPU host later, use scripts\run_local_hybrid_windows.bat
 
-"%PYTHON_BIN%" -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
+"%PYTHON_BIN%" -m uvicorn gateway.main:app --host 0.0.0.0 --port 8012 --reload
 exit /b %errorlevel%
 
 :resolve_python

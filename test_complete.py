@@ -13,7 +13,7 @@ import json
 import time
 from typing import Dict, List
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8012"
 
 class Colors:
     GREEN = '\033[92m'

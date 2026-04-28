@@ -280,8 +280,8 @@ print(data)
 
 ### 3. 验证系统仍可正常运行
 ```bash
-curl http://localhost:8000/health
-curl -X POST http://localhost:8000/agent/esg-score -H "Content-Type: application/json" -d '{"company":"Tesla"}'
+curl http://localhost:8012/health
+curl -X POST http://localhost:8012/agent/esg-score -H "Content-Type: application/json" -d '{"company":"Tesla"}'
 ```
 
 ---

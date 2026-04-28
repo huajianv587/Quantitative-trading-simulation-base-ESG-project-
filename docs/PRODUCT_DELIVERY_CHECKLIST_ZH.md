@@ -139,7 +139,7 @@ scripts\run_local_first_windows.bat
 
 - `local_api.ok = true`
 - `qdrant.ok = true`
-- `http://127.0.0.1:8000/health/ready` 返回 `200`
+- `http://127.0.0.1:8012/health/ready` 返回 `200`
 
 如果配置了远端 GPU，再额外检查：
 
@@ -150,7 +150,7 @@ scripts\run_local_first_windows.bat
 ### 5.1 健康检查
 
 ```bat
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8012/health
 ```
 
 必须满足：
@@ -168,7 +168,7 @@ curl http://127.0.0.1:8000/health
 ### 5.1.1 就绪检查
 
 ```bat
-curl http://127.0.0.1:8000/health/ready
+curl http://127.0.0.1:8012/health/ready
 ```
 
 必须满足：
@@ -180,7 +180,7 @@ curl http://127.0.0.1:8000/health/ready
 ### 5.2 首页总览
 
 ```bat
-curl http://127.0.0.1:8000/dashboard/overview
+curl http://127.0.0.1:8012/dashboard/overview
 ```
 
 必须满足：
@@ -193,7 +193,7 @@ curl http://127.0.0.1:8000/dashboard/overview
 ### 5.3 分析链路
 
 ```bat
-.venv\Scripts\python.exe -c "import requests; r=requests.post('http://127.0.0.1:8000/agent/analyze', json={'session_id':'delivery-check','question':'请总结 Tesla 最近的 ESG 风险与机会'}, timeout=600); print(r.status_code); print(r.text)"
+.venv\Scripts\python.exe -c "import requests; r=requests.post('http://127.0.0.1:8012/agent/analyze', json={'session_id':'delivery-check','question':'请总结 Tesla 最近的 ESG 风险与机会'}, timeout=600); print(r.status_code); print(r.text)"
 ```
 
 必须满足：
@@ -206,7 +206,7 @@ curl http://127.0.0.1:8000/dashboard/overview
 ### 5.4 报告生成
 
 ```bat
-.venv\Scripts\python.exe -c "import requests, json; r=requests.post('http://127.0.0.1:8000/admin/reports/generate', json={'report_type':'daily','companies':['Tesla'],'async':False}, timeout=600); print(r.status_code); print(r.text)"
+.venv\Scripts\python.exe -c "import requests, json; r=requests.post('http://127.0.0.1:8012/admin/reports/generate', json={'report_type':'daily','companies':['Tesla'],'async':False}, timeout=600); print(r.status_code); print(r.text)"
 ```
 
 必须满足：
@@ -218,7 +218,7 @@ curl http://127.0.0.1:8000/dashboard/overview
 ### 5.5 数据同步
 
 ```bat
-.venv\Scripts\python.exe -c "import requests; r=requests.post('http://127.0.0.1:8000/admin/data-sources/sync', json={'companies':['Tesla'],'force_refresh':False}, timeout=300); print(r.status_code); print(r.text)"
+.venv\Scripts\python.exe -c "import requests; r=requests.post('http://127.0.0.1:8012/admin/data-sources/sync', json={'companies':['Tesla'],'force_refresh':False}, timeout=300); print(r.status_code); print(r.text)"
 ```
 
 必须满足：

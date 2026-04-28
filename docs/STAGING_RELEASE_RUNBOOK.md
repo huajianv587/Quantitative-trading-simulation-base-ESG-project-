@@ -34,9 +34,9 @@ python scripts/staging_check.py up --skip-build --require-module rag --require-m
 
 ```bash
 docker compose ps
-curl http://localhost:8000/health
-curl http://localhost:8000/health/ready
-curl http://localhost:8000/dashboard/overview
+curl http://localhost:8012/health
+curl http://localhost:8012/health/ready
+curl http://localhost:8012/dashboard/overview
 curl http://localhost/health
 ```
 

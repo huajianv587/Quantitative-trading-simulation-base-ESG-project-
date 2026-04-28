@@ -144,7 +144,7 @@ scripts\run_local_hybrid_windows.bat
 来启动：
 
 ```bat
-.venv\Scripts\python.exe -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
+.venv\Scripts\python.exe -m uvicorn gateway.main:app --host 0.0.0.0 --port 8012 --reload
 ```
 
 ### 第 5 步：做运行时体检
@@ -164,13 +164,13 @@ scripts\run_local_hybrid_windows.bat
 ### 1. 健康检查
 
 ```bat
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8012/health
 ```
 
 ### 2. 真实分析请求
 
 ```bat
-python -c "import requests; r=requests.post('http://127.0.0.1:8000/agent/analyze', json={'session_id':'hybrid-test','question':'Please summarize DBS 2024 ESG priorities in 5 bullet points.'}, timeout=600); print(r.status_code); print(r.text)"
+python -c "import requests; r=requests.post('http://127.0.0.1:8012/agent/analyze', json={'session_id':'hybrid-test','question':'Please summarize DBS 2024 ESG priorities in 5 bullet points.'}, timeout=600); print(r.status_code); print(r.text)"
 ```
 
 第一次请求可能会稍慢，因为云端模型会首次加载。
@@ -240,7 +240,7 @@ ps -ef | grep remote_llm_server.py
 - SSH 隧道窗口是不是被关了
 - `.env` 里的 `REMOTE_LLM_URL` 是否仍指向 `http://127.0.0.1:8010`
 
-### 2. 本地 `8000` 起不来
+### 2. 本地 `8012` 起不来
 
 优先检查：
 

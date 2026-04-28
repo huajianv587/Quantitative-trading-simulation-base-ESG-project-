@@ -1,6 +1,6 @@
 # ESG Agentic RAG Copilot - 完整API文档
 
-**基础URL**: `http://localhost:8000` (开发环境) / `https://api.esg-copilot.com` (生产环境)
+**基础URL**: `http://localhost:8012` (开发环境) / `https://api.esg-copilot.com` (生产环境)
 
 ---
 
@@ -94,7 +94,7 @@ Return current Alpaca paper positions.
 
 **请求**:
 ```bash
-curl -X POST http://localhost:8000/agent/analyze \
+curl -X POST http://localhost:8012/agent/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "question": "分析特斯拉的ESG表现",
@@ -141,7 +141,7 @@ curl -X POST http://localhost:8000/agent/analyze \
 
 **请求**:
 ```bash
-curl -X POST http://localhost:8000/agent/esg-score \
+curl -X POST http://localhost:8012/agent/esg-score \
   -H "Content-Type: application/json" \
   -d '{
     "company": "Tesla",
@@ -254,7 +254,7 @@ curl -X POST http://localhost:8000/agent/esg-score \
 
 **请求**:
 ```bash
-curl -X POST http://localhost:8000/admin/reports/generate \
+curl -X POST http://localhost:8012/admin/reports/generate \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -294,7 +294,7 @@ curl -X POST http://localhost:8000/admin/reports/generate \
 
 **请求**:
 ```bash
-curl -X GET http://localhost:8000/admin/reports/550e8400-e29b-41d4-a716-446655440000 \
+curl -X GET http://localhost:8012/admin/reports/550e8400-e29b-41d4-a716-446655440000 \
   -H "Authorization: Bearer {token}"
 ```
 
@@ -384,7 +384,7 @@ curl -X GET http://localhost:8000/admin/reports/550e8400-e29b-41d4-a716-44665544
 
 **请求**:
 ```bash
-curl -X GET "http://localhost:8000/admin/reports/550e8400-e29b-41d4-a716-446655440000/export?format=pdf" \
+curl -X GET "http://localhost:8012/admin/reports/550e8400-e29b-41d4-a716-446655440000/export?format=pdf" \
   -H "Authorization: Bearer {token}" \
   --output report.pdf
 ```
@@ -404,7 +404,7 @@ curl -X GET "http://localhost:8000/admin/reports/550e8400-e29b-41d4-a716-4466554
 
 **请求**:
 ```bash
-curl -X POST http://localhost:8000/admin/data-sources/sync \
+curl -X POST http://localhost:8012/admin/data-sources/sync \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -443,7 +443,7 @@ curl -X POST http://localhost:8000/admin/data-sources/sync \
 
 **请求**:
 ```bash
-curl -X GET http://localhost:8000/admin/data-sources/sync/sync_job_123 \
+curl -X GET http://localhost:8012/admin/data-sources/sync/sync_job_123 \
   -H "Authorization: Bearer {token}"
 ```
 
@@ -477,7 +477,7 @@ curl -X GET http://localhost:8000/admin/data-sources/sync/sync_job_123 \
 
 **请求**:
 ```bash
-curl -X POST http://localhost:8000/admin/push-rules \
+curl -X POST http://localhost:8012/admin/push-rules \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -529,7 +529,7 @@ curl -X POST http://localhost:8000/admin/push-rules \
 
 **请求**:
 ```bash
-curl -X GET http://localhost:8000/admin/push-rules \
+curl -X GET http://localhost:8012/admin/push-rules \
   -H "Authorization: Bearer {token}"
 ```
 
@@ -563,7 +563,7 @@ curl -X GET http://localhost:8000/admin/push-rules \
 
 **请求**:
 ```bash
-curl -X PUT http://localhost:8000/admin/push-rules/rule_1 \
+curl -X PUT http://localhost:8012/admin/push-rules/rule_1 \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -590,7 +590,7 @@ curl -X PUT http://localhost:8000/admin/push-rules/rule_1 \
 
 **请求**:
 ```bash
-curl -X DELETE http://localhost:8000/admin/push-rules/rule_1 \
+curl -X DELETE http://localhost:8012/admin/push-rules/rule_1 \
   -H "Authorization: Bearer {token}"
 ```
 
@@ -611,7 +611,7 @@ curl -X DELETE http://localhost:8000/admin/push-rules/rule_1 \
 
 **请求**:
 ```bash
-curl -X POST http://localhost:8000/admin/push-rules/rule_1/test \
+curl -X POST http://localhost:8012/admin/push-rules/rule_1/test \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -678,7 +678,7 @@ curl -X POST http://localhost:8000/admin/push-rules/rule_1/test \
 
 **请求**:
 ```bash
-curl -X POST http://localhost:8000/user/reports/subscribe \
+curl -X POST http://localhost:8012/user/reports/subscribe \
   -H "Authorization: Bearer {user_token}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -727,7 +727,7 @@ curl -X POST http://localhost:8000/user/reports/subscribe \
 
 **请求**:
 ```bash
-curl -X GET http://localhost:8000/user/reports/subscriptions \
+curl -X GET http://localhost:8012/user/reports/subscriptions \
   -H "Authorization: Bearer {user_token}"
 ```
 
@@ -760,7 +760,7 @@ curl -X GET http://localhost:8000/user/reports/subscriptions \
 
 **请求**:
 ```bash
-curl -X PUT http://localhost:8000/user/reports/subscriptions/sub_user_123 \
+curl -X PUT http://localhost:8012/user/reports/subscriptions/sub_user_123 \
   -H "Authorization: Bearer {user_token}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -777,7 +777,7 @@ curl -X PUT http://localhost:8000/user/reports/subscriptions/sub_user_123 \
 
 **请求**:
 ```bash
-curl -X DELETE http://localhost:8000/user/reports/subscriptions/sub_user_123 \
+curl -X DELETE http://localhost:8012/user/reports/subscriptions/sub_user_123 \
   -H "Authorization: Bearer {user_token}"
 ```
 
@@ -791,7 +791,7 @@ curl -X DELETE http://localhost:8000/user/reports/subscriptions/sub_user_123 \
 
 **请求**:
 ```bash
-curl -X GET "http://localhost:8000/admin/reports/statistics?period=2026-03-01:2026-03-29&group_by=report_type" \
+curl -X GET "http://localhost:8012/admin/reports/statistics?period=2026-03-01:2026-03-29&group_by=report_type" \
   -H "Authorization: Bearer {token}"
 ```
 
@@ -920,7 +920,7 @@ Response:
 import requests
 import json
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8012"
 ADMIN_TOKEN = "your_admin_token"
 
 # 1. 生成周报

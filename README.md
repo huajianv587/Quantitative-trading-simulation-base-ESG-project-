@@ -48,13 +48,13 @@ The running FastAPI service still uses `gateway.main`, while the new top-level d
 ## Quick Start
 
 ```bash
-python -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn gateway.main:app --host 0.0.0.0 --port 8012
 ```
 
 Then open:
 
-- `http://127.0.0.1:8000/`
-- `http://127.0.0.1:8000/app`
+- `http://127.0.0.1:8012/`
+- `http://127.0.0.1:8012/app`
 
 ## Tests
 

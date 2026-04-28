@@ -35,15 +35,15 @@ def test_app_and_blueprint_entrypoints_exist():
     assert Path("backtest/backtest_engine.py").exists()
 
 
-def test_launcher_defaults_to_port_1002():
+def test_launcher_scans_current_quant_terminal_port_candidates():
     launcher = Path("start.cmd").read_text(encoding="utf-8")
     api_launcher = Path("_api_server.cmd").read_text(encoding="utf-8")
     ui_launcher = Path("_ui_server.cmd").read_text(encoding="utf-8")
 
-    assert 'set "DEFAULT_PORT=1002"' in launcher
-    assert 'set "PORT_CANDIDATES=%DEFAULT_PORT%"' in launcher
-    assert 'set "PORT_RANGE_START=%DEFAULT_PORT%"' in launcher
-    assert 'set "PORT_RANGE_END=%DEFAULT_PORT%"' in launcher
+    assert 'set "DEFAULT_PORT=8012"' in launcher
+    assert 'set "PORT_CANDIDATES=8012"' in launcher
+    assert 'set "PORT_RANGE_START=8012"' in launcher
+    assert 'set "PORT_RANGE_END=8012"' in launcher
     assert 'set "API_PORT=1002"' in api_launcher
     assert '--port %API_PORT%' in api_launcher
     assert 'set "UI_PORT=1002"' in ui_launcher

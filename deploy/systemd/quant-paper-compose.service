@@ -1,0 +1,18 @@
+[Unit]
+Description=Hybrid Paper Quant Docker Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/quant-paper
+EnvironmentFile=-/opt/quant-paper/.env
+ExecStart=/usr/bin/docker compose up -d api qdrant quant-scheduler
+ExecStop=/usr/bin/docker compose stop api quant-scheduler
+RemainAfterExit=yes
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

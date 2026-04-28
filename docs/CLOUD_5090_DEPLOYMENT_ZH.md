@@ -110,8 +110,8 @@ storage/quant/autorecover_5090_health.json
 ### 基础健康
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/health/ready
+curl http://127.0.0.1:8012/health
+curl http://127.0.0.1:8012/health/ready
 curl http://127.0.0.1:8010/health
 curl http://127.0.0.1:6333/healthz
 ```
@@ -121,7 +121,7 @@ curl http://127.0.0.1:6333/healthz
 ```bash
 python scripts/runtime_doctor.py
 python scripts/healthcheck_5090.py --retries 3 --retry-delay 5
-python scripts/full_system_smoke.py --host 127.0.0.1 --port 8000 --startup-timeout 120 --request-timeout 180
+python scripts/full_system_smoke.py --host 127.0.0.1 --port 8012 --startup-timeout 120 --request-timeout 180
 ```
 
 ### 查看日志

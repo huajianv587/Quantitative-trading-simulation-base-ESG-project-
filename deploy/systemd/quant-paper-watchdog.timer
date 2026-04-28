@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Hybrid Paper Quant watchdog every minute
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=10
+Unit=quant-paper-watchdog.service
+
+[Install]
+WantedBy=timers.target

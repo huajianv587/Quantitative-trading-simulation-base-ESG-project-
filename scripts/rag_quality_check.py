@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SAMPLE_FILE = PROJECT_ROOT / "configs" / "rag_quality_samples.json"
-DEFAULT_BASE_URL = "http://localhost:8000"
+DEFAULT_BASE_URL = "http://localhost:8012"
 FAILURE_MARKERS = (
     "retrieval failed",
     "analysis failed",
