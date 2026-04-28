@@ -7113,28 +7113,15 @@ class QuantSystemService:
         execution_id = f"execution-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
         normalized_order_type = (order_type or "market").strip().lower()
         normalized_tif = (time_in_force or "day").strip().lower()
-        notional_limits = self._execution_notional_limits(normalized_mode)
-        test_order_cap = (
-            int(getattr(settings, "PAPER_REWARD_MAX_CANDIDATES", 5) or 5)
-            if reward_candidate_mode
-            else int(getattr(settings, "ALPACA_MAX_TEST_ORDERS", 2) or 2)
+        limit_plan = self.components.execution.plan_order_limits(
+            mode=normalized_mode,
+            max_orders=max_orders,
+            per_order_notional=per_order_notional,
+            reward_candidate_mode=bool(reward_candidate_mode),
         )
-        capped_max_orders = max(
-            1,
-            min(
-                int(max_orders or 1),
-                test_order_cap,
-                int(getattr(settings, "EXECUTION_MAX_DAILY_ORDERS", 25) or 25),
-                10,
-            ),
-        )
-        capped_notional = round(
-            min(
-                float(per_order_notional or getattr(settings, "ALPACA_DEFAULT_TEST_NOTIONAL", 1.0) or 1.0),
-                float(notional_limits["effective_per_order_notional"]),
-            ),
-            2,
-        )
+        notional_limits = limit_plan["notional_limits"]
+        capped_max_orders = int(limit_plan["capped_max_orders"])
+        capped_notional = float(limit_plan["capped_notional"])
         orders = self._build_execution_orders(
             execution_id=execution_id,
             broker_id=broker_id,
@@ -7144,23 +7131,11 @@ class QuantSystemService:
             time_in_force=normalized_tif,
             per_order_notional=capped_notional,
         )
-        average_slippage = round(
-            statistics.mean([float(order.estimated_slippage_bps or 0.0) for order in orders] or [0.0]),
-            2,
-        )
-        average_impact = round(
-            statistics.mean([float(order.estimated_impact_bps or 0.0) for order in orders] or [0.0]),
-            2,
-        )
-        average_fill_probability = round(
-            statistics.mean([float(order.expected_fill_probability or 0.0) for order in orders] or [0.0]),
-            4,
-        )
-        canary_summary = {
-            "full_release": sum(1 for order in orders if order.canary_bucket == "full_release"),
-            "canary_release": sum(1 for order in orders if order.canary_bucket == "canary_release"),
-            "holdout_shadow": sum(1 for order in orders if order.canary_bucket == "holdout_shadow"),
-        }
+        order_metrics = self.components.execution.order_metrics(orders)
+        average_slippage = order_metrics["average_slippage"]
+        average_impact = order_metrics["average_impact"]
+        average_fill_probability = order_metrics["average_fill_probability"]
+        canary_summary = order_metrics["canary_summary"]
         compliance_checks, risk_warnings, ready = self._perform_execution_risk_checks(
             broker_id=broker_id,
             mode=mode,
@@ -7203,10 +7178,7 @@ class QuantSystemService:
         payload["per_order_notional"] = capped_notional
         payload["notional_limits"] = {
             **notional_limits,
-            "requested_per_order_notional": round(
-                float(per_order_notional or getattr(settings, "ALPACA_DEFAULT_TEST_NOTIONAL", 1.0) or 1.0),
-                2,
-            ),
+            "requested_per_order_notional": limit_plan["requested_per_order_notional"],
             "capped_per_order_notional": capped_notional,
         }
         payload["order_type"] = normalized_order_type
@@ -7255,62 +7227,15 @@ class QuantSystemService:
         payload["live_blocked_until_paper_gate"] = bool(mode_state.get("live_blocked_until_paper_gate"))
 
         live_enabled = bool(getattr(settings, "ALPACA_ENABLE_LIVE_TRADING", False))
-        if payload["mode"] == "live":
-            if broker_id != "alpaca":
-                payload["ready"] = False
-                payload["broker_status"] = "blocked"
-                payload["warnings"].append("Live routing is currently only enabled for Alpaca.")
-                payload["block_reason"] = "live_not_supported_for_broker"
-                payload["next_actions"] = ["switch_to_alpaca_or_paper_mode"]
-            elif not payload.get("live_available"):
-                payload["ready"] = False
-                payload["broker_status"] = "blocked"
-                payload["warnings"].append("Live mode was selected, but live Alpaca credentials are not configured yet.")
-                payload["block_reason"] = "live_credentials_missing"
-                payload["next_actions"] = ["add_live_alpaca_keys", "switch_to_paper_mode"]
-            elif not live_enabled:
-                payload["ready"] = False
-                payload["broker_status"] = "blocked"
-                payload["warnings"].append("Live trading is disabled in server settings. Keep validating in Alpaca Paper first.")
-                payload["block_reason"] = "live_trading_disabled"
-                payload["next_actions"] = ["keep_using_paper_mode", "wait_for_paper_gate_pass"]
-            elif not payload.get("paper_gate_passed"):
-                payload["ready"] = False
-                payload["broker_status"] = "blocked"
-                payload["warnings"].append("Live trading is locked until the 60-trading-day Paper gate passes.")
-                payload["block_reason"] = "paper_gate_not_passed"
-                payload["next_actions"] = ["keep_using_paper_mode", "review_paper_gate_report", "wait_for_60_trading_day_gate"]
-            elif not bool(live_confirmed):
-                payload["ready"] = False
-                payload["broker_status"] = "awaiting_live_confirmation"
-                payload["warnings"].append("Live order routing requires an explicit operator confirmation before submission.")
-                payload["block_reason"] = "live_confirmation_required"
-                payload["next_actions"] = ["confirm_live_submit_or_switch_to_paper"]
-
-            live_guard = self._build_live_daily_notional_guard(
-                broker_id=broker_id,
-                execution_id=execution_id,
-                planned_notional=round(capped_notional * capped_max_orders, 2),
-            )
-            payload["live_daily_notional_guard"] = live_guard
-            if not live_guard["ok"]:
-                payload["ready"] = False
-                payload["broker_status"] = "daily_notional_limit_exceeded"
-                payload["block_reason"] = "live_daily_notional_limit_exceeded"
-                payload["next_actions"] = ["wait_until_next_trading_day", "reduce_order_notional_or_count"]
-                payload["warnings"].append(
-                    "Live daily notional guard blocked routing: "
-                    f"used {live_guard['used_notional']:.2f} USD, "
-                    f"planned {live_guard['planned_notional']:.2f} USD, "
-                    f"limit {live_guard['limit_notional']:.2f} USD for {live_guard['trading_day']}."
-                )
-        else:
-            payload["live_daily_notional_guard"] = self._build_live_daily_notional_guard(
-                broker_id=broker_id,
-                execution_id=execution_id,
-                planned_notional=0.0,
-                enabled=False,
-            )
+        self.components.execution.apply_live_guard(
+            payload=payload,
+            broker_id=broker_id,
+            execution_id=execution_id,
+            capped_max_orders=capped_max_orders,
+            capped_notional=capped_notional,
+            live_enabled=live_enabled,
+            live_confirmed=bool(live_confirmed),
+        )
 
         live_submit_ready = (
             payload["mode"] == "live"
@@ -8170,308 +8095,17 @@ class QuantSystemService:
         extended_hours: bool,
         allow_duplicates: bool,
     ) -> None:
-        negative_cash_limit = abs(
-            float(getattr(settings, "EXECUTION_PAPER_NEGATIVE_CASH_CIRCUIT_BREAKER_USD", 0.0) or 0.0)
+        self.components.execution.submit_broker_orders(
+            adapter=adapter,
+            payload=payload,
+            journal=journal,
+            capped_max_orders=capped_max_orders,
+            capped_notional=capped_notional,
+            normalized_order_type=normalized_order_type,
+            normalized_tif=normalized_tif,
+            extended_hours=extended_hours,
+            allow_duplicates=allow_duplicates,
         )
-        controls = self.get_execution_controls()
-        controls["paper_negative_cash_circuit_breaker_usd"] = round(negative_cash_limit, 2)
-        payload["controls"] = controls
-        if controls.get("kill_switch_enabled"):
-            payload["warnings"].append(
-                controls.get("kill_switch_reason")
-                or "Execution kill switch is engaged. Broker routing stayed disabled."
-            )
-            payload["broker_status"] = "kill_switch_engaged"
-            payload["ready"] = False
-            for order in payload.get("orders", []):
-                order["status"] = "blocked"
-                record = self._find_journal_record(journal, order.get("client_order_id") or order.get("symbol"))
-                if record is not None:
-                    self._update_journal_record(
-                        journal=journal,
-                        record=record,
-                        state="blocked",
-                        message=f"{order.get('symbol')} was blocked by the execution kill switch.",
-                    )
-            self._refresh_journal_state(journal)
-            return
-
-        connection = adapter.connection_status()
-        if not connection.get("configured"):
-            payload["warnings"].append(f"{adapter.label} credentials missing. Execution stayed in plan-only mode.")
-            payload["broker_status"] = "not_configured"
-            return
-
-        try:
-            account = adapter.get_account()
-            payload["account_snapshot"] = self._summarize_broker_account(adapter.broker_id, account)
-        except Exception as exc:
-            payload["warnings"].append(f"Unable to fetch {adapter.label} account: {exc}")
-            payload["broker_status"] = "account_error"
-            payload["ready"] = False
-            return
-
-        if payload["account_snapshot"].get("trading_blocked"):
-            payload["warnings"].append(f"{adapter.label} account is trading_blocked. Orders were not submitted.")
-            payload["broker_status"] = "trading_blocked"
-            payload["ready"] = False
-            return
-        if payload["account_snapshot"].get("account_blocked"):
-            payload["warnings"].append(f"{adapter.label} account is account_blocked. Orders were not submitted.")
-            payload["broker_status"] = "account_blocked"
-            payload["ready"] = False
-            return
-        cash = self._safe_float(payload["account_snapshot"].get("cash"))
-        negative_cash_breached = (
-            payload.get("mode") == "paper" and cash is not None and negative_cash_limit > 0 and cash < -negative_cash_limit
-        )
-        payload["paper_negative_cash_guard"] = {
-            "enabled": payload.get("mode") == "paper" and negative_cash_limit > 0,
-            "threshold_usd": round(negative_cash_limit, 2),
-            "cash": round(cash, 2) if cash is not None else None,
-            "breached": bool(negative_cash_breached),
-        }
-        if negative_cash_breached:
-            payload["warnings"].append(
-                f"Paper account cash {cash:.2f} is below the negative-cash circuit breaker {-negative_cash_limit:.2f}; orders were not submitted."
-            )
-            payload["broker_status"] = "negative_cash_circuit_breaker"
-            payload["block_reason"] = "negative_cash_circuit_breaker"
-            payload["ready"] = False
-            return
-
-        payload["market_clock"] = self._safe_get_clock(adapter)
-        payload["warnings"].extend(
-            self._collect_execution_warnings(
-                account_snapshot=payload.get("account_snapshot", {}),
-                market_clock=payload.get("market_clock"),
-                submit_orders=True,
-            )
-        )
-        if bool(getattr(settings, "SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT", True)) and adapter.broker_id == "alpaca":
-            if payload.get("market_clock") is None:
-                payload["warnings"].append("Alpaca market clock is unavailable; paper submit is blocked.")
-                payload["broker_status"] = "clock_unavailable_blocks_submit"
-                payload["block_reason"] = "clock_unavailable_blocks_submit"
-                payload["ready"] = False
-                return
-            if payload.get("market_clock", {}).get("is_open") is not True:
-                payload["warnings"].append("Alpaca market clock is closed; paper submit is blocked until the next open session.")
-                payload["broker_status"] = "market_clock_closed"
-                payload["block_reason"] = "market_clock_closed"
-                payload["ready"] = False
-                return
-        if getattr(settings, "EXECUTION_REQUIRE_MARKET_OPEN", False) and payload.get("market_clock", {}).get("is_open") is False:
-            payload["warnings"].append("Runtime policy requires the market to be open before routing orders.")
-            payload["broker_status"] = "market_closed"
-            payload["ready"] = False
-            return
-
-        buying_power = self._safe_float(payload.get("account_snapshot", {}).get("buying_power"))
-        required_buffer = float(getattr(settings, "EXECUTION_MIN_BUYING_POWER_BUFFER", 100.0) or 100.0)
-        if buying_power is not None and buying_power < capped_notional + required_buffer:
-            payload["warnings"].append(
-                f"Buying power {buying_power:.2f} is below requested per-order notional {capped_notional:.2f} plus safety buffer {required_buffer:.2f}. Orders were not submitted."
-            )
-            payload["broker_status"] = "insufficient_buying_power"
-            payload["ready"] = False
-            return
-
-        duplicate_candidates = {}
-        if not allow_duplicates:
-            duplicate_candidates = self._find_duplicate_order_candidates(
-                broker_id=adapter.broker_id,
-                execution_id=payload["execution_id"],
-                orders=payload.get("orders", []),
-            )
-
-        submitted_orders: list[dict[str, Any]] = []
-        submit_locks: list[dict[str, Any]] = []
-        session_date = self._execution_session_date(payload)
-        strategy_id = str(payload.get("strategy_id") or "execution_plan").strip() or "execution_plan"
-        for index, order in enumerate(payload.get("orders", [])[:capped_max_orders]):
-            symbol = str(order.get("symbol", "")).upper().strip()
-            record = self._find_journal_record(journal, order.get("client_order_id") or symbol)
-            duplicate_key = f"{symbol}:{str(order.get('side') or 'buy').lower()}"
-            duplicate_context = duplicate_candidates.get(duplicate_key)
-            if duplicate_context is not None:
-                message = (
-                    f"Duplicate order guard suppressed {symbol} {order.get('side', 'buy')} because "
-                    f"{duplicate_context.get('status', 'an active order')} already exists."
-                )
-                payload["warnings"].append(message)
-                order["status"] = "suppressed_duplicate"
-                if record is not None:
-                    self._update_journal_record(
-                        journal=journal,
-                        record=record,
-                        state="suppressed",
-                        message=message,
-                        broker_snapshot=duplicate_context,
-                    )
-                continue
-
-            if str(order.get("canary_bucket") or "") == "holdout_shadow":
-                message = f"{symbol} held out by canary policy and stayed in shadow mode."
-                payload["warnings"].append(message)
-                order["status"] = "canary_holdout"
-                if record is not None:
-                    self._update_journal_record(
-                        journal=journal,
-                        record=record,
-                        state="suppressed",
-                        message=message,
-                        broker_snapshot={
-                            "status": "canary_holdout",
-                            "symbol": symbol,
-                            "client_order_id": order.get("client_order_id"),
-                        },
-                    )
-                continue
-
-            try:
-                asset = adapter.get_asset(symbol)
-            except Exception:
-                asset = {"symbol": symbol, "tradable": True, "fractionable": False}
-
-            if asset and asset.get("tradable") is False:
-                payload["warnings"].append(f"{symbol} is not tradable on {adapter.label} and was skipped.")
-                if record is not None:
-                    self._update_journal_record(
-                        journal=journal,
-                        record=record,
-                        state="rejected",
-                        message=f"{symbol} is not tradable on {adapter.label}.",
-                    )
-                continue
-
-            side = str(order.get("side") or "buy").strip().lower()
-            acquired, submit_lock = self._acquire_session_submit_lock(
-                session_date=session_date,
-                strategy_id=strategy_id,
-                symbol=symbol,
-                side=side,
-                execution_id=payload["execution_id"],
-                client_order_id=str(order.get("client_order_id") or ""),
-            )
-            submit_locks.append(submit_lock)
-            order["session_submit_lock"] = submit_lock
-            if not acquired:
-                message = (
-                    f"Session submit lock suppressed {symbol} {side}; "
-                    f"existing lock {submit_lock.get('lock_id')} is {submit_lock.get('status', 'active')}."
-                )
-                payload["warnings"].append(message)
-                order["status"] = "session_submit_locked"
-                payload["block_reason"] = payload.get("block_reason") or "session_submit_locked"
-                if record is not None:
-                    self._update_journal_record(
-                        journal=journal,
-                        record=record,
-                        state="blocked",
-                        message=message,
-                        broker_snapshot=submit_lock,
-                    )
-                continue
-
-            try:
-                broker_payload = self._build_broker_order_payload(
-                    broker_id=adapter.broker_id,
-                    execution_id=payload["execution_id"],
-                    order=order,
-                    asset=asset,
-                    index=index,
-                    capped_notional=capped_notional,
-                    normalized_order_type=normalized_order_type,
-                    normalized_tif=normalized_tif,
-                    extended_hours=extended_hours,
-                )
-                created_order = adapter.submit_order(broker_payload)
-                refreshed_order = created_order
-                order_id = str(created_order.get("id") or "").strip()
-                if order_id:
-                    try:
-                        refreshed_order = adapter.get_order(order_id)
-                    except Exception:
-                        refreshed_order = created_order
-                receipt = self._summarize_broker_order(adapter.broker_id, refreshed_order)
-                receipt["submitted_payload"] = broker_payload
-                submit_lock = self._update_session_submit_lock(
-                    submit_lock,
-                    status="submitted",
-                    broker_order_id=receipt.get("id"),
-                    broker_status=receipt.get("status"),
-                    submitted_at=receipt.get("submitted_at") or _iso_now(),
-                )
-                submit_locks[-1] = submit_lock
-                order["session_submit_lock"] = submit_lock
-                submitted_orders.append(receipt)
-                order.update(
-                    {
-                        "status": receipt.get("status", "submitted"),
-                        "broker_order_id": receipt.get("id"),
-                        "client_order_id": order.get("client_order_id") or receipt.get("client_order_id"),
-                        "submitted_at": receipt.get("submitted_at"),
-                        "filled_qty": receipt.get("filled_qty"),
-                        "filled_avg_price": receipt.get("filled_avg_price"),
-                        "order_type": receipt.get("type") or order.get("order_type"),
-                        "time_in_force": receipt.get("time_in_force") or order.get("time_in_force"),
-                        "notional": receipt.get("notional") or order.get("notional"),
-                    }
-                )
-                if record is not None:
-                    self._update_journal_record(
-                        journal=journal,
-                        record=record,
-                        state=self._normalize_order_state(adapter.broker_id, receipt.get("status")),
-                        message=f"{symbol} routed to {adapter.label}.",
-                        broker_snapshot=receipt,
-                        submitted_payload=broker_payload,
-                    )
-            except Exception as exc:
-                logger.warning(f"{adapter.label} order submission failed for {symbol}: {exc}")
-                payload["broker_errors"].append(f"{symbol}: {exc}")
-                submit_lock = self._update_session_submit_lock(
-                    submit_lock,
-                    status="submit_unknown",
-                    error=str(exc),
-                )
-                submit_locks[-1] = submit_lock
-                order["session_submit_lock"] = submit_lock
-                if record is not None:
-                    self._update_journal_record(
-                        journal=journal,
-                        record=record,
-                        state="failed",
-                        message=f"{symbol} submission failed: {exc}",
-                    )
-
-        payload["submitted_orders"] = submitted_orders
-        payload["submit_locks"] = submit_locks
-        payload["submitted"] = bool(submitted_orders)
-        if submitted_orders:
-            payload["broker_status"] = "submitted"
-        elif any(str(order.get("status") or "").lower() == "canary_holdout" for order in payload.get("orders", [])):
-            payload["broker_status"] = "canary_shadow"
-        elif any(str(order.get("status") or "").lower() == "session_submit_locked" for order in payload.get("orders", [])):
-            payload["broker_status"] = "session_submit_locked"
-        elif any(str(order.get("status") or "").lower() == "suppressed_duplicate" for order in payload.get("orders", [])):
-            payload["broker_status"] = "suppressed"
-        else:
-            payload["broker_status"] = "submit_failed"
-        if not submitted_orders and not payload["warnings"] and not payload["broker_errors"]:
-            payload["warnings"].append(f"No {adapter.label} orders were submitted.")
-        self._refresh_journal_state(journal)
-        payload["cancelable_order_ids"] = [
-            record["order_id"]
-            for record in journal.get("records", [])
-            if self._can_cancel_state(record.get("current_state"))
-        ]
-        payload["retryable_order_ids"] = [
-            record["order_id"]
-            for record in journal.get("records", [])
-            if self._can_retry_state(record.get("current_state"))
-        ]
 
     def _build_broker_order_payload(
         self,

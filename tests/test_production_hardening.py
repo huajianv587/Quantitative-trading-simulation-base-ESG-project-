@@ -74,9 +74,9 @@ def test_quant_service_does_not_define_shadowed_duplicate_methods():
 
 def test_quant_execution_pipeline_hotspots_do_not_expand():
     budgets = {
-        "create_execution_plan": 275,
+        "create_execution_plan": 205,
         "_build_portfolio": 20,
-        "_submit_broker_orders": 315,
+        "_submit_broker_orders": 30,
     }
 
     over_budget = {
@@ -129,6 +129,14 @@ def test_quant_service_exposes_component_boundaries():
     assert service.components.paper_workflow.owner is service
     assert callable(service.components.execution.build_orders)
     assert callable(service.components.execution.build_broker_order_payload)
+    assert callable(service.components.execution.plan_order_limits)
+    assert callable(service.components.execution.submit_broker_orders)
+
+
+def test_quant_execution_submit_facade_remains_monkeypatchable():
+    source = Path("gateway/quant/service.py").read_text(encoding="utf-8")
+    assert "self._submit_broker_orders(" in source
+    assert "self.components.execution.submit_broker_orders(" in source
 
 
 def test_quant_portfolio_component_matches_service_facade():
