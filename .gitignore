@@ -1,5 +1,8 @@
 # 环境变量（含API Key，绝对不能上传）
 .env
+.env.*
+!.env.example
+!.env.quant_rl.example
 
 # Python
 __pycache__/
@@ -20,6 +23,8 @@ data/vectorstore/
 
 # 模型权重和训练 checkpoint
 model-serving/checkpoint/checkpoint-*/
+model-serving/checkpoint/
+model-serving/checkpoint/*/
 
 # 虚拟环境
 .venv/
@@ -41,6 +46,11 @@ node_modules/
 playwright-report/
 test-results/
 artifacts/
+paper_exports/
+runtime-*.log
+runtime-api*.log
+runtime-ui*.log
+playwright-provider*.log
 
 # Training data — do not push
 AAAtest/
@@ -59,5 +69,12 @@ model-serving/checkpoint/*/
 full_suite_checkpoints_*/
 full_suite_source_bundle_*/
 scipaper/
+delivery/
+paper_exports/
+outputs_*/
 tmp_e2e_server.*
 test_report.json
+*.zip
+*.tar
+*.tar.gz
+*.7z

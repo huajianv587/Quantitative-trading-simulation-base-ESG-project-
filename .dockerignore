@@ -1,5 +1,6 @@
-# 版本控制
+# Version control
 .git
+.git/
 .gitignore
 .github
 
@@ -24,22 +25,52 @@ env/
 *.swo
 *~
 
-# 测试和覆盖率
+# Tests and coverage
 .pytest_cache
 .coverage
 htmlcov/
+test-results/
+playwright-report/
 
-# 开发工具
+# Development tools
 .claude
 
-# 数据和日志（太大）
+# Large local data, model, and generated artifacts
 data/raw
+data/processed
+data/raw_big_doc_data
 data/vectorstore
+data/rag_eval/visualizations
 storage/
+model-serving/checkpoint/
+full_suite_checkpoints_*/
+full_suite_source_bundle_*/
+delivery/
+AAAtest/
+training/
+outputs_*/
+outputs_2_to_7/
+esg_reports/
+artifacts/
+scipaper/
+paper_exports/
+node_modules/
+dist/
+tmp_e2e_server.out
+tmp_e2e_server.*
+runtime-*.log
+runtime-api*.log
+runtime-ui*.log
+playwright-provider*.log
+*.zip
+*.tar
+*.tar.gz
+*.7z
 *.log
 *.tmp
+*.tmp.jsonl
 
-# 文档
+# Documentation
 docs/
 *.md
 

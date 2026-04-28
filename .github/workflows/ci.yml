@@ -1,4 +1,4 @@
-name: CI
+name: Fast CI
 
 on:
   push:
@@ -6,32 +6,59 @@ on:
   pull_request:
 
 jobs:
-  test-and-build:
+  fast:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      QUANT_RL_STORAGE_DIR: ${{ runner.temp }}/quant-rl
+      MARKET_DATA_PROVIDER: yfinance
+      SYNTHETIC_EVIDENCE_POLICY: block
+      SCHEDULER_EXECUTION_ENGINE: hybrid_paper_workflow
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          npm ci
 
-      - name: Install frontend dependencies
-        run: npm install
+      - name: Release boundary report
+        run: python scripts/release_boundary_report.py --strict-artifacts
 
-      - name: Run test suite
-        run: python -m pytest -q
+      - name: Syntax checks
+        run: |
+          python -m compileall gateway configs tests/test_production_hardening.py blueprint_runtime.py scripts/check_frontend_static_consistency.py scripts/release_boundary_report.py scripts/startup_import_budget.py -q
+          find frontend/js -name '*.js' -print0 | xargs -0 -n1 node --check
+          node --check e2e/site-click-audit.spec.js
+          node --check e2e/trading-agent-workbench.spec.js
+
+      - name: Fast stability tests
+        run: |
+          python -m pytest -q \
+            tests/test_production_hardening.py \
+            tests/test_auth_router.py \
+            tests/test_quant_storage.py \
+            tests/test_api_contracts.py
 
       - name: Build static frontend
         run: npm run build:static
+
+      - name: Static frontend consistency
+        run: |
+          find dist/app/js -name '*.js' -print0 | xargs -0 -n1 node --check
+          python scripts/check_frontend_static_consistency.py
+
+      - name: Startup import budget
+        run: python scripts/startup_import_budget.py

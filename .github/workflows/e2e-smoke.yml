@@ -1,0 +1,52 @@
+name: E2E Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "e2e/**"
+      - "gateway/**"
+      - "scripts/run_e2e_server.py"
+      - "scripts/build_static_frontend.mjs"
+      - "playwright.config.js"
+      - "package.json"
+      - "package-lock.json"
+
+jobs:
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      QUANT_RL_STORAGE_DIR: ${{ runner.temp }}/quant-rl
+      MARKET_DATA_PROVIDER: yfinance
+      SYNTHETIC_EVIDENCE_POLICY: block
+      SCHEDULER_EXECUTION_ENGINE: hybrid_paper_workflow
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Build and validate static frontend
+        run: |
+          npm run build:static
+          python scripts/check_frontend_static_consistency.py
+
+      - name: Run smoke scenarios
+        run: |
+          npx playwright test e2e/site-click-audit.spec.js --grep "site-wide"
+          npx playwright test e2e/trading-agent-workbench.spec.js --grep "cached snapshot"
