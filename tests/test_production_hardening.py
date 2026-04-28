@@ -16,6 +16,7 @@ from gateway.api.routers import auth
 from gateway.auth.repository import reset_auth_repository
 from gateway.config import settings
 from gateway.ops.security import auth_coverage_for_app
+from gateway.quant.models import ResearchSignal
 from gateway.quant.storage import QuantStorageGateway
 from analysis.factors.multi_factor_scoring import analyze_payload
 
@@ -74,7 +75,7 @@ def test_quant_service_does_not_define_shadowed_duplicate_methods():
 def test_quant_execution_pipeline_hotspots_do_not_expand():
     budgets = {
         "create_execution_plan": 275,
-        "_build_portfolio": 313,
+        "_build_portfolio": 20,
         "_submit_broker_orders": 315,
     }
 
@@ -122,11 +123,53 @@ def test_quant_service_exposes_component_boundaries():
     service = main_module.runtime.quant_system
 
     assert service.components.execution.owner is service
+    assert service.components.portfolio.owner is service
     assert service.components.market_data.owner is service
     assert service.components.dashboard.owner is service
     assert service.components.paper_workflow.owner is service
     assert callable(service.components.execution.build_orders)
     assert callable(service.components.execution.build_broker_order_payload)
+
+
+def test_quant_portfolio_component_matches_service_facade():
+    service = main_module.runtime.quant_system
+    signals = [
+        ResearchSignal(
+            symbol="AAPL",
+            company_name="Apple",
+            sector="Technology",
+            thesis="Quality compounder",
+            action="long",
+            confidence=0.82,
+            expected_return=0.04,
+            risk_score=35,
+            overall_score=76,
+            e_score=75,
+            s_score=74,
+            g_score=77,
+            decision_score=0.78,
+        ),
+        ResearchSignal(
+            symbol="MSFT",
+            company_name="Microsoft",
+            sector="Technology",
+            thesis="Durable cash flow",
+            action="long",
+            confidence=0.79,
+            expected_return=0.035,
+            risk_score=38,
+            overall_score=73,
+            e_score=72,
+            s_score=71,
+            g_score=75,
+            decision_score=0.74,
+        ),
+    ]
+
+    facade = service._build_portfolio(signals, 1_000_000, "SPY")
+    component = service.components.portfolio.build(signals, 1_000_000, "SPY")
+
+    assert facade.model_dump() == component.model_dump()
 
 
 def test_blueprint_outputs_are_marked_as_compatibility_adapters():
