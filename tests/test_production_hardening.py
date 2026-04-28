@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,39 @@ def _assert_no_raw_storage_get_set(source: str, key_name: str) -> None:
     for storage_name in ("localStorage", "sessionStorage", "window.localStorage", "window.sessionStorage"):
         for function_name in ("getItem", "setItem"):
             assert f"{storage_name}.{function_name}({key_name}" not in compact
+
+
+def _quant_service_duplicate_methods() -> dict[str, list[int]]:
+    module = ast.parse(Path("gateway/quant/service.py").read_text(encoding="utf-8"))
+    service_class = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "QuantSystemService"
+    )
+    methods: dict[str, list[int]] = {}
+    for node in service_class.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            methods.setdefault(node.name, []).append(node.lineno)
+    return {name: lines for name, lines in methods.items() if len(lines) > 1}
+
+
+def test_quant_service_duplicate_methods_are_explicitly_bounded():
+    known_shadowed_methods = {
+        "_build_alpaca_order_payload",
+        "_build_backtest",
+        "_build_execution_orders",
+        "_build_signals",
+        "_collect_execution_warnings",
+        "_safe_float",
+        "_submit_alpaca_paper_orders",
+        "get_execution_account",
+        "list_execution_orders",
+        "list_execution_positions",
+    }
+
+    duplicates = _quant_service_duplicate_methods()
+
+    assert set(duplicates) <= known_shadowed_methods
 
 
 def test_quant_service_exposes_component_boundaries():
