@@ -50,10 +50,41 @@ def _quant_service_duplicate_methods() -> dict[str, list[int]]:
     return {name: lines for name, lines in methods.items() if len(lines) > 1}
 
 
+def _quant_service_method_line_count(method_name: str) -> int:
+    module = ast.parse(Path("gateway/quant/service.py").read_text(encoding="utf-8"))
+    service_class = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "QuantSystemService"
+    )
+    method = next(
+        node
+        for node in service_class.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == method_name
+    )
+    return int((method.end_lineno or method.lineno) - method.lineno + 1)
+
+
 def test_quant_service_does_not_define_shadowed_duplicate_methods():
     duplicates = _quant_service_duplicate_methods()
 
     assert duplicates == {}
+
+
+def test_quant_execution_pipeline_hotspots_do_not_expand():
+    budgets = {
+        "create_execution_plan": 275,
+        "_build_portfolio": 313,
+        "_submit_broker_orders": 315,
+    }
+
+    over_budget = {
+        name: {"actual": _quant_service_method_line_count(name), "budget": budget}
+        for name, budget in budgets.items()
+        if _quant_service_method_line_count(name) > budget
+    }
+
+    assert over_budget == {}
 
 
 def test_production_fallback_handlers_are_observable():
