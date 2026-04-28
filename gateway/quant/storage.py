@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -16,7 +18,7 @@ logger = get_logger(__name__)
 def _ensure_writable_dir(preferred: Path, fallback_name: str) -> Path:
     try:
         preferred.mkdir(parents=True, exist_ok=True)
-        probe = preferred / ".write_probe"
+        probe = preferred / f".write_probe.{uuid.uuid4().hex}"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
         return preferred
@@ -70,6 +72,38 @@ class R2ArtifactStore:
             return f"r2://{self.bucket}/{key}"
         except Exception as exc:
             logger.warning(f"Failed to upload artifact to R2: {exc}")
+            return None
+
+    def upload_file(self, key: str, path: Path, *, content_type: str = "application/octet-stream") -> str | None:
+        if not self.configured():
+            return None
+
+        try:
+            import boto3
+        except Exception as exc:
+            logger.warning(f"R2 upload skipped because boto3 is unavailable: {exc}")
+            return None
+
+        try:
+            client = boto3.client(
+                "s3",
+                endpoint_url=self.endpoint,
+                aws_access_key_id=self.access_key_id,
+                aws_secret_access_key=self.secret_access_key,
+                region_name="auto",
+            )
+            with path.open("rb") as handle:
+                client.upload_fileobj(
+                    handle,
+                    self.bucket,
+                    key,
+                    ExtraArgs={"ContentType": content_type},
+                )
+            if self.public_base_url:
+                return f"{self.public_base_url.rstrip('/')}/{key}"
+            return f"r2://{self.bucket}/{key}"
+        except Exception as exc:
+            logger.warning(f"Failed to upload file artifact to R2: {exc}")
             return None
 
 
@@ -132,6 +166,36 @@ class SupabaseStorageArtifactStore:
             logger.warning(f"Failed to upload artifact to Supabase Storage: {exc}")
             return None
 
+    def upload_file(self, key: str, path: Path, *, content_type: str = "application/octet-stream") -> str | None:
+        if not self.configured():
+            return None
+
+        try:
+            client = self._get_client() if self._get_client is not None else None
+        except Exception as exc:
+            logger.warning(f"Supabase Storage upload skipped because client is unavailable: {exc}")
+            return None
+
+        if not self.available(client):
+            return None
+
+        object_key = f"{self.path_prefix}/{key}".strip("/") if self.path_prefix else key
+        try:
+            with path.open("rb") as handle:
+                data = handle.read()
+            client.storage.from_(self.bucket).upload(
+                object_key,
+                data,
+                {
+                    "content-type": content_type,
+                    "x-upsert": "true",
+                },
+            )
+            return self._build_artifact_uri(client, object_key)
+        except Exception as exc:
+            logger.warning(f"Failed to upload file artifact to Supabase Storage: {exc}")
+            return None
+
     def _normalize_key(self, key: str) -> str:
         normalized = str(key or "").strip().lstrip("/")
         if self.path_prefix and not normalized.startswith(f"{self.path_prefix}/"):
@@ -184,6 +248,7 @@ class SupabaseStorageArtifactStore:
 class QuantStorageGateway:
     def __init__(self, get_client: Callable[[], Any] | None = None) -> None:
         self._get_client = get_client
+        self._file_lock = threading.RLock()
         self.base_dir = _ensure_writable_dir(
             Path(__file__).resolve().parents[2] / "storage" / "quant",
             "quant-esg-artifacts",
@@ -235,7 +300,7 @@ class QuantStorageGateway:
         directory = _ensure_writable_dir(self.base_dir / record_type, f"quant-esg-artifacts/{record_type}")
 
         local_path = directory / f"{record_id}.json"
-        local_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._atomic_write_json(local_path, payload)
 
         artifact_key = f"quant/{record_type}/{record_id}.json"
         artifact_uri = self.r2_store.upload_json(artifact_key, payload)
@@ -254,6 +319,40 @@ class QuantStorageGateway:
             "artifact_uri": artifact_uri,
             "artifact_backend": artifact_backend,
             "supabase_mirrored": mirror_ok,
+        }
+
+    def _atomic_write_json(self, path: Path, payload: dict[str, Any]) -> None:
+        tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        data = json.dumps(payload, ensure_ascii=False, indent=2)
+        with self._file_lock:
+            try:
+                tmp_path.write_text(data, encoding="utf-8")
+                tmp_path.replace(path)
+            finally:
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except OSError as exc:
+                        logger.warning(f"Failed to remove temporary JSON file {tmp_path}: {exc}")
+
+    def upload_artifact_file(
+        self,
+        key: str,
+        path: Path,
+        *,
+        content_type: str = "application/octet-stream",
+    ) -> dict[str, Any]:
+        artifact_uri = self.r2_store.upload_file(key, path, content_type=content_type)
+        artifact_backend = "r2" if artifact_uri else "local"
+        if artifact_uri is None:
+            artifact_uri = self.supabase_storage_store.upload_file(key, path, content_type=content_type)
+            if artifact_uri is not None:
+                artifact_backend = "supabase_storage"
+        return {
+            "artifact_key": key,
+            "artifact_uri": artifact_uri,
+            "artifact_backend": artifact_backend,
+            "uploaded": artifact_uri is not None,
         }
 
     def load_record(self, record_type: str, record_id: str) -> dict[str, Any] | None:
@@ -291,8 +390,12 @@ class QuantStorageGateway:
             "action": action,
             "payload": payload,
         }
-        with local_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        try:
+            with self._file_lock, local_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            logger.warning(f"Failed to append audit event to {local_path}: {exc}")
+            raise
 
         return {
             "local_path": str(local_path),

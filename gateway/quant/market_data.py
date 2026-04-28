@@ -24,6 +24,9 @@ class MarketBarsResult:
     cache_hit: bool
     bars: pd.DataFrame
     cache_path: str
+    source_chain: list[str] | None = None
+    synthetic_used: bool = False
+    evidence_eligible: bool = True
 
 
 class MarketDataGateway:
@@ -82,6 +85,9 @@ class MarketDataGateway:
                 cache_hit=True,
                 bars=self._finalize_bars(cached.tail(limit)),
                 cache_path=str(self.cache_path),
+                source_chain=[str(cached["provider"].iloc[-1])],
+                synthetic_used="synthetic" in str(cached["provider"].iloc[-1]).lower(),
+                evidence_eligible="synthetic" not in str(cached["provider"].iloc[-1]).lower(),
             )
         preferred_provider = (provider_order_override or [None])[0]
         if (
@@ -98,6 +104,9 @@ class MarketDataGateway:
                 cache_hit=True,
                 bars=self._finalize_bars(cached.tail(limit)),
                 cache_path=str(self.cache_path),
+                source_chain=[cached_provider],
+                synthetic_used="synthetic" in cached_provider.lower(),
+                evidence_eligible="synthetic" not in cached_provider.lower(),
             )
 
         errors: list[str] = []
@@ -136,6 +145,9 @@ class MarketDataGateway:
                     cache_hit=False,
                     bars=self._finalize_bars(stored.tail(limit)),
                     cache_path=str(self.cache_path),
+                    source_chain=[provider],
+                    synthetic_used=False,
+                    evidence_eligible=True,
                 )
             except Exception as exc:
                 errors.append(f"{provider}: {exc}")
@@ -149,6 +161,9 @@ class MarketDataGateway:
                 cache_hit=True,
                 bars=self._finalize_bars(cached.tail(limit)),
                 cache_path=str(self.cache_path),
+                source_chain=[str(cached["provider"].iloc[-1])],
+                synthetic_used="synthetic" in str(cached["provider"].iloc[-1]).lower(),
+                evidence_eligible="synthetic" not in str(cached["provider"].iloc[-1]).lower(),
             )
 
         raise RuntimeError(f"Unable to load market data for {normalized_symbol}: {'; '.join(errors) or 'no provider available'}")
@@ -170,8 +185,14 @@ class MarketDataGateway:
         return path
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.cache_path)
+        connection = sqlite3.connect(self.cache_path, timeout=30)
         connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.execute("PRAGMA busy_timeout=30000")
+        except sqlite3.DatabaseError as exc:
+            logger.debug(f"SQLite cache pragma setup skipped: {exc}")
         return connection
 
     def _init_cache(self) -> None:
