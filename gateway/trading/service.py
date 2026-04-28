@@ -617,8 +617,14 @@ class TradingAgentService:
                 "protection_report": protection_report,
                 "factor_cards": payload.get("factors", []),
             }
-        except Exception:
-            return {"dataset_manifest": {}, "protection_report": {}, "factor_cards": []}
+        except Exception as exc:
+            logger.warning(f"[Trading] factor registry fallback engaged: {exc}")
+            return {
+                "dataset_manifest": {},
+                "protection_report": {},
+                "factor_cards": [],
+                "warnings": [f"factor_registry_unavailable:{exc}"],
+            }
 
     def strategy_eligibility(
         self,
@@ -763,7 +769,8 @@ class TradingAgentService:
     def dashboard_state(self, *, provider: str = "auto") -> dict[str, Any]:
         try:
             return self.quant_system.build_dashboard_state(provider=provider)
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"[Trading] dashboard fallback engaged: {exc}")
             return {
                 "generated_at": utc_now(),
                 "phase": "degraded",
@@ -774,6 +781,8 @@ class TradingAgentService:
                 "source_chain": ["alpaca", "twelvedata", "yfinance", "cache", "synthetic"],
                 "provider_status": {"available": False, "provider": "unavailable", "selected_provider": provider},
                 "degraded_from": None,
+                "degraded_reason": str(exc),
+                "warnings": [f"dashboard_state_unavailable:{exc}"],
                 "fallback_preview": {
                     "symbol": (self._active_watchlist_symbols()[0] if self._active_watchlist_symbols() else None),
                     "source": "unknown",

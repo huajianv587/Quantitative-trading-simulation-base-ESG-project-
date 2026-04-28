@@ -604,7 +604,8 @@ class QuantSystemService:
     def _safe_live_account_snapshot(self, mode: str = "paper") -> dict[str, Any] | None:
         try:
             account_payload = self.get_execution_account(broker="alpaca", mode=mode)
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Live account snapshot fallback engaged for {mode}: {exc}")
             return None
         if not account_payload.get("connected"):
             return None
@@ -613,7 +614,8 @@ class QuantSystemService:
     def _extract_position_symbols(self, mode: str = "paper") -> list[str]:
         try:
             positions_payload = self.list_execution_positions(broker="alpaca", mode=mode)
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Position symbol fallback engaged for {mode}: {exc}")
             return []
         symbols = []
         for position in positions_payload.get("positions", []):
@@ -5487,8 +5489,9 @@ class QuantSystemService:
             return {}
         try:
             return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        except Exception as exc:
+            logger.warning(f"Scheduler runtime state load failed for {path}: {exc}")
+            return {"load_error": str(exc), "path": path.as_posix()}
 
     @staticmethod
     def _record_session_date(record: dict[str, Any]) -> str:
@@ -8035,7 +8038,8 @@ class QuantSystemService:
     def _safe_get_clock(self, adapter) -> dict[str, Any] | None:
         try:
             clock = adapter.get_clock()
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"{adapter.label} market clock fallback engaged: {exc}")
             return None
         return self._summarize_broker_clock(adapter.broker_id, clock)
 
@@ -9043,8 +9047,9 @@ class QuantSystemService:
             return {}
         try:
             return json.loads(registry_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        except Exception as exc:
+            logger.warning(f"Model registry load failed for {registry_path}: {exc}")
+            return {"load_error": str(exc), "registry_path": registry_path.as_posix()}
 
     def _active_canary_percent(self) -> float | None:
         if not bool(getattr(settings, "EXECUTION_CANARY_ENABLED", True)):
@@ -9081,7 +9086,10 @@ class QuantSystemService:
             return payload
         try:
             heartbeat = json.loads(heartbeat_path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Scheduler heartbeat load failed for {heartbeat_path}: {exc}")
+            payload["load_error"] = str(exc)
+            payload["status"] = "unavailable"
             return payload
         last_seen = self._parse_any_timestamp(heartbeat.get("updated_at") or heartbeat.get("generated_at"))
         payload["last_seen"] = heartbeat.get("updated_at") or heartbeat.get("generated_at")
@@ -9427,13 +9435,15 @@ class QuantSystemService:
                 for line in lines:
                     if line.strip():
                         release_log_tail.append(json.loads(line))
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"Model release log load failed for {release_log_path}: {exc}")
                 release_log_tail = []
 
         return {
             "generated_at": _iso_now(),
             "registry_path": str(registry_path),
             "release_log_path": str(release_log_path),
+            "registry_load_error": current_registry.get("load_error"),
             "canary_enabled": bool(getattr(settings, "EXECUTION_CANARY_ENABLED", True)),
             "canary_release_percent": float(getattr(settings, "EXECUTION_CANARY_RELEASE_PERCENT", 0.15) or 0.15),
             "has_active_canary": self._active_canary_percent() is not None,

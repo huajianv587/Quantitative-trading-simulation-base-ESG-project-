@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import socket
 import sys
@@ -25,6 +26,8 @@ from gateway.quant.trading_calendar import TradingCalendarService
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 
 def now_local() -> datetime:
     return datetime.now(ZoneInfo(getattr(settings, "SCHEDULER_TIMEZONE", "America/New_York")))
@@ -42,8 +45,11 @@ def scheduler_session_status(service=None) -> dict[str, Any]:
     if service is not None and hasattr(service, "get_trading_calendar_status"):
         try:
             return dict(service.get_trading_calendar_status())
-        except Exception:
-            pass
+        except Exception as exc:
+            fallback = trading_calendar().status(at=now_local())
+            fallback["service_calendar_error"] = str(exc)
+            logger.warning("[Scheduler] service calendar status fallback engaged: %s", exc)
+            return fallback
     return trading_calendar().status(at=now_local())
 
 
@@ -92,11 +98,13 @@ def record_scheduler_event(service, *, stage: str, status: str, payload: dict[st
             event_payload.setdefault("calendar_id", session_status.get("calendar_id"))
             event_payload.setdefault("market_clock_status", session_status.get("market_clock_status"))
             event_payload.setdefault("next_session", session_status.get("next_session"))
-        except Exception:
+        except Exception as exc:
             event_payload["session_date"] = now_local().date().isoformat()
+            event_payload["session_status_error"] = str(exc)
     try:
         service.record_scheduler_event(stage=stage, status=status, payload=event_payload)
-    except Exception:
+    except Exception as exc:
+        logger.warning("[Scheduler] event audit write failed for %s/%s: %s", stage, status, exc)
         return
 
 
@@ -152,7 +160,8 @@ def load_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, An
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else dict(default or {})
-    except Exception:
+    except Exception as exc:
+        logger.warning("[Scheduler] failed to load JSON state %s: %s", path, exc)
         return dict(default or {})
 
 
@@ -192,8 +201,8 @@ def _bars_result_rows(service, bars_result: Any) -> list[dict[str, Any]]:
     if callable(converter):
         try:
             return converter(bars_result)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[Scheduler] service bars converter fallback engaged: %s", exc)
     if isinstance(bars_result, list):
         return [row for row in bars_result if isinstance(row, dict)]
     bars = getattr(bars_result, "bars", None)
@@ -226,8 +235,9 @@ def filter_fresh_symbols(
     if not previous_session and hasattr(service, "trading_calendar"):
         try:
             previous_session = str(service.trading_calendar.previous_session(session_date) or "")
-        except Exception:
+        except Exception as exc:
             previous_session = ""
+            status.setdefault("warnings", []).append(f"previous_session_fallback:{exc}")
     submit_clock_ok = bool(status.get("effective_market_open") or status.get("market_clock_status") == "open")
     if normalized_phase == "preopen":
         required_date = previous_session or session_date
@@ -308,8 +318,8 @@ def sync_end_time_for_today() -> str:
     if require_trading_session():
         try:
             return trading_calendar().sync_end_hhmm(now_local())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[Scheduler] sync end time fallback engaged: %s", exc)
     return str(getattr(settings, "SCHEDULER_SYNC_END_TIME", "16:10") or "16:10")
 
 

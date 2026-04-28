@@ -55,6 +55,37 @@ def test_quant_service_does_not_define_shadowed_duplicate_methods():
     assert duplicates == {}
 
 
+def test_production_fallback_handlers_are_observable():
+    target_paths = [
+        Path("gateway/quant/service.py"),
+        Path("gateway/trading/service.py"),
+        Path("scripts/quant_signal_scheduler.py"),
+        Path("gateway/scheduler/notifier.py"),
+    ]
+    violations: list[str] = []
+    for path in target_paths:
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(module):
+            if not isinstance(node, ast.ExceptHandler):
+                continue
+            is_broad = node.type is None or (isinstance(node.type, ast.Name) and node.type.id == "Exception")
+            if is_broad and any(isinstance(statement, ast.Pass) for statement in node.body):
+                violations.append(f"{path.as_posix()}:{node.lineno}")
+
+    quant_source = Path("gateway/quant/service.py").read_text(encoding="utf-8")
+    trading_source = Path("gateway/trading/service.py").read_text(encoding="utf-8")
+    scheduler_source = Path("scripts/quant_signal_scheduler.py").read_text(encoding="utf-8")
+    notifier_source = Path("gateway/scheduler/notifier.py").read_text(encoding="utf-8")
+
+    assert violations == []
+    assert "registry_load_error" in quant_source
+    assert "load_error" in quant_source
+    assert "dashboard_state_unavailable" in trading_source
+    assert "service_calendar_error" in scheduler_source
+    assert "[Scheduler] event audit write failed" in scheduler_source
+    assert "[Notifier]" in notifier_source and "logger.error" in notifier_source
+
+
 def test_quant_service_exposes_component_boundaries():
     service = main_module.runtime.quant_system
 
