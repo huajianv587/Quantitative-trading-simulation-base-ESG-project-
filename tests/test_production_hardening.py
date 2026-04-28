@@ -62,6 +62,8 @@ def test_quant_service_exposes_component_boundaries():
     assert service.components.market_data.owner is service
     assert service.components.dashboard.owner is service
     assert service.components.paper_workflow.owner is service
+    assert callable(service.components.execution.build_orders)
+    assert callable(service.components.execution.build_broker_order_payload)
 
 
 def test_blueprint_outputs_are_marked_as_compatibility_adapters():

@@ -58,7 +58,7 @@ from gateway.quant.paper_services import (
 )
 from gateway.quant.promotion_policy import evaluate_thresholds, load_promotion_policy
 from gateway.quant.provenance import SyntheticEvidenceGuard
-from gateway.quant.service_components import QuantServiceComponents
+from gateway.quant.service_components import QuantServiceComponents, build_alpaca_order_payload, coerce_float
 from gateway.scheduler.event_classifier_runtime import get_event_classifier_runtime
 from gateway.utils.email_delivery import send_email_message
 from gateway.quant.signals import MovingAverageCrossSignalEngine
@@ -7986,43 +7986,15 @@ class QuantSystemService:
         time_in_force: str,
         per_order_notional: float,
     ) -> list[ExecutionOrder]:
-        orders: list[ExecutionOrder] = []
-        for index, position in enumerate(positions):
-            ref_price = round(40 + position.weight * 500 + (_stable_seed(position.symbol) % 100) / 3, 2)
-            quantity = max(1, int((capital_base * position.weight) / ref_price))
-            tracking_id = self._build_order_tracking_id(execution_id, position.symbol, index)
-            execution_tactic = self._select_execution_tactic(position)
-            slippage_bps = position.estimated_slippage_bps or self._estimate_order_slippage_bps(position, capital_base)
-            impact_bps = position.estimated_impact_bps or self._estimate_order_impact_bps(position, capital_base)
-            fill_probability = position.expected_fill_probability or self._estimate_order_fill_probability(
-                position,
-                capital_base=capital_base,
-                slippage_bps=float(slippage_bps),
-                impact_bps=float(impact_bps),
-            )
-            orders.append(
-                ExecutionOrder(
-                    symbol=position.symbol,
-                    side="buy" if position.side == "long" else "sell",
-                    quantity=quantity,
-                    target_weight=round(position.weight, 4),
-                    limit_price=ref_price,
-                    venue=broker_id,
-                    rationale=position.thesis,
-                    order_type=order_type,
-                    time_in_force=time_in_force,
-                    notional=per_order_notional,
-                    client_order_id=tracking_id,
-                    status="validated",
-                    expected_fill_probability=round(float(fill_probability), 4),
-                    estimated_slippage_bps=round(float(slippage_bps), 2),
-                    estimated_impact_bps=round(float(impact_bps), 2),
-                    execution_tactic=execution_tactic,
-                    execution_delay_seconds=int(position.execution_delay_seconds or 0),
-                    canary_bucket=self._assign_canary_bucket(execution_id, position.symbol),
-                )
-            )
-        return orders
+        return self.components.execution.build_orders(
+            execution_id=execution_id,
+            broker_id=broker_id,
+            positions=positions,
+            capital_base=capital_base,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            per_order_notional=per_order_notional,
+        )
 
     def _submit_alpaca_paper_orders(
         self,
@@ -8034,18 +8006,8 @@ class QuantSystemService:
         normalized_tif: str,
         extended_hours: bool,
     ) -> None:
-        journal = payload.get("journal") or self._build_execution_journal(
-            execution_id=payload["execution_id"],
-            broker_id="alpaca",
-            mode=payload.get("mode", "paper"),
-            orders=payload.get("orders", []),
-            risk_summary=payload.get("warnings", []),
-        )
-        payload["journal"] = journal
-        self._submit_broker_orders(
-            adapter=self._resolve_broker("alpaca"),
+        self.components.execution.submit_alpaca_paper_orders(
             payload=payload,
-            journal=journal,
             capped_max_orders=capped_max_orders,
             capped_notional=capped_notional,
             normalized_order_type=normalized_order_type,
@@ -8055,12 +8017,7 @@ class QuantSystemService:
 
     @staticmethod
     def _safe_float(value: Any) -> float | None:
-        if value in {None, ""}:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
+        return coerce_float(value)
 
     def _collect_execution_warnings(
         self,
@@ -8069,25 +8026,11 @@ class QuantSystemService:
         market_clock: dict[str, Any] | None,
         submit_orders: bool,
     ) -> list[str]:
-        warnings: list[str] = []
-        cash = self._safe_float(account_snapshot.get("cash"))
-        equity = self._safe_float(account_snapshot.get("equity"))
-
-        if cash is not None and cash < 0:
-            warnings.append(
-                "Account cash is negative. Review existing paper positions and margin usage before increasing exposure."
-            )
-        if equity is not None and equity <= 0:
-            warnings.append("Account equity is non-positive. Broker execution should be paused until the paper account is reset.")
-        if account_snapshot.get("pattern_day_trader"):
-            warnings.append("Account is flagged as pattern_day_trader. Intraday turnover should stay controlled.")
-        if market_clock and market_clock.get("is_open") is False:
-            next_open = market_clock.get("next_open") or "the next session"
-            if submit_orders:
-                warnings.append(f"Market is currently closed. DAY paper orders may remain accepted until {next_open}.")
-            else:
-                warnings.append(f"Market is currently closed. The next session opens at {next_open}.")
-        return warnings
+        return self.components.execution.collect_warnings(
+            account_snapshot=account_snapshot,
+            market_clock=market_clock,
+            submit_orders=submit_orders,
+        )
 
     def _safe_get_clock(self, adapter) -> dict[str, Any] | None:
         try:
@@ -8539,25 +8482,17 @@ class QuantSystemService:
         normalized_tif: str,
         extended_hours: bool,
     ) -> dict[str, Any]:
-        if broker_id == "alpaca":
-            return self._build_alpaca_order_payload(
-                execution_id=execution_id,
-                order=order,
-                asset=asset,
-                index=index,
-                capped_notional=capped_notional,
-                normalized_order_type=normalized_order_type,
-                normalized_tif=normalized_tif,
-                extended_hours=extended_hours,
-            )
-        return {
-            "symbol": order.get("symbol"),
-            "side": order.get("side", "buy"),
-            "type": normalized_order_type,
-            "time_in_force": normalized_tif,
-            "qty": str(max(1, int(order.get("quantity") or 1))),
-            "client_order_id": order.get("client_order_id") or self._build_order_tracking_id(execution_id, str(order.get("symbol")), index),
-        }
+        return self.components.execution.build_broker_order_payload(
+            broker_id=broker_id,
+            execution_id=execution_id,
+            order=order,
+            asset=asset,
+            index=index,
+            capped_notional=capped_notional,
+            normalized_order_type=normalized_order_type,
+            normalized_tif=normalized_tif,
+            extended_hours=extended_hours,
+        )
 
     def _build_execution_journal(
         self,
@@ -9884,26 +9819,16 @@ class QuantSystemService:
         normalized_tif: str,
         extended_hours: bool,
     ) -> dict[str, Any]:
-        symbol = str(order.get("symbol", "")).upper().strip()
-        payload: dict[str, Any] = {
-            "symbol": symbol,
-            "side": order.get("side", "buy"),
-            "type": normalized_order_type,
-            "time_in_force": normalized_tif,
-            "client_order_id": order.get("client_order_id") or f"{execution_id}-{symbol.lower()}-{index + 1}",
-        }
-        fractionable = bool(asset.get("fractionable"))
-        if normalized_order_type == "market" and fractionable:
-            payload["notional"] = f"{capped_notional:.2f}"
-        else:
-            payload["qty"] = str(max(1, int(order.get("quantity") or 1)))
-
-        if normalized_order_type == "limit":
-            payload["limit_price"] = f"{float(order.get('limit_price') or 0):.2f}"
-            if extended_hours and normalized_tif == "day":
-                payload["extended_hours"] = True
-
-        return payload
+        return build_alpaca_order_payload(
+            execution_id=execution_id,
+            order=order,
+            asset=asset,
+            index=index,
+            capped_notional=capped_notional,
+            normalized_order_type=normalized_order_type,
+            normalized_tif=normalized_tif,
+            extended_hours=extended_hours,
+        )
 
     def _summarize_broker_account(self, broker_id: str, account: dict[str, Any]) -> dict[str, Any]:
         if broker_id == "alpaca":

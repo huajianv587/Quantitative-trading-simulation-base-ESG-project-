@@ -1,10 +1,59 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 from dataclasses import dataclass
 from typing import Any
 
 from gateway.config import settings
+from gateway.quant.models import ExecutionOrder, PortfolioPosition
+
+
+def _stable_seed(*parts: str) -> int:
+    raw = "::".join(parts).encode("utf-8")
+    return int(hashlib.sha256(raw).hexdigest()[:8], 16)
+
+
+def coerce_float(value: Any) -> float | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_alpaca_order_payload(
+    *,
+    execution_id: str,
+    order: dict[str, Any],
+    asset: dict[str, Any],
+    index: int,
+    capped_notional: float,
+    normalized_order_type: str,
+    normalized_tif: str,
+    extended_hours: bool,
+) -> dict[str, Any]:
+    symbol = str(order.get("symbol", "")).upper().strip()
+    payload: dict[str, Any] = {
+        "symbol": symbol,
+        "side": order.get("side", "buy"),
+        "type": normalized_order_type,
+        "time_in_force": normalized_tif,
+        "client_order_id": order.get("client_order_id") or f"{execution_id}-{symbol.lower()}-{index + 1}",
+    }
+    fractionable = bool(asset.get("fractionable"))
+    if normalized_order_type == "market" and fractionable:
+        payload["notional"] = f"{capped_notional:.2f}"
+    else:
+        payload["qty"] = str(max(1, int(order.get("quantity") or 1)))
+
+    if normalized_order_type == "limit":
+        payload["limit_price"] = f"{float(order.get('limit_price') or 0):.2f}"
+        if extended_hours and normalized_tif == "day":
+            payload["extended_hours"] = True
+
+    return payload
 
 
 @dataclass
@@ -106,6 +155,153 @@ class ExecutionComponent:
 
     def monitor(self, **kwargs) -> dict[str, Any]:
         return self.owner.build_execution_monitor(**kwargs)
+
+    @staticmethod
+    def safe_float(value: Any) -> float | None:
+        return coerce_float(value)
+
+    def collect_warnings(
+        self,
+        *,
+        account_snapshot: dict[str, Any],
+        market_clock: dict[str, Any] | None,
+        submit_orders: bool,
+    ) -> list[str]:
+        warnings: list[str] = []
+        cash = self.safe_float(account_snapshot.get("cash"))
+        equity = self.safe_float(account_snapshot.get("equity"))
+
+        if cash is not None and cash < 0:
+            warnings.append(
+                "Account cash is negative. Review existing paper positions and margin usage before increasing exposure."
+            )
+        if equity is not None and equity <= 0:
+            warnings.append("Account equity is non-positive. Broker execution should be paused until the paper account is reset.")
+        if account_snapshot.get("pattern_day_trader"):
+            warnings.append("Account is flagged as pattern_day_trader. Intraday turnover should stay controlled.")
+        if market_clock and market_clock.get("is_open") is False:
+            next_open = market_clock.get("next_open") or "the next session"
+            if submit_orders:
+                warnings.append(f"Market is currently closed. DAY paper orders may remain accepted until {next_open}.")
+            else:
+                warnings.append(f"Market is currently closed. The next session opens at {next_open}.")
+        return warnings
+
+    def build_orders(
+        self,
+        *,
+        execution_id: str,
+        broker_id: str,
+        positions: list[PortfolioPosition],
+        capital_base: float,
+        order_type: str,
+        time_in_force: str,
+        per_order_notional: float,
+    ) -> list[ExecutionOrder]:
+        orders: list[ExecutionOrder] = []
+        for index, position in enumerate(positions):
+            ref_price = round(40 + position.weight * 500 + (_stable_seed(position.symbol) % 100) / 3, 2)
+            quantity = max(1, int((capital_base * position.weight) / ref_price))
+            tracking_id = self.owner._build_order_tracking_id(execution_id, position.symbol, index)
+            execution_tactic = self.owner._select_execution_tactic(position)
+            slippage_bps = position.estimated_slippage_bps or self.owner._estimate_order_slippage_bps(position, capital_base)
+            impact_bps = position.estimated_impact_bps or self.owner._estimate_order_impact_bps(position, capital_base)
+            fill_probability = position.expected_fill_probability or self.owner._estimate_order_fill_probability(
+                position,
+                capital_base=capital_base,
+                slippage_bps=float(slippage_bps),
+                impact_bps=float(impact_bps),
+            )
+            orders.append(
+                ExecutionOrder(
+                    symbol=position.symbol,
+                    side="buy" if position.side == "long" else "sell",
+                    quantity=quantity,
+                    target_weight=round(position.weight, 4),
+                    limit_price=ref_price,
+                    venue=broker_id,
+                    rationale=position.thesis,
+                    order_type=order_type,
+                    time_in_force=time_in_force,
+                    notional=per_order_notional,
+                    client_order_id=tracking_id,
+                    status="validated",
+                    expected_fill_probability=round(float(fill_probability), 4),
+                    estimated_slippage_bps=round(float(slippage_bps), 2),
+                    estimated_impact_bps=round(float(impact_bps), 2),
+                    execution_tactic=execution_tactic,
+                    execution_delay_seconds=int(position.execution_delay_seconds or 0),
+                    canary_bucket=self.owner._assign_canary_bucket(execution_id, position.symbol),
+                )
+            )
+        return orders
+
+    def submit_alpaca_paper_orders(
+        self,
+        *,
+        payload: dict[str, Any],
+        capped_max_orders: int,
+        capped_notional: float,
+        normalized_order_type: str,
+        normalized_tif: str,
+        extended_hours: bool,
+    ) -> None:
+        journal = payload.get("journal") or self.owner._build_execution_journal(
+            execution_id=payload["execution_id"],
+            broker_id="alpaca",
+            mode=payload.get("mode", "paper"),
+            orders=payload.get("orders", []),
+            risk_summary=payload.get("warnings", []),
+        )
+        payload["journal"] = journal
+        self.owner._submit_broker_orders(
+            adapter=self.owner._resolve_broker("alpaca"),
+            payload=payload,
+            journal=journal,
+            capped_max_orders=capped_max_orders,
+            capped_notional=capped_notional,
+            normalized_order_type=normalized_order_type,
+            normalized_tif=normalized_tif,
+            extended_hours=extended_hours,
+        )
+
+    @staticmethod
+    def build_alpaca_order_payload(**kwargs) -> dict[str, Any]:
+        return build_alpaca_order_payload(**kwargs)
+
+    def build_broker_order_payload(
+        self,
+        *,
+        broker_id: str,
+        execution_id: str,
+        order: dict[str, Any],
+        asset: dict[str, Any],
+        index: int,
+        capped_notional: float,
+        normalized_order_type: str,
+        normalized_tif: str,
+        extended_hours: bool,
+    ) -> dict[str, Any]:
+        if broker_id == "alpaca":
+            return self.build_alpaca_order_payload(
+                execution_id=execution_id,
+                order=order,
+                asset=asset,
+                index=index,
+                capped_notional=capped_notional,
+                normalized_order_type=normalized_order_type,
+                normalized_tif=normalized_tif,
+                extended_hours=extended_hours,
+            )
+        return {
+            "symbol": order.get("symbol"),
+            "side": order.get("side", "buy"),
+            "type": normalized_order_type,
+            "time_in_force": normalized_tif,
+            "qty": str(max(1, int(order.get("quantity") or 1))),
+            "client_order_id": order.get("client_order_id")
+            or self.owner._build_order_tracking_id(execution_id, str(order.get("symbol")), index),
+        }
 
 
 @dataclass
