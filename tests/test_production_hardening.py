@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import gateway.main as main_module
+from scripts import release_boundary_report
 from gateway.api.factory import create_app
 from gateway.api.routers import auth
 from gateway.auth.repository import reset_auth_repository
@@ -188,10 +189,31 @@ def test_large_artifact_governance_patterns_are_configured():
         "delivery/",
         "outputs_*/",
         "paper_exports/",
+        "checkpoint_fromntu/",
+        "deploy/tc2/",
+        "config/paper5_*_stock_universe.csv",
+        "scripts/build_paper5_*.py",
+        "scripts/export_sci_paper_data*.py",
     ]:
         assert pattern in dockerignore or pattern in gitignore
     assert "data/raw_big_doc_data" in dockerignore
     assert ".env.example" in gitignore
+
+
+def test_release_boundary_classifies_excluded_research_artifacts():
+    expected = {
+        "checkpoint_fromntu/": "checkpoint_fromntu",
+        "deploy/tc2/README.md": "tc2_research_deploy",
+        "config/paper5_200_stock_universe.csv": "paper5_universe_exports",
+        "scripts/build_paper5_publication_package.py": "paper5_offline_scripts",
+        "scripts/export_sci_paper_data_v2.py": "paper5_offline_scripts",
+        "scripts/paper_cloud_acceptance.py": "paper5_offline_scripts",
+    }
+
+    for path, category in expected.items():
+        assert release_boundary_report.classify_excluded_research_artifact(path) == category
+
+    assert "excluded_research_artifacts" in release_boundary_report.build_report(None)
 
 
 def test_mutating_routes_are_scoped_except_public_auth():

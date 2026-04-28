@@ -20,6 +20,27 @@ CATEGORY_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("artifact-cleanup", ("model-serving/checkpoint/", "delivery/", "outputs_", "paper_exports/", ".dockerignore", ".gitignore")),
 )
 CHECKPOINT_PREFIX = "model-serving/checkpoint/"
+EXCLUDED_RESEARCH_ARTIFACTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("checkpoint_fromntu", ("checkpoint_fromntu/",)),
+    ("tc2_research_deploy", ("deploy/tc2/",)),
+    ("paper5_universe_exports", ("config/paper5_",)),
+    (
+        "paper5_offline_scripts",
+        (
+            "scripts/build_paper5_",
+            "scripts/download_esg_reports.py",
+            "scripts/export_latest_results.py",
+            "scripts/export_sci_paper_data",
+            "scripts/generate_sci_figures.py",
+            "scripts/generate_scipaper_bundle.py",
+            "scripts/generate_comprehensive_report.py",
+            "scripts/integrate_data_to_paper.py",
+            "scripts/optimize_paper_language.py",
+            "scripts/paper5_",
+            "scripts/paper_",
+        ),
+    ),
+)
 
 
 def _run_git(args: list[str]) -> str:
@@ -71,15 +92,27 @@ def _category_for(path: str) -> str:
     return "other"
 
 
+def classify_excluded_research_artifact(path: str) -> str | None:
+    normalized = path.replace("\\", "/").strip()
+    for category, prefixes in EXCLUDED_RESEARCH_ARTIFACTS:
+        if any(normalized == prefix.rstrip("/") or normalized.startswith(prefix) for prefix in prefixes):
+            return category
+    return None
+
+
 def build_report(base_ref: str | None) -> dict[str, object]:
     rows = _status_rows(base_ref)
     grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
     checkpoint_deletions: list[str] = []
+    excluded_research_artifacts: list[dict[str, str]] = []
     for row in rows:
         path = row["path"]
         status = row["status"]
         category = _category_for(path)
         grouped[category].append(row)
+        research_category = classify_excluded_research_artifact(path)
+        if research_category is not None:
+            excluded_research_artifacts.append({**row, "research_category": research_category})
         if path.startswith(CHECKPOINT_PREFIX) and "D" in status:
             checkpoint_deletions.append(path)
 
@@ -87,6 +120,7 @@ def build_report(base_ref: str | None) -> dict[str, object]:
         "base_ref": base_ref,
         "changed_file_count": len(rows),
         "groups": {category: items for category, items in sorted(grouped.items())},
+        "excluded_research_artifacts": sorted(excluded_research_artifacts, key=lambda item: item["path"]),
         "manual_review_required": {
             "checkpoint_deletions": checkpoint_deletions,
             "required": bool(checkpoint_deletions),
