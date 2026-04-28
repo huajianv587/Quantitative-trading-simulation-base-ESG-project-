@@ -49,23 +49,10 @@ def _quant_service_duplicate_methods() -> dict[str, list[int]]:
     return {name: lines for name, lines in methods.items() if len(lines) > 1}
 
 
-def test_quant_service_duplicate_methods_are_explicitly_bounded():
-    known_shadowed_methods = {
-        "_build_alpaca_order_payload",
-        "_build_backtest",
-        "_build_execution_orders",
-        "_build_signals",
-        "_collect_execution_warnings",
-        "_safe_float",
-        "_submit_alpaca_paper_orders",
-        "get_execution_account",
-        "list_execution_orders",
-        "list_execution_positions",
-    }
-
+def test_quant_service_does_not_define_shadowed_duplicate_methods():
     duplicates = _quant_service_duplicate_methods()
 
-    assert set(duplicates) <= known_shadowed_methods
+    assert duplicates == {}
 
 
 def test_quant_service_exposes_component_boundaries():
