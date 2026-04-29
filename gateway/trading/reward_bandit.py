@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from gateway.config import settings
 from gateway.quant.trading_calendar import TradingCalendarService
 
 
@@ -71,10 +72,47 @@ def horizon_key(horizon: int) -> str:
     return f"n{int(horizon)}"
 
 
-def build_horizon_states(entry_at: str, horizons: tuple[int, ...] = DEFAULT_HORIZONS) -> dict[str, dict[str, Any]]:
+def configured_horizons() -> tuple[int, ...]:
+    raw = str(getattr(settings, "RLVR_HORIZONS", "") or "").strip()
+    values: list[int] = []
+    for token in raw.split(","):
+        try:
+            horizon = int(token.strip())
+        except ValueError:
+            continue
+        if horizon > 0:
+            values.append(horizon)
+    return tuple(dict.fromkeys(values)) or DEFAULT_HORIZONS
+
+
+def configured_horizon_weights(horizons: tuple[int, ...] | None = None) -> dict[str, float]:
+    selected = horizons or configured_horizons()
+    raw_weights = [
+        token.strip()
+        for token in str(getattr(settings, "RLVR_WEIGHTS", "") or "").split(",")
+        if token.strip()
+    ]
+    weights: dict[str, float] = {}
+    for index, horizon in enumerate(selected):
+        weight = HORIZON_WEIGHTS.get(horizon_key(horizon))
+        if index < len(raw_weights):
+            try:
+                weight = float(raw_weights[index])
+            except ValueError:
+                pass
+        weights[horizon_key(horizon)] = float(weight if weight is not None else 1.0)
+    total = sum(max(value, 0.0) for value in weights.values())
+    if total <= 0:
+        even = 1.0 / max(len(selected), 1)
+        return {horizon_key(horizon): even for horizon in selected}
+    return {key: max(value, 0.0) / total for key, value in weights.items()}
+
+
+def build_horizon_states(entry_at: str, horizons: tuple[int, ...] | None = None) -> dict[str, dict[str, Any]]:
     entry_date = parse_date(entry_at) or datetime.now(timezone.utc).date()
     calendar = TradingCalendarService()
     entry_session = entry_date.isoformat() if calendar.is_session(entry_date) else calendar.next_session(entry_date) or entry_date.isoformat()
+    selected_horizons = horizons or configured_horizons()
     return {
         horizon_key(horizon): {
             "horizon": int(horizon),
@@ -92,7 +130,7 @@ def build_horizon_states(entry_at: str, horizons: tuple[int, ...] = DEFAULT_HORI
             "score_components": {},
             "settled_at": None,
         }
-        for horizon in horizons
+        for horizon in selected_horizons
     }
 
 
@@ -122,9 +160,10 @@ def compute_reward_score(
 
 
 def weighted_score(settlements: dict[str, Any]) -> float | None:
+    weights = configured_horizon_weights()
     total = 0.0
     weight_sum = 0.0
-    for key, weight in HORIZON_WEIGHTS.items():
+    for key, weight in weights.items():
         item = settlements.get(key) or {}
         score = item.get("score")
         if score is None:
@@ -137,9 +176,41 @@ def weighted_score(settlements: dict[str, Any]) -> float | None:
 
 
 def final_weighted_score(settlements: dict[str, Any]) -> float | None:
-    if any((settlements.get(key) or {}).get("score") is None for key in HORIZON_WEIGHTS):
+    weights = configured_horizon_weights()
+    if any((settlements.get(key) or {}).get("score") is None for key in weights):
         return None
     return weighted_score(settlements)
+
+
+def rlvr_payload(
+    settlements: dict[str, Any],
+    *,
+    bandit_updated_at: str | None = None,
+) -> dict[str, Any]:
+    weights = configured_horizon_weights()
+    horizons = {
+        key: {
+            **dict(settlements.get(key) or {}),
+            "weight": weights.get(key),
+        }
+        for key in weights
+    }
+    return {
+        "metric": "rlvr",
+        "horizons": horizons,
+        "weights": weights,
+        "partial_score": weighted_score(settlements),
+        "final_score": final_weighted_score(settlements),
+        "bandit_updated_at": bandit_updated_at,
+    }
+
+
+def attach_rlvr(payload: dict[str, Any]) -> dict[str, Any]:
+    settlements = dict(payload.get("settlements") or {})
+    existing = dict(payload.get("rlvr") or {})
+    bandit_updated_at = payload.get("bandit_updated_at") or existing.get("bandit_updated_at")
+    payload["rlvr"] = rlvr_payload(settlements, bandit_updated_at=bandit_updated_at)
+    return payload
 
 
 def candidate_feature_vector(candidate: dict[str, Any]) -> list[float]:
@@ -270,7 +341,7 @@ def settle_candidate_with_bars(candidate: dict[str, Any], bars: list[dict[str, A
     esg_score = features.get("overall_score") or features.get("esg_score")
     changed = False
 
-    for key, weight in HORIZON_WEIGHTS.items():
+    for key, weight in configured_horizon_weights().items():
         item = dict(settlements.get(key) or {"horizon": int(key[1:]), "status": "pending"})
         if item.get("status") == "settled":
             continue
@@ -335,4 +406,5 @@ def settle_candidate_with_bars(candidate: dict[str, Any], bars: list[dict[str, A
         payload["status"] = "settled"
     elif any((settlements.get(key) or {}).get("status") == "settled" for key in settlements):
         payload["status"] = "partially_settled"
+    attach_rlvr(payload)
     return payload, changed

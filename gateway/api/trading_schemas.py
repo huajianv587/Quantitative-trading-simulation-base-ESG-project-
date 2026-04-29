@@ -53,6 +53,7 @@ class PaperRewardCandidateRunRequest(BaseModel):
     per_order_notional: float | None = None
     benchmark: str = "SPY"
     allow_duplicates: bool = False
+    submit_orders: bool | None = None
 
 
 class PaperRewardSettleRequest(BaseModel):

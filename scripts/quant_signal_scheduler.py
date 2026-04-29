@@ -314,6 +314,96 @@ def hybrid_workflow_time() -> str:
     return str(getattr(settings, "SCHEDULER_HYBRID_WORKFLOW_TIME", "09:35") or "09:35")
 
 
+def scheduler_owner() -> str:
+    return str(getattr(settings, "SCHEDULER_OWNER", "quant-scheduler") or "quant-scheduler").strip()
+
+
+def stage_idempotency_key(stage: str, session_date: str, run_id: str | None = None) -> str:
+    suffix = f":{run_id}" if run_id else ""
+    return f"{session_date}:{stage}{suffix}"
+
+
+def scheduler_auto_submit_enabled() -> bool:
+    return bool(getattr(settings, "SCHEDULER_AUTO_SUBMIT", False))
+
+
+def broker_paper_readiness(service, *, broker: str | None = None) -> dict[str, Any]:
+    broker_id = broker or getattr(settings, "QUANT_BROKER_DEFAULT", "alpaca")
+    if service is None or not hasattr(service, "get_execution_account"):
+        return {
+            "ready": True,
+            "connected": None,
+            "broker": broker_id,
+            "reason": "broker_readiness_probe_unavailable",
+        }
+    try:
+        account = service.get_execution_account(broker=broker_id, mode="paper")
+    except Exception as exc:
+        return {
+            "ready": False,
+            "connected": False,
+            "broker": broker_id,
+            "reason": "broker_readiness_probe_failed",
+            "error": str(exc),
+        }
+    connected = bool(account.get("connected"))
+    paper_ready = bool(account.get("paper_ready", connected))
+    block_reason = account.get("block_reason")
+    return {
+        "ready": bool(connected and paper_ready and not block_reason),
+        "connected": connected,
+        "paper_ready": paper_ready,
+        "broker": broker_id,
+        "block_reason": block_reason,
+        "warnings": account.get("warnings", []),
+        "market_clock": account.get("market_clock", {}),
+        "account_mode": account.get("account_mode") or account.get("mode"),
+    }
+
+
+def market_clock_submit_ready(session_status: dict[str, Any], broker_readiness: dict[str, Any]) -> bool:
+    if not bool(getattr(settings, "SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT", True)):
+        return True
+    if bool(session_status.get("effective_market_open")) or str(session_status.get("market_clock_status") or "").lower() == "open":
+        return True
+    broker_clock = dict(broker_readiness.get("market_clock") or {})
+    return broker_clock.get("is_open") is True
+
+
+def build_paper_submit_gate(
+    service,
+    state: dict[str, Any],
+    *,
+    session_status: dict[str, Any],
+    freshness: dict[str, Any],
+) -> dict[str, Any]:
+    breaker = paper_submit_circuit_breaker(state)
+    readiness = broker_paper_readiness(service)
+    checks = {
+        "auto_submit_enabled": scheduler_auto_submit_enabled(),
+        "paper_submit_circuit_breaker_clear": not bool(breaker.get("enabled")),
+        "trading_session_ready": (not require_trading_session()) or bool(session_status.get("is_session")),
+        "market_clock_ready": market_clock_submit_ready(session_status, readiness),
+        "broker_paper_ready": bool(readiness.get("ready")),
+        "market_data_fresh": bool(freshness.get("symbols")),
+    }
+    blockers = [key for key, ok in checks.items() if not ok]
+    return {
+        "submit_orders": not blockers,
+        "owner": scheduler_owner(),
+        "checks": checks,
+        "blockers": blockers,
+        "paper_submit_circuit_breaker": breaker,
+        "broker_paper": readiness,
+        "freshness": {
+            "enabled": freshness.get("enabled"),
+            "phase": freshness.get("phase"),
+            "required_date": freshness.get("required_date"),
+            "excluded_count": len(freshness.get("excluded_symbols") or []),
+        },
+    }
+
+
 def sync_end_time_for_today() -> str:
     if require_trading_session():
         try:
@@ -669,6 +759,7 @@ def update_heartbeat(state: dict[str, Any], *, stage: str, message: str) -> None
         "status": "running",
         "stage": stage,
         "message": message,
+        "scheduler_owner": scheduler_owner(),
         "execution_engine": scheduler_execution_engine(),
         "hybrid_workflow_enabled": hybrid_workflow_enabled(),
         "unattended_paper_mode": bool(getattr(settings, "UNATTENDED_PAPER_MODE", False)),
@@ -743,6 +834,7 @@ def run_preopen_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
     snapshot = {
         "trade_date": trade_date,
         "session_date": trade_date,
+        "idempotency_key": stage_idempotency_key("preopen", trade_date, str(research.get("research_id") or "")),
         "calendar_id": session_status.get("calendar_id"),
         "market_clock_status": session_status.get("market_clock_status"),
         "next_session": session_status.get("next_session"),
@@ -1029,6 +1121,7 @@ def run_execution_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
     snapshot = {
         "trade_date": trade_date,
         "session_date": trade_date,
+        "idempotency_key": stage_idempotency_key("execution", trade_date, str(payload.get("execution_id") or "")),
         "calendar_id": session_status.get("calendar_id"),
         "market_clock_status": session_status.get("market_clock_status"),
         "next_session": session_status.get("next_session"),
@@ -1135,8 +1228,13 @@ def run_hybrid_workflow_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
         return result
     max_orders = max_execution_symbols()
     per_order_notional = scheduler_per_order_notional()
-    breaker = paper_submit_circuit_breaker(state)
-    submit_orders = not bool(breaker.get("enabled"))
+    submit_gate = build_paper_submit_gate(
+        service,
+        state,
+        session_status=session_status,
+        freshness=freshness,
+    )
+    submit_orders = bool(submit_gate.get("submit_orders"))
     payload = service.run_hybrid_paper_strategy_workflow(
         universe_symbols=universe,
         benchmark=service.default_benchmark,
@@ -1152,15 +1250,18 @@ def run_hybrid_workflow_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
     snapshot = {
         "trade_date": trade_date,
         "session_date": trade_date,
+        "idempotency_key": stage_idempotency_key("hybrid_workflow", trade_date, str(payload.get("workflow_id") or "")),
         "calendar_id": session_status.get("calendar_id"),
         "market_clock_status": session_status.get("market_clock_status"),
         "next_session": session_status.get("next_session"),
         "ran_at": now_utc().isoformat(),
         "execution_engine": "hybrid_paper_workflow",
+        "scheduler_owner": scheduler_owner(),
         "universe": universe,
         "excluded_symbols": freshness["excluded_symbols"],
         "submit_orders_requested": submit_orders,
-        "paper_submit_circuit_breaker": breaker,
+        "submit_gate": submit_gate,
+        "paper_submit_circuit_breaker": submit_gate.get("paper_submit_circuit_breaker", {}),
         "workflow_id": payload.get("workflow_id"),
         "workflow_status": payload.get("status"),
         "execution_id": payload.get("execution_id"),
@@ -1372,10 +1473,19 @@ def run_preflight_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
 def run_recovery_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
     started_at = time.perf_counter()
     session_status = scheduler_session_status(service)
-    trade_date = str(session_status.get("session_date") or now_local().date().isoformat())
+    existing_hybrid = state.get("hybrid_workflow", {}) or {}
+    existing_execution = state.get("execution", {}) or {}
+    trade_date = str(
+        existing_hybrid.get("session_date")
+        or existing_hybrid.get("trade_date")
+        or existing_execution.get("session_date")
+        or existing_execution.get("trade_date")
+        or session_status.get("session_date")
+        or now_local().date().isoformat()
+    )
     execution_id = str(
-        (state.get("hybrid_workflow", {}) or {}).get("execution_id")
-        or (state.get("execution", {}) or {}).get("execution_id")
+        existing_hybrid.get("execution_id")
+        or existing_execution.get("execution_id")
         or ""
     ).strip()
     required = {
@@ -1396,6 +1506,7 @@ def run_recovery_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
             "stage": "recovery",
             "timestamp": now_local().isoformat(),
             "session_date": trade_date,
+            "idempotency_key": stage_idempotency_key("recovery", trade_date, execution_id),
             "execution_id": execution_id,
             "skipped": True,
             "reason": "post_sync_automation_already_complete",
@@ -1412,6 +1523,7 @@ def run_recovery_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
             "stage": "recovery",
             "timestamp": now_local().isoformat(),
             "session_date": trade_date,
+            "idempotency_key": stage_idempotency_key("recovery", trade_date, execution_id),
             "execution_id": execution_id,
             "recovered": sorted(required.intersection(set(automation.get("ran") or []))),
             "automation": automation,
@@ -1473,6 +1585,7 @@ def run_sync_cycle(service, state: dict[str, Any]) -> dict[str, Any]:
     snapshot = {
         "trade_date": trade_date,
         "session_date": trade_date,
+        "idempotency_key": stage_idempotency_key("sync", trade_date, execution_id),
         "calendar_id": session_status.get("calendar_id"),
         "market_clock_status": session_status.get("market_clock_status"),
         "next_session": session_status.get("next_session"),
@@ -1585,8 +1698,52 @@ def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def startup_recovery_required(state: dict[str, Any]) -> bool:
+    trade_date = str(
+        (state.get("hybrid_workflow", {}) or {}).get("session_date")
+        or (state.get("hybrid_workflow", {}) or {}).get("trade_date")
+        or (state.get("execution", {}) or {}).get("session_date")
+        or (state.get("execution", {}) or {}).get("trade_date")
+        or state.get("session_date")
+        or state.get("trade_date")
+        or ""
+    ).strip()
+    if not trade_date:
+        return False
+    execution_id = str(
+        (state.get("hybrid_workflow", {}) or {}).get("execution_id")
+        or (state.get("execution", {}) or {}).get("execution_id")
+        or ""
+    ).strip()
+    required = {
+        "outcome_settlement",
+        "alpaca_paper_reconcile",
+        "paper_performance_backfill",
+        "promotion_evaluation",
+        "digest_retry",
+        "storage_backup",
+        "observability_evaluation",
+    }
+    if execution_id:
+        required.add("paper_performance_snapshot")
+    already_ran = set(((state.get("automation", {}) or {}).get(trade_date, {}) or {}).get("ran") or [])
+    return not required.issubset(already_ran)
+
+
+def run_startup_recovery_cycle(service, state: dict[str, Any]) -> dict[str, Any] | None:
+    if not bool(getattr(settings, "AUTO_RECOVERY_ENABLED", True)):
+        return None
+    if not startup_recovery_required(state):
+        return None
+    return run_recovery_cycle(service, state)
+
+
 def run_loop(service, poll_seconds: int) -> None:
     state = load_json(scheduler_state_path(), default={"trade_date": ""})
+    startup_recovery = run_startup_recovery_cycle(service, state)
+    if startup_recovery is not None:
+        emit(startup_recovery)
+        state = load_json(scheduler_state_path(), default=state)
     last_sync_at = 0.0
     last_preflight_at = 0.0
     while True:

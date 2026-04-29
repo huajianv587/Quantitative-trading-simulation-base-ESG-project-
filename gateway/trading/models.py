@@ -368,7 +368,7 @@ class OrderApprovalLedger(BaseModel):
 
 class PaperRewardHorizon(BaseModel):
     horizon: int
-    status: Literal["pending", "settled", "unavailable"] = "pending"
+    status: Literal["pending", "settled", "unavailable", "data_missing"] = "pending"
     due_date: str | None = None
     close_price: float | None = None
     close_date: str | None = None
@@ -396,6 +396,7 @@ class PaperRewardCandidate(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     features: dict[str, Any] = Field(default_factory=dict)
     settlements: dict[str, PaperRewardHorizon | dict[str, Any]] = Field(default_factory=dict)
+    rlvr: dict[str, Any] = Field(default_factory=dict)
     partial_score: float | None = None
     score: float | None = None
     bandit_score: float | None = None

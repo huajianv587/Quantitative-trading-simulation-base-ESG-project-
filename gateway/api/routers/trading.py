@@ -141,6 +141,7 @@ def trading_reward_candidates_run(req: PaperRewardCandidateRunRequest) -> dict[s
             per_order_notional=req.per_order_notional,
             benchmark=req.benchmark,
             allow_duplicates=req.allow_duplicates,
+            submit_orders=req.submit_orders,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

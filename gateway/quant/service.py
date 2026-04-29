@@ -135,6 +135,7 @@ class QuantSystemService:
         self.dashboard_component = self.components.dashboard
         self.execution_component = self.components.execution
         self.paper_workflow_component = self.components.paper_workflow
+        self.observability_component = self.components.observability
         self.default_capital = float(getattr(settings, "QUANT_DEFAULT_CAPITAL", 1_000_000))
         self.default_benchmark = getattr(settings, "QUANT_DEFAULT_BENCHMARK", "SPY")
         self.default_universe_name = getattr(settings, "QUANT_DEFAULT_UNIVERSE", "ESG_US_LARGE_CAP")
@@ -2901,6 +2902,42 @@ class QuantSystemService:
         return self.storage.load_record("workflow_runs", workflow_id)
 
     def run_hybrid_paper_strategy_workflow(
+        self,
+        universe_symbols: list[str] | None = None,
+        benchmark: str | None = None,
+        capital_base: float | None = None,
+        strategy_mode: str = "hybrid_p1_p2_rl",
+        rl_algorithm: str = "sac",
+        rl_action_type: str = "continuous",
+        rl_dataset_path: str | None = None,
+        rl_checkpoint_path: str | None = None,
+        submit_orders: bool = True,
+        mode: str = "paper",
+        broker: str | None = None,
+        max_orders: int = 2,
+        per_order_notional: float | None = 1.0,
+        allow_synthetic_execution: bool = False,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        return self.components.paper_workflow.run_strategy_workflow(
+            universe_symbols=universe_symbols,
+            benchmark=benchmark,
+            capital_base=capital_base,
+            strategy_mode=strategy_mode,
+            rl_algorithm=rl_algorithm,
+            rl_action_type=rl_action_type,
+            rl_dataset_path=rl_dataset_path,
+            rl_checkpoint_path=rl_checkpoint_path,
+            submit_orders=submit_orders,
+            mode=mode,
+            broker=broker,
+            max_orders=max_orders,
+            per_order_notional=per_order_notional,
+            allow_synthetic_execution=allow_synthetic_execution,
+            force_refresh=force_refresh,
+        )
+
+    def _run_hybrid_paper_strategy_workflow_impl(
         self,
         universe_symbols: list[str] | None = None,
         benchmark: str | None = None,
@@ -8826,7 +8863,13 @@ class QuantSystemService:
             },
         }
 
+    def build_runtime_diagnostics(self, *, runtime_state: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.components.observability.runtime_diagnostics(runtime_state=runtime_state)
+
     def build_healthcheck(self) -> dict[str, Any]:
+        return self.components.observability.healthcheck()
+
+    def _build_healthcheck_impl(self) -> dict[str, Any]:
         heartbeat = self._scheduler_heartbeat_status()
         llm_modes = self._llm_mode_status()
         remote_llm = llm_modes["hybrid_remote"]["meta"]
@@ -8974,6 +9017,9 @@ class QuantSystemService:
         }
 
     def build_model_registry(self) -> dict[str, Any]:
+        return self.components.observability.model_registry()
+
+    def _build_model_registry_impl(self) -> dict[str, Any]:
         event_classifier_status = get_event_classifier_runtime().status()
         registry_path = self._resolve_runtime_path(
             getattr(settings, "MODEL_REGISTRY_PATH", "storage/quant/model_registry/current_runtime.json"),
@@ -9179,6 +9225,14 @@ class QuantSystemService:
         }
 
     def build_ops_alerts(
+        self,
+        *,
+        monitor: dict[str, Any] | None = None,
+        metrics: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.components.observability.ops_alerts(monitor=monitor, metrics=metrics)
+
+    def _build_ops_alerts_impl(
         self,
         *,
         monitor: dict[str, Any] | None = None,

@@ -88,6 +88,24 @@ def test_quant_execution_pipeline_hotspots_do_not_expand():
     assert over_budget == {}
 
 
+def test_quant_observability_public_methods_stay_thin_facades():
+    budgets = {
+        "run_hybrid_paper_strategy_workflow": 40,
+        "build_runtime_diagnostics": 8,
+        "build_healthcheck": 8,
+        "build_model_registry": 8,
+        "build_ops_alerts": 12,
+    }
+
+    over_budget = {
+        name: {"actual": _quant_service_method_line_count(name), "budget": budget}
+        for name, budget in budgets.items()
+        if _quant_service_method_line_count(name) > budget
+    }
+
+    assert over_budget == {}
+
+
 def test_production_fallback_handlers_are_observable():
     target_paths = [
         Path("gateway/quant/service.py"),
@@ -127,10 +145,24 @@ def test_quant_service_exposes_component_boundaries():
     assert service.components.market_data.owner is service
     assert service.components.dashboard.owner is service
     assert service.components.paper_workflow.owner is service
+    assert service.components.observability.owner is service
     assert callable(service.components.execution.build_orders)
     assert callable(service.components.execution.build_broker_order_payload)
     assert callable(service.components.execution.plan_order_limits)
     assert callable(service.components.execution.submit_broker_orders)
+    assert callable(service.components.observability.healthcheck)
+    assert callable(service.components.observability.runtime_diagnostics)
+
+
+def test_public_quant_facades_route_to_internal_components():
+    source = Path("gateway/quant/service.py").read_text(encoding="utf-8")
+    components_source = Path("gateway/quant/service_components.py").read_text(encoding="utf-8")
+
+    assert "return self.components.paper_workflow.run_strategy_workflow(" in source
+    assert "return self.components.observability.healthcheck()" in source
+    assert "return self.components.observability.model_registry()" in source
+    assert "return self.components.observability.ops_alerts(" in source
+    assert "return self.owner._run_hybrid_paper_strategy_workflow_impl(**kwargs)" in components_source
 
 
 def test_quant_execution_submit_facade_remains_monkeypatchable():
@@ -298,6 +330,20 @@ def test_release_boundary_classifies_excluded_research_artifacts():
     assert "excluded_research_artifacts" in release_boundary_report.build_report(None)
 
 
+def test_release_boundary_classifies_generated_artifacts():
+    expected = {
+        "storage/quant/runtime_state.json": "runtime_output",
+        "model-serving/checkpoint/adapter_model.safetensors": "model_checkpoint",
+        "esg_reports/AAPL/report.pdf": "large_source_data",
+        "runtime-api.err.log": "log",
+        "local-cache.sqlite3": "local_database",
+        "bundle.tar.gz": "archive",
+    }
+
+    for path, category in expected.items():
+        assert release_boundary_report.classify_generated_artifact(path) == category
+
+
 def test_mutating_routes_are_scoped_except_public_auth():
     coverage = auth_coverage_for_app(main_module.app)
 
@@ -409,6 +455,18 @@ def test_repo_hygiene_release_boundary_excludes_generated_artifacts():
     ci_source = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert violations == []
     assert "scripts/release_boundary_report.py --strict-artifacts" in ci_source
+
+
+def test_ci_workflows_are_split_for_failure_locality():
+    integration = Path(".github/workflows/integration-ci.yml").read_text(encoding="utf-8")
+    nightly = Path(".github/workflows/nightly-deep.yml").read_text(encoding="utf-8")
+
+    for job_name in ("api-contracts:", "quant-execution:", "trading-contracts:"):
+        assert job_name in integration
+    for job_name in ("backend-full:", "paper-drills:", "e2e:", "compose-smoke:"):
+        assert job_name in nightly
+    assert "python -m pytest -q" in integration
+    assert "npx playwright test" in nightly
 
 
 def test_frontend_static_consistency_gate_passes_for_current_bundle():

@@ -5,12 +5,13 @@ After=docker.service network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 WorkingDirectory=/opt/quant-paper
 EnvironmentFile=-/opt/quant-paper/.env
-ExecStart=/usr/bin/docker compose up -d api qdrant quant-scheduler
+ExecStart=/usr/bin/docker compose up api qdrant quant-scheduler
 ExecStop=/usr/bin/docker compose stop api quant-scheduler
-RemainAfterExit=yes
+Restart=always
+RestartSec=15
 TimeoutStartSec=300
 TimeoutStopSec=120
 

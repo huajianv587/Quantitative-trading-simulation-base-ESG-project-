@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import statistics
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -1110,7 +1111,7 @@ class PaperWorkflowComponent:
         }
 
     def run_strategy_workflow(self, **kwargs) -> dict[str, Any]:
-        return self.owner.run_hybrid_paper_strategy_workflow(**kwargs)
+        return self.owner._run_hybrid_paper_strategy_workflow_impl(**kwargs)
 
     def performance_report(self, **kwargs) -> dict[str, Any]:
         return self.owner.build_paper_performance_report(**kwargs)
@@ -1123,12 +1124,146 @@ class PaperWorkflowComponent:
 
 
 @dataclass
+class ObservabilityComponent:
+    owner: Any
+
+    @staticmethod
+    def _elapsed_ms(start: float) -> float:
+        return round((time.perf_counter() - start) * 1000, 2)
+
+    def _timed_payload(self, label: str, callback) -> tuple[dict[str, Any], dict[str, Any]]:
+        start = time.perf_counter()
+        try:
+            payload = callback()
+            return payload, {"component": label, "ok": True, "elapsed_ms": self._elapsed_ms(start)}
+        except Exception as exc:
+            return (
+                {"generated_at": _iso_now(), "ready": False, "error": str(exc)},
+                {
+                    "component": label,
+                    "ok": False,
+                    "elapsed_ms": self._elapsed_ms(start),
+                    "error_code": f"{label}_failed",
+                    "detail": str(exc),
+                },
+            )
+
+    def _safe_status(self, label: str, callback) -> dict[str, Any]:
+        start = time.perf_counter()
+        try:
+            payload = callback()
+            available = bool(payload.get("available", payload.get("ok", True))) if isinstance(payload, dict) else True
+            return {
+                "ok": available,
+                "elapsed_ms": self._elapsed_ms(start),
+                "fallback": bool(isinstance(payload, dict) and payload.get("fallback")),
+                "summary": payload if isinstance(payload, dict) else {"value": payload},
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "elapsed_ms": self._elapsed_ms(start),
+                "error_code": f"{label}_status_failed",
+                "detail": str(exc),
+            }
+
+    def fallback_summary(self) -> dict[str, Any]:
+        storage_status = self._safe_status("storage", self.owner.storage.status)
+        market_status = self._safe_status("market_data", self.owner.market_data.status)
+        llm_status = self._safe_status("llm_runtime", self.owner._llm_mode_status)
+        qdrant_status = self._safe_status("qdrant", self.owner._qdrant_status)
+        storage_payload = storage_status.get("summary") or {}
+        market_payload = market_status.get("summary") or {}
+        llm_payload = llm_status.get("summary") or {}
+        qdrant_payload = qdrant_status.get("summary") or {}
+        return {
+            "storage_local_fallback": storage_payload.get("mode") == "local_fallback",
+            "supabase_ready": bool(storage_payload.get("supabase_ready")),
+            "market_data_provider": market_payload.get("provider_order") or market_payload.get("provider"),
+            "qdrant_reachable": bool(qdrant_payload.get("reachable")),
+            "llm_local_auto_ok": bool((llm_payload.get("local_auto") or {}).get("ok")),
+            "llm_hybrid_remote_ok": bool((llm_payload.get("hybrid_remote") or {}).get("ok")),
+        }
+
+    def component_status(self) -> dict[str, Any]:
+        return {
+            "storage": self._safe_status("storage", self.owner.storage.status),
+            "market_data": self._safe_status("market_data", self.owner.market_data.status),
+            "alpha_ranker": self._safe_status("alpha_ranker", self.owner.alpha_ranker.status),
+            "p1_suite": self._safe_status("p1_suite", self.owner.p1_suite.status),
+            "p2_stack": self._safe_status("p2_stack", self.owner.p2_stack.status),
+            "scheduler_heartbeat": self._safe_status("scheduler_heartbeat", self.owner._scheduler_heartbeat_status),
+        }
+
+    def recent_error_summary(self, *, limit: int = 5) -> dict[str, Any]:
+        matches: list[dict[str, Any]] = []
+        for record_type in ("audit_summary", "execution_journals"):
+            for row in self.owner.storage.list_records(record_type):
+                serialized = str(row).lower()
+                if any(token in serialized for token in ("error", "failed", "blocked", "degraded")):
+                    matches.append(
+                        {
+                            "record_type": record_type,
+                            "id": row.get("id") or row.get("execution_id") or row.get("run_id"),
+                            "category": row.get("category") or row.get("current_state"),
+                            "action": row.get("action"),
+                            "generated_at": row.get("generated_at") or row.get("timestamp"),
+                        }
+                    )
+                if len(matches) >= max(1, limit):
+                    break
+            if len(matches) >= max(1, limit):
+                break
+        return {"count": len(matches), "items": matches}
+
+    def runtime_diagnostics(self, *, runtime_state: dict[str, Any] | None = None) -> dict[str, Any]:
+        start = time.perf_counter()
+        payload = {
+            "generated_at": _iso_now(),
+            "fallbacks": self.fallback_summary(),
+            "component_status": self.component_status(),
+            "recent_errors": self.recent_error_summary(),
+            "runtime_state": runtime_state or {},
+        }
+        payload["elapsed_ms"] = self._elapsed_ms(start)
+        return payload
+
+    def healthcheck(self) -> dict[str, Any]:
+        payload, diagnostics = self._timed_payload("healthcheck", self.owner._build_healthcheck_impl)
+        payload.setdefault("diagnostics", {})
+        payload["diagnostics"].update(
+            {
+                **diagnostics,
+                "fallbacks": self.fallback_summary(),
+                "recent_errors": self.recent_error_summary(limit=3),
+            }
+        )
+        return payload
+
+    def model_registry(self) -> dict[str, Any]:
+        payload, diagnostics = self._timed_payload("model_registry", self.owner._build_model_registry_impl)
+        payload.setdefault("diagnostics", {})
+        payload["diagnostics"].update(diagnostics)
+        return payload
+
+    def ops_alerts(self, *, monitor: dict[str, Any] | None = None, metrics: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload, diagnostics = self._timed_payload(
+            "ops_alerts",
+            lambda: self.owner._build_ops_alerts_impl(monitor=monitor, metrics=metrics),
+        )
+        payload.setdefault("diagnostics", {})
+        payload["diagnostics"].update(diagnostics)
+        return payload
+
+
+@dataclass
 class QuantServiceComponents:
     market_data: MarketDataComponent
     dashboard: DashboardComponent
     execution: ExecutionComponent
     portfolio: PortfolioConstructionComponent
     paper_workflow: PaperWorkflowComponent
+    observability: ObservabilityComponent
 
     @classmethod
     def from_owner(cls, owner: Any) -> "QuantServiceComponents":
@@ -1138,4 +1273,5 @@ class QuantServiceComponents:
             execution=ExecutionComponent(owner),
             portfolio=PortfolioConstructionComponent(owner),
             paper_workflow=PaperWorkflowComponent(owner),
+            observability=ObservabilityComponent(owner),
         )

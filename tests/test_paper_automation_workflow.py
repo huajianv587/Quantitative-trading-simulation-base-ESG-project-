@@ -703,6 +703,7 @@ def test_unattended_compose_and_ci_contracts():
     assert "latest_session_evidence" in watchdog
     assert "ready_restart_threshold" in watchdog
     assert "OnUnitActiveSec=60" in watchdog_timer
-    assert "docker compose up -d api qdrant quant-scheduler" in compose_service
+    assert "docker compose up api qdrant quant-scheduler" in compose_service
+    assert "Restart=always" in compose_service
     assert "paper_cloud_acceptance.py" in runbook
     assert "ALPACA_ENABLE_LIVE_TRADING=false" in runbook

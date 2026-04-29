@@ -48,7 +48,7 @@ class R2ArtifactStore:
 
         try:
             import boto3
-        except Exception as exc:
+        except ImportError as exc:
             logger.warning(f"R2 upload skipped because boto3 is unavailable: {exc}")
             return None
 
@@ -80,7 +80,7 @@ class R2ArtifactStore:
 
         try:
             import boto3
-        except Exception as exc:
+        except ImportError as exc:
             logger.warning(f"R2 upload skipped because boto3 is unavailable: {exc}")
             return None
 
@@ -370,7 +370,7 @@ class QuantStorageGateway:
         for path in sorted(directory.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
             try:
                 rows.append(json.loads(path.read_text(encoding="utf-8")))
-            except Exception as exc:
+            except (OSError, json.JSONDecodeError, TypeError) as exc:
                 logger.warning(f"Failed to read {path}: {exc}")
         return rows
 

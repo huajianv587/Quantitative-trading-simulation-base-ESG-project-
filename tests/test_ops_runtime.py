@@ -17,11 +17,15 @@ def test_ops_endpoints_return_runtime_snapshots():
     runtime_payload = runtime_response.json()
     assert "auth" in runtime_payload
     assert "modules" in runtime_payload
+    assert "diagnostics" in runtime_payload
+    assert "component_status" in runtime_payload["diagnostics"]
+    assert "fallbacks" in runtime_payload["diagnostics"]
 
     health_response = client.get("/ops/healthcheck", headers=OPS_HEADERS)
     assert health_response.status_code == 200
     health_payload = health_response.json()
     assert "components" in health_payload
+    assert "diagnostics" in health_payload
     assert "api" in health_payload["components"]
     assert "auth_keys" in health_payload["components"]
     assert "llm_local_auto" in health_payload["components"]
@@ -32,6 +36,14 @@ def test_ops_endpoints_return_runtime_snapshots():
     alerts_payload = alerts_response.json()
     assert "alerts" in alerts_payload
     assert "count" in alerts_payload
+
+    online_response = client.get("/api/v1/ops/online-status", headers=OPS_HEADERS)
+    assert online_response.status_code == 200
+    online_payload = online_response.json()
+    assert "scheduler" in online_payload
+    assert "heartbeat" in online_payload["scheduler"]
+    assert "rlvr" in online_payload
+    assert "paper_60d_gate" in online_payload
 
     models_response = client.get("/ops/models", headers=OPS_HEADERS)
     assert models_response.status_code == 200

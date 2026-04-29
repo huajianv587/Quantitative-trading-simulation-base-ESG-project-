@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from gateway.connectors.free_live import FreeLiveConnectorRegistry
 from gateway.config import settings
@@ -36,10 +36,12 @@ from gateway.trading.models import (
 )
 from gateway.trading.monitor import AlpacaMarketMonitor
 from gateway.trading.reward_bandit import (
+    attach_rlvr,
     arm_key,
     bandit_score,
     build_horizon_states,
     default_bandit_state,
+    rlvr_payload,
     safe_float as reward_safe_float,
     settle_candidate_with_bars,
     update_bandit_state,
@@ -117,12 +119,18 @@ class TradingAgentService:
         per_order_notional: float | None = None,
         benchmark: str = "SPY",
         allow_duplicates: bool = False,
+        submit_orders: bool | None = None,
     ) -> dict[str, Any]:
         candidate_count = max(1, min(5, int(max_candidates or 5)))
         generated_at = utc_now()
         batch_id = f"reward-batch-{uuid.uuid4().hex[:10]}"
         universe_symbols = self._paper_reward_universe(universe)
         bandit_state = self.store.get_paper_reward_bandit_state() or default_bandit_state()
+        requested_submit = bool(submit_orders) if submit_orders is not None else bool(
+            getattr(settings, "PAPER_REWARD_SUBMIT_ENABLED", False)
+        )
+        submit_enabled = bool(getattr(settings, "PAPER_REWARD_SUBMIT_ENABLED", False))
+        submit_allowed = bool(requested_submit and submit_enabled)
 
         execution_payload = self.quant_system.create_execution_plan(
             benchmark=benchmark or self.quant_system.default_benchmark,
@@ -157,8 +165,12 @@ class TradingAgentService:
         execution_payload["max_orders"] = len(selected_orders)
         execution_payload["reward_batch_id"] = batch_id
         execution_payload["reward_candidate_mode"] = True
+        execution_payload["paper_reward_submit_requested"] = requested_submit
+        execution_payload["paper_reward_submit_enabled"] = submit_enabled
+        if requested_submit and not submit_enabled:
+            execution_payload.setdefault("warnings", []).append("paper_reward_submit_disabled")
 
-        if execution_payload.get("ready") and selected_orders:
+        if submit_allowed and execution_payload.get("ready") and selected_orders:
             adapter, _ = self.quant_system._prepare_broker_adapter(
                 execution_payload.get("broker_id") or "alpaca",
                 "paper",
@@ -200,6 +212,7 @@ class TradingAgentService:
             order_status = str(order.get("status") or execution_payload.get("broker_status") or "planned")
             submitted = bool(order.get("broker_order_id") or receipt.get("id"))
             status = self._paper_reward_candidate_status(order_status=order_status, submitted=submitted, ready=bool(execution_payload.get("ready")))
+            settlements = build_horizon_states(entry_at)
             candidate = PaperRewardCandidate.model_validate(
                 {
                     "candidate_id": f"reward-{uuid.uuid4().hex[:12]}",
@@ -221,23 +234,28 @@ class TradingAgentService:
                         "batch_id": batch_id,
                         "execution_id": execution_payload.get("execution_id"),
                         "benchmark": benchmark,
+                        "paper_reward_submit_allowed": submit_allowed,
+                        "paper_reward_submit_enabled": submit_enabled,
+                        "paper_reward_submit_requested": requested_submit,
                         "order": {key: value for key, value in order.items() if not key.startswith("_paper_reward")},
                         "receipt": receipt,
                     },
                     "features": order.get("_paper_reward_features") or {},
-                    "settlements": build_horizon_states(entry_at),
+                    "settlements": settlements,
+                    "rlvr": rlvr_payload(settlements),
                     "bandit_score": reward_safe_float(order.get("_paper_reward_bandit_score")),
                     "status": status,
                     "warnings": list(execution_payload.get("warnings") or []),
                     "lineage": [
                         "quant.create_execution_plan",
                         "paper_reward.bandit_rank",
-                        "alpaca.paper_submit",
+                        "alpaca.paper_submit" if submit_allowed else "paper_reward.submit_guard",
                     ],
                     "metadata": {
                         "ready": bool(execution_payload.get("ready")),
                         "canary_bucket": order.get("canary_bucket"),
                         "allow_duplicates": bool(allow_duplicates),
+                        "submit_allowed": submit_allowed,
                     },
                 }
             )
@@ -250,6 +268,9 @@ class TradingAgentService:
             "requested_count": candidate_count,
             "candidate_count": len(saved_candidates),
             "submitted_count": sum(1 for item in saved_candidates if item.get("submitted")),
+            "submit_requested": requested_submit,
+            "submit_enabled": submit_enabled,
+            "submit_allowed": submit_allowed,
             "broker_status": execution_payload.get("broker_status"),
             "ready": bool(execution_payload.get("ready")),
             "candidates": saved_candidates,
@@ -310,6 +331,7 @@ class TradingAgentService:
             if should_update_bandit:
                 bandit_state = update_bandit_state(bandit_state, settled_payload)
                 settled_payload["bandit_updated_at"] = utc_now()
+                attach_rlvr(settled_payload)
                 bandit_updated = True
             if changed or should_update_bandit:
                 saved = self.store.save_paper_reward_candidate(PaperRewardCandidate.model_validate(settled_payload))
@@ -328,6 +350,11 @@ class TradingAgentService:
             "updated_candidates": updated,
             "warnings": warnings,
             "bandit_state": bandit_state,
+            "rlvr": {
+                "updated_count": len(updated),
+                "bandit_updated": bandit_updated,
+                "horizon_keys": ["n1", "n3", "n5"],
+            },
         }
 
     def paper_reward_leaderboard(self, *, limit: int = 100) -> dict[str, Any]:
@@ -396,6 +423,11 @@ class TradingAgentService:
             "leaderboard": leaderboard,
             "candidates": ranked_candidates[: max(1, int(limit or 100))],
             "bandit_state": bandit_state,
+            "rlvr": {
+                "candidate_count": len(rows),
+                "settled_count": sum(1 for item in rows if (item.get("rlvr") or {}).get("final_score") is not None),
+                "partial_count": sum(1 for item in rows if (item.get("rlvr") or {}).get("partial_score") is not None),
+            },
         }
 
     @staticmethod
@@ -1027,6 +1059,7 @@ class TradingAgentService:
                     per_order_notional=None,
                     benchmark="SPY",
                     allow_duplicates=False,
+                    submit_orders=bool(getattr(settings, "PAPER_REWARD_SUBMIT_ENABLED", False)),
                 )
             elif job_name == "paper_reward_settlement":
                 result = self.settle_paper_reward_candidates()
@@ -1825,6 +1858,8 @@ class TradingAgentService:
             return "blocked"
         if normalized in {"failed", "rejected", "submit_failed", "not_configured", "account_error"}:
             return "submit_failed"
+        if normalized in {"planned", "validated"}:
+            return "blocked"
         return "submit_failed"
 
     @staticmethod
@@ -2169,7 +2204,7 @@ class TradingAgentService:
     def _is_market_day() -> bool:
         try:
             now = datetime.now(ZoneInfo(getattr(settings, "SCHEDULER_TIMEZONE", "America/New_York")))
-        except Exception:
+        except (TypeError, ValueError, ZoneInfoNotFoundError):
             now = datetime.now(timezone.utc)
         return now.weekday() < 5
 

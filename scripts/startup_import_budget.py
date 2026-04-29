@@ -18,7 +18,10 @@ FORBIDDEN_PREFIXES = (
     "torch",
     "transformers",
 )
-NEXT_TARGET_PREFIXES: tuple[str, ...] = ()
+NEXT_TARGET_PREFIXES: tuple[str, ...] = (
+    "gateway.quant.service_components",
+    "gateway.quant.paper_services",
+)
 
 
 def _loaded(prefixes: tuple[str, ...]) -> list[str]:

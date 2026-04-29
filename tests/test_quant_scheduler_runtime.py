@@ -119,6 +119,8 @@ def test_run_hybrid_workflow_cycle_uses_shortlist_and_persists_state(tmp_path, m
     monkeypatch.setattr(scheduler_script, "scheduler_state_path", lambda: state_path)
     monkeypatch.setattr(scheduler_script, "scheduler_heartbeat_path", lambda: heartbeat_path)
     monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_REQUIRE_TRADING_SESSION", False)
+    monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT", False)
+    monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_AUTO_SUBMIT", True)
     monkeypatch.setattr(scheduler_script.settings, "QUANT_BROKER_DEFAULT", "alpaca")
     monkeypatch.setattr(scheduler_script.settings, "ALPACA_DEFAULT_TEST_NOTIONAL", 1000.0)
     monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_MAX_EXECUTION_SYMBOLS", 2)
@@ -175,6 +177,8 @@ def test_hybrid_workflow_respects_paper_submit_circuit_breaker(tmp_path, monkeyp
     monkeypatch.setattr(scheduler_script, "scheduler_state_path", lambda: state_path)
     monkeypatch.setattr(scheduler_script, "scheduler_heartbeat_path", lambda: heartbeat_path)
     monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_REQUIRE_TRADING_SESSION", False)
+    monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT", False)
+    monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_AUTO_SUBMIT", True)
     monkeypatch.setattr(scheduler_script.settings, "QUANT_BROKER_DEFAULT", "alpaca")
     monkeypatch.setattr(scheduler_script.settings, "ALPACA_DEFAULT_TEST_NOTIONAL", 1.0)
     captured = {}
@@ -208,6 +212,46 @@ def test_hybrid_workflow_respects_paper_submit_circuit_breaker(tmp_path, monkeyp
 
     assert captured["submit_orders"] is False
     assert result["paper_submit_circuit_breaker"]["enabled"] is True
+    assert "paper_submit_circuit_breaker_clear" in result["submit_gate"]["blockers"]
+
+
+def test_hybrid_workflow_submit_gate_requires_auto_submit(tmp_path, monkeypatch):
+    state_path = tmp_path / "runtime_state.json"
+    heartbeat_path = tmp_path / "heartbeat.json"
+
+    monkeypatch.setattr(scheduler_script, "scheduler_state_path", lambda: state_path)
+    monkeypatch.setattr(scheduler_script, "scheduler_heartbeat_path", lambda: heartbeat_path)
+    monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_REQUIRE_TRADING_SESSION", False)
+    monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_REQUIRE_MARKET_CLOCK_FOR_SUBMIT", False)
+    monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_AUTO_SUBMIT", False)
+    monkeypatch.setattr(scheduler_script.settings, "QUANT_BROKER_DEFAULT", "alpaca")
+    monkeypatch.setattr(scheduler_script.settings, "ALPACA_DEFAULT_TEST_NOTIONAL", 1.0)
+    captured = {}
+
+    class _FakeService:
+        default_benchmark = "SPY"
+        default_capital = 1_000_000
+
+        def run_hybrid_paper_strategy_workflow(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "workflow_id": "workflow-auto-off",
+                "status": "planned",
+                "execution_id": "execution-auto-off",
+                "submitted_count": 0,
+                "warnings": [],
+                "blockers": [],
+                "next_actions": [],
+                "steps": {"paper_execution": {"broker_status": "planned"}},
+            }
+
+    state = {"preopen": {"trade_date": scheduler_script.now_local().date().isoformat(), "candidate_symbols": ["AAPL"]}}
+
+    result = scheduler_script.run_hybrid_workflow_cycle(_FakeService(), state)
+
+    assert captured["submit_orders"] is False
+    assert result["submit_gate"]["checks"]["auto_submit_enabled"] is False
+    assert "auto_submit_enabled" in result["submit_gate"]["blockers"]
 
 
 def test_failure_counter_enables_and_recovers_paper_submit_circuit_breaker():
@@ -326,6 +370,58 @@ def test_recovery_cycle_runs_non_submit_backfill_without_execution_id(tmp_path, 
     assert result["warning"] == "missing_execution_id_non_submit_recovery_only"
     assert set(calls) == {"settle", "reconcile", "backfill", "promotion", "digest_retry", "backup", "observability"}
     assert "paper_performance_snapshot" not in result["automation"]["ran"]
+
+
+def test_startup_recovery_runs_when_automation_is_incomplete(tmp_path, monkeypatch):
+    state_path = tmp_path / "runtime_state.json"
+    heartbeat_path = tmp_path / "heartbeat.json"
+
+    monkeypatch.setattr(scheduler_script, "scheduler_state_path", lambda: state_path)
+    monkeypatch.setattr(scheduler_script, "scheduler_heartbeat_path", lambda: heartbeat_path)
+    monkeypatch.setattr(scheduler_script.settings, "AUTO_RECOVERY_ENABLED", True)
+    monkeypatch.setattr(scheduler_script.settings, "SCHEDULER_REQUIRE_TRADING_SESSION", False)
+    calls = []
+
+    class _FakeService:
+        def settle_paper_outcomes(self, **kwargs):
+            calls.append("settle")
+            return {"updated_count": 0}
+
+        def capture_paper_performance_snapshot(self, **kwargs):
+            calls.append("snapshot")
+            return {"snapshot_id": "startup"}
+
+        def backfill_paper_performance(self, **kwargs):
+            calls.append("backfill")
+            return {"backfilled_snapshots": 1}
+
+        def evaluate_promotion(self, **kwargs):
+            calls.append("promotion")
+            return {"promotion_status": "paper_candidate"}
+
+        def evaluate_paper_workflow_observability(self, **kwargs):
+            calls.append("observability")
+            return {"summary": {"alert_count": 0}}
+
+        def reconcile_alpaca_paper_orders(self, **kwargs):
+            calls.append("reconcile")
+            return {"status": "completed"}
+
+        def retry_failed_daily_digest_deliveries(self, **kwargs):
+            calls.append("digest_retry")
+            return {"attempted_count": 0}
+
+        def backup_quant_storage(self, **kwargs):
+            calls.append("backup")
+            return {"status": "completed_local_only"}
+
+    state = {"execution": {"execution_id": "execution-startup", "trade_date": "2026-01-05"}}
+
+    result = scheduler_script.run_startup_recovery_cycle(_FakeService(), state)
+
+    assert result["stage"] == "recovery"
+    assert result["session_date"] == "2026-01-05"
+    assert "snapshot" in calls
 
 
 def test_shadow_retrain_cycle_records_shadow_only_state(tmp_path, monkeypatch):

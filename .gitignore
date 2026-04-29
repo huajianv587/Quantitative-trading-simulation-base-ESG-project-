@@ -1,10 +1,10 @@
-# 环境变量（含API Key，绝对不能上传）
+# Environment files and local secrets
 .env
 .env.*
 !.env.example
 !.env.quant_rl.example
 
-# Python
+# Python build and cache output
 __pycache__/
 *.pyc
 *.pyo
@@ -13,67 +13,78 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+.coverage
+htmlcov/
 
-# 大文件：DocStore 和向量数据库
+# Large local data stores and vector indexes
 storage/
+data/
+!data/.gitkeep
 data/processed/
 data/raw/
 data/raw_big_doc_data/
 data/vectorstore/
 
-# 模型权重和训练 checkpoint
-model-serving/checkpoint/checkpoint-*/
+# Model weights and training checkpoints
 model-serving/checkpoint/
 model-serving/checkpoint/*/
+model-serving/checkpoint/checkpoint-*/
+checkpoint_fromntu/
+full_suite_checkpoints_*/
+full_suite_source_bundle_*/
 
-# 虚拟环境
+# Virtual environments
 .venv/
 venv/
 env/
 
-# IDE
+# IDE and local assistant state
 .vscode/settings.json
 .idea/
-
-# Claude Code 本地配置
 .claude/
 
-# 日志和临时文件
+# Logs, temporary files, and local runtime output
 *.log
 *.tmp
 *.tmp.jsonl
-node_modules/
-playwright-report/
-test-results/
-artifacts/
-paper_exports/
+*.sqlite
+*.sqlite3
 runtime-*.log
 runtime-api*.log
 runtime-ui*.log
 playwright-provider*.log
+tmp_e2e_server.*
+test_report.json
+test_report_complete.json
 
-# Training data — do not push
-AAAtest/
-data/
+# Node and browser test output
+node_modules/
+playwright-report/
+test-results/
+
+# Generated artifacts and delivery bundles
+artifacts/
+paper_exports/
 delivery/
+outputs_*/
 outputs_2_to_7/
+scipaper/
+deploy/tc2/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Training data and generated cloud assets
+AAAtest/
 training/p0_assets/
 training/p1_assets/
 training/p2_assets/
 training/cloud_assets/
 training/full_training_run_manifest.json
-.pytest_cache/
-model-serving/checkpoint/*/
 
-# Local full-suite bundles and generated paper artifacts are too large for normal Git pushes.
-full_suite_checkpoints_*/
-full_suite_source_bundle_*/
-scipaper/
-delivery/
-paper_exports/
-outputs_*/
-checkpoint_fromntu/
-deploy/tc2/
+# Generated paper/research export helpers
 config/paper5_*_stock_universe.csv
 config/paper5_*_stock_universe.summary.json
 scripts/build_paper5_*.py
@@ -86,9 +97,3 @@ scripts/integrate_data_to_paper.py
 scripts/optimize_paper_language.py
 scripts/paper5_*.py
 scripts/paper_*.py
-tmp_e2e_server.*
-test_report.json
-*.zip
-*.tar
-*.tar.gz
-*.7z

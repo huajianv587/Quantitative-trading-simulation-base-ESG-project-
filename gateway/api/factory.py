@@ -100,6 +100,7 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
     app.include_router(quant_rl.router)
     app.include_router(trading.router)
     app.include_router(ops.router)
+    app.include_router(ops.api_v1_router)
 
     frontend_path, frontend_source = _resolve_frontend_mount_dir()
     app.state.frontend_source = frontend_source

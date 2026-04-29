@@ -20,6 +20,19 @@ CATEGORY_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("artifact-cleanup", ("model-serving/checkpoint/", "delivery/", "outputs_", "paper_exports/", ".dockerignore", ".gitignore")),
 )
 CHECKPOINT_PREFIX = "model-serving/checkpoint/"
+DEFAULT_LARGE_ARTIFACT_BYTES = 10 * 1024 * 1024
+GENERATED_ARTIFACT_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("runtime_output", ("storage/", "artifacts/", "test-results/", "playwright-report/")),
+    ("model_checkpoint", ("model-serving/checkpoint/", "checkpoint_fromntu/", "full_suite_checkpoints_")),
+    ("delivery_bundle", ("delivery/", "outputs_", "paper_exports/", "scipaper/")),
+    ("large_source_data", ("data/raw/", "data/processed/", "data/vectorstore/", "esg_reports/")),
+)
+GENERATED_ARTIFACT_SUFFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("log", (".log", ".tmp", ".tmp.jsonl")),
+    ("local_database", (".sqlite", ".sqlite3", ".db")),
+    ("archive", (".zip", ".tar", ".tar.gz", ".7z")),
+    ("model_weight", (".safetensors", ".pt", ".pth", ".bin", ".ckpt")),
+)
 EXCLUDED_RESEARCH_ARTIFACTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("checkpoint_fromntu", ("checkpoint_fromntu/",)),
     ("tc2_research_deploy", ("deploy/tc2/",)),
@@ -100,11 +113,45 @@ def classify_excluded_research_artifact(path: str) -> str | None:
     return None
 
 
+def classify_generated_artifact(path: str) -> str | None:
+    normalized = path.replace("\\", "/").strip()
+    for category, prefixes in GENERATED_ARTIFACT_PREFIXES:
+        if any(normalized == prefix.rstrip("/") or normalized.startswith(prefix) for prefix in prefixes):
+            return category
+    lower = normalized.lower()
+    for category, suffixes in GENERATED_ARTIFACT_SUFFIXES:
+        if any(lower.endswith(suffix) for suffix in suffixes):
+            return category
+    return None
+
+
+def _large_artifact_threshold() -> int:
+    raw_value = os.getenv("RELEASE_BOUNDARY_LARGE_ARTIFACT_BYTES", "").strip()
+    if not raw_value:
+        return DEFAULT_LARGE_ARTIFACT_BYTES
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return DEFAULT_LARGE_ARTIFACT_BYTES
+
+
+def _tracked_file_size(path: str) -> int | None:
+    candidate = PROJECT_ROOT / path
+    try:
+        if candidate.is_file():
+            return candidate.stat().st_size
+    except OSError:
+        return None
+    return None
+
+
 def build_report(base_ref: str | None) -> dict[str, object]:
     rows = _status_rows(base_ref)
     grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
     checkpoint_deletions: list[str] = []
     excluded_research_artifacts: list[dict[str, str]] = []
+    generated_artifact_changes: list[dict[str, object]] = []
+    large_threshold = _large_artifact_threshold()
     for row in rows:
         path = row["path"]
         status = row["status"]
@@ -115,16 +162,36 @@ def build_report(base_ref: str | None) -> dict[str, object]:
             excluded_research_artifacts.append({**row, "research_category": research_category})
         if path.startswith(CHECKPOINT_PREFIX) and "D" in status:
             checkpoint_deletions.append(path)
+        artifact_category = classify_generated_artifact(path)
+        size_bytes = _tracked_file_size(path)
+        is_large = bool(size_bytes is not None and size_bytes >= large_threshold)
+        if artifact_category is not None or is_large:
+            generated_artifact_changes.append(
+                {
+                    **row,
+                    "artifact_category": artifact_category or "large_file",
+                    "size_bytes": size_bytes,
+                    "large_file_threshold_bytes": large_threshold,
+                    "excluded_research_category": research_category,
+                }
+            )
+
+    manual_review_paths = sorted(
+        set(checkpoint_deletions)
+        | {str(item["path"]) for item in generated_artifact_changes if item.get("excluded_research_category") is None}
+    )
 
     return {
         "base_ref": base_ref,
         "changed_file_count": len(rows),
         "groups": {category: items for category, items in sorted(grouped.items())},
         "excluded_research_artifacts": sorted(excluded_research_artifacts, key=lambda item: item["path"]),
+        "generated_artifact_changes": sorted(generated_artifact_changes, key=lambda item: str(item["path"])),
         "manual_review_required": {
             "checkpoint_deletions": checkpoint_deletions,
-            "required": bool(checkpoint_deletions),
-            "reason": "checkpoint artifact deletions must be explicitly reviewed before release",
+            "generated_artifact_changes": manual_review_paths,
+            "required": bool(manual_review_paths),
+            "reason": "checkpoint deletions and generated artifact changes must be explicitly reviewed before release",
         },
     }
 

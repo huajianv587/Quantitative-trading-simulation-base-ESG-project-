@@ -292,7 +292,7 @@ def get_client() -> Client:
                _read_env("SUPABASE_KEY"))            # 读取 anon/service_role API Key
         if not url or not key:
             if not _in_memory_warning_emitted:
-                print(
+                logger.warning(
                     "[Supabase] Missing SUPABASE_URL/API key. "
                     "Using in-memory fallback client for local runtime.",
                 )
@@ -368,7 +368,7 @@ def delete_session(session_id: str) -> None:
     get_client().table("sessions").delete().eq("session_id", session_id).execute()
     # DELETE FROM sessions WHERE session_id = ?
     # → 数据库自动 CASCADE DELETE chat_history 里对应的所有消息
-    print(f"Session {session_id} deleted.")
+    logger.info("Session %s deleted.", session_id)
 
 
 # ---------------------------------------------------------------------------

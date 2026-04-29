@@ -8,7 +8,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 import requests
 from gateway.config import settings
 from gateway.utils.logger import get_logger
@@ -129,7 +129,8 @@ class DataSourceManager:
         if cached:
             try:
                 return CompanyData.model_validate(cached)
-            except Exception:
+            except ValidationError as exc:
+                logger.warning(f"[DataSourceManager] Cached company bundle invalid for {company_name}: {exc}")
                 pass
 
         resolved_ticker = ticker or self._resolve_symbol(company_name)
@@ -240,7 +241,7 @@ class DataSourceManager:
             set_cache(cache_key, data, ttl_hours=self.cache_ttl_hours)
             return data
 
-        except Exception as e:
+        except (requests.RequestException, ValueError, TypeError, KeyError) as e:
             logger.warning(f"[DataSourceManager] Alpha Vantage error for {ticker}: {e}")
             return {}
 

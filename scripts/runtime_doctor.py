@@ -5,8 +5,10 @@ import json
 import os
 import platform
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -48,6 +50,16 @@ def probe_json(url: str, timeout: int = 5) -> tuple[bool, dict | str]:
         return False, str(exc)
 
 
+def timed_probe_json(url: str, timeout: int = 5) -> dict[str, Any]:
+    start = time.perf_counter()
+    ok, payload = probe_json(url, timeout=timeout)
+    return {
+        "ok": ok,
+        "elapsed_ms": round((time.perf_counter() - start) * 1000, 2),
+        "payload": payload,
+    }
+
+
 def pkg_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
@@ -61,6 +73,7 @@ def _auth_key_status() -> dict[str, bool]:
 
 
 def main() -> int:
+    started_at = time.perf_counter()
     remote_llm_url = os.getenv("REMOTE_LLM_URL", "").rstrip("/")
     qdrant_url = os.getenv("QDRANT_URL", "http://127.0.0.1:6333").rstrip("/")
     local_api_url = os.getenv("LOCAL_API_URL", "http://127.0.0.1:8012").rstrip("/")
@@ -74,6 +87,14 @@ def main() -> int:
     scheduler_heartbeat_path = Path(
         os.getenv("SCHEDULER_HEARTBEAT_PATH", str(PROJECT_ROOT / "storage" / "quant" / "scheduler" / "heartbeat.json"))
     )
+    quant_storage_status = QuantStorageGateway(get_client=get_client).status()
+    market_data_status = market_data.status()
+    alpha_ranker_status = alpha_ranker.status()
+    p1_suite_status = p1_suite.status()
+    p2_stack_status = p2_stack.status()
+    event_classifier_status = event_classifier.status()
+    llm_runtime_status = get_runtime_backend_status()
+
     report = {
         "python": {
             "executable": sys.executable,
@@ -96,12 +117,12 @@ def main() -> int:
             "training_s3_bucket": os.getenv("TRAINING_S3_BUCKET", ""),
             "sagemaker_role_arn": os.getenv("SAGEMAKER_EXECUTION_ROLE_ARN", ""),
             "data_sources": DataSourceManager().source_status(),
-            "quant_storage": QuantStorageGateway(get_client=get_client).status(),
-            "market_data": market_data.status(),
-            "alpha_ranker": alpha_ranker.status(),
-            "p1_suite": p1_suite.status(),
-            "p2_stack": p2_stack.status(),
-            "event_classifier": event_classifier.status(),
+            "quant_storage": quant_storage_status,
+            "market_data": market_data_status,
+            "alpha_ranker": alpha_ranker_status,
+            "p1_suite": p1_suite_status,
+            "p2_stack": p2_stack_status,
+            "event_classifier": event_classifier_status,
             "scheduler_worker": {
                 "heartbeat_path": str(scheduler_heartbeat_path),
                 "heartbeat_exists": scheduler_heartbeat_path.exists(),
@@ -109,20 +130,30 @@ def main() -> int:
             "alpaca_paper": alpaca.connection_status(),
             "broker_mesh": [item.model_dump() for item in broker_registry.list_brokers()],
             "auth": auth_posture(),
-            "llm_runtime": get_runtime_backend_status(),
+            "llm_runtime": llm_runtime_status,
         },
         "health": {},
+        "diagnostics": {
+            "fallbacks": {
+                "storage_local_fallback": quant_storage_status.get("mode") == "local_fallback",
+                "supabase_ready": bool(quant_storage_status.get("supabase_ready")),
+                "r2_ready": bool(quant_storage_status.get("r2_ready")),
+                "market_data_provider": market_data_status.get("provider") or market_data_status.get("provider_order"),
+                "alpha_ranker_available": bool(alpha_ranker_status.get("available")),
+                "p1_suite_available": bool(p1_suite_status.get("available")),
+                "p2_stack_available": bool(p2_stack_status.get("available")),
+                "event_classifier_available": bool(event_classifier_status.get("available")),
+            },
+            "checks": {},
+        },
     }
 
-    ok, payload = probe_json(f"{qdrant_url}/collections")
-    report["health"]["qdrant"] = {"ok": ok, "payload": payload}
+    report["health"]["qdrant"] = timed_probe_json(f"{qdrant_url}/collections")
 
     if remote_llm_url:
-        ok, payload = probe_json(f"{remote_llm_url}/health", timeout=10)
-        report["health"]["remote_llm"] = {"ok": ok, "payload": payload}
+        report["health"]["remote_llm"] = timed_probe_json(f"{remote_llm_url}/health", timeout=10)
 
-    ok, payload = probe_json(f"{local_api_url}/health", timeout=10)
-    report["health"]["local_api"] = {"ok": ok, "payload": payload}
+    report["health"]["local_api"] = timed_probe_json(f"{local_api_url}/health", timeout=10)
 
     if alpaca.configured():
         try:
@@ -132,6 +163,7 @@ def main() -> int:
                     "account": alpaca.get_account().get("status"),
                     "clock_open": bool(alpaca.get_clock().get("is_open")),
                 },
+                "elapsed_ms": 0.0,
             }
         except Exception as exc:
             report["health"]["alpaca_paper"] = {"ok": False, "payload": str(exc)}
@@ -145,6 +177,7 @@ def main() -> int:
         bars = market_data.get_daily_bars("AAPL", limit=5)
         report["health"]["market_data"] = {
             "ok": True,
+            "elapsed_ms": 0.0,
             "payload": {
                 "provider": bars.provider,
                 "cache_hit": bars.cache_hit,
@@ -160,9 +193,9 @@ def main() -> int:
             heartbeat = json.loads(scheduler_heartbeat_path.read_text(encoding="utf-8"))
             updated_at = datetime.fromisoformat(str(heartbeat.get("updated_at")).replace("Z", "+00:00"))
             fresh = (datetime.now(timezone.utc) - updated_at).total_seconds() < 300
-            report["health"]["scheduler_worker"] = {"ok": fresh, "payload": heartbeat}
+            report["health"]["scheduler_worker"] = {"ok": fresh, "elapsed_ms": 0.0, "payload": heartbeat}
         else:
-            report["health"]["scheduler_worker"] = {"ok": False, "payload": "scheduler heartbeat file not found"}
+            report["health"]["scheduler_worker"] = {"ok": False, "elapsed_ms": 0.0, "payload": "scheduler heartbeat file not found"}
     except Exception as exc:
         report["health"]["scheduler_worker"] = {"ok": False, "payload": str(exc)}
 
@@ -201,6 +234,17 @@ def main() -> int:
         "missing_production_prereqs": missing_production_prereqs,
         "status": "production_ready" if not missing_production_prereqs else "quasi_ready",
     }
+    report["diagnostics"]["fallbacks"]["qdrant_reachable"] = bool(report["health"].get("qdrant", {}).get("ok"))
+    report["diagnostics"]["fallbacks"]["local_api_reachable"] = bool(report["health"].get("local_api", {}).get("ok"))
+    report["diagnostics"]["checks"] = {
+        name: {
+            "ok": payload.get("ok"),
+            "elapsed_ms": payload.get("elapsed_ms"),
+        }
+        for name, payload in report["health"].items()
+        if isinstance(payload, dict)
+    }
+    report["diagnostics"]["total_elapsed_ms"] = round((time.perf_counter() - started_at) * 1000, 2)
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

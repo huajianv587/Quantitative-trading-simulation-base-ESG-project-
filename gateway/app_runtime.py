@@ -77,6 +77,7 @@ class RuntimeContext:
     data_source_manager: Any = None
     report_generator: Any = None
     report_scheduler: Any = None
+    query_engine: Any = None
     quant_system: Any = None
     trading_service: Any = None
     lazy_components: dict[str, str] = field(default_factory=lambda: {
@@ -85,6 +86,10 @@ class RuntimeContext:
     })
     report_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     sync_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _rag_init_task: asyncio.Task | None = field(default=None, init=False, repr=False)
+
+    def _mark_component(self, component: str, status: str) -> None:
+        self.lazy_components[component] = status
 
     def _ensure_runtime_service(
         self,
@@ -96,20 +101,25 @@ class RuntimeContext:
     ) -> Any:
         existing = getattr(self, instance_attr, None)
         if existing is not None:
+            self._mark_component(instance_attr, "ready")
             return existing
 
         cls = getattr(self, class_attr, None)
         if cls is None:
+            self._mark_component(instance_attr, "unavailable")
             return None
 
         try:
+            self._mark_component(instance_attr, "initializing")
             instance = cls()
             if post_init is not None:
                 post_init(instance)
             setattr(self, instance_attr, instance)
+            self._mark_component(instance_attr, "ready")
             logger.info(f"[Runtime] {label} initialized")
             return instance
         except Exception as exc:
+            self._mark_component(instance_attr, "degraded")
             logger.warning(f"[Runtime] {label} init failed: {exc}")
             return None
 
@@ -150,9 +160,12 @@ class RuntimeContext:
             and not bool(getattr(report_scheduler, "is_running", False))
         ):
             try:
+                self._mark_component("report_scheduler_loop", "starting")
                 report_scheduler.start_background_scheduler()
+                self._mark_component("report_scheduler_loop", "ready")
                 logger.info("[Runtime] Report Scheduler background loop started")
             except Exception as exc:
+                self._mark_component("report_scheduler_loop", "degraded")
                 logger.warning(f"[Runtime] Report Scheduler start failed: {exc}")
 
         return {
@@ -346,23 +359,32 @@ class RuntimeContext:
         logger.info("[Startup] Initializing ESG enhanced modules...")
 
         if getattr(app.state, "query_engine", None) is None:
-            app.state.query_engine = None
-            if self.get_query_engine is not None:
+            if self.query_engine is not None:
+                app.state.query_engine = self.query_engine
+                self._mark_component("rag_query_engine", "ready")
+            elif self.get_query_engine is not None:
                 async def _init_rag():
                     loop = asyncio.get_running_loop()
                     try:
-                        self.lazy_components["rag_query_engine"] = "initializing"
+                        self._mark_component("rag_query_engine", "initializing")
                         engine = await loop.run_in_executor(None, self.get_query_engine)
+                        self.query_engine = engine
                         app.state.query_engine = engine
-                        self.lazy_components["rag_query_engine"] = "ready"
+                        self._mark_component("rag_query_engine", "ready")
                         logger.info("[Startup] RAG engine ready (background init complete)")
                     except Exception as exc:
-                        self.lazy_components["rag_query_engine"] = "degraded"
+                        self._mark_component("rag_query_engine", "degraded")
                         logger.warning(f"[Startup] RAG engine failed: {exc}")
 
-                asyncio.create_task(_init_rag())
-                logger.info("[Startup] RAG engine building in background, server starting now...")
+                if self._rag_init_task is None or self._rag_init_task.done():
+                    self._rag_init_task = asyncio.create_task(_init_rag())
+                    logger.info("[Startup] RAG engine building in background, server starting now...")
+                else:
+                    app.state.query_engine = None
+                    logger.info("[Startup] RAG engine initialization already in progress")
             else:
+                app.state.query_engine = None
+                self._mark_component("rag_query_engine", "unavailable")
                 logger.warning("[Startup] RAG engine skipped (module not available)")
 
         self.ensure_optional_services(start_scheduler=True)
@@ -383,7 +405,9 @@ class RuntimeContext:
 
         if self.trading_service is not None and hasattr(self.trading_service, "startup"):
             try:
-                await self.trading_service.startup()
+                if not bool(getattr(self.trading_service, "_started", False)):
+                    self._mark_component("trading_service", "starting")
+                    await self.trading_service.startup()
                 self.lazy_components["trading_service"] = "ready"
                 logger.info("[Runtime] Trading agent service started")
             except Exception as exc:

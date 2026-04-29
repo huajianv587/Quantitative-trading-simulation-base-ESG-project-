@@ -1731,7 +1731,7 @@ def _formal_bundle_specs(context: dict[str, Any]) -> list[dict[str, Any]]:
             "bullets": [
                 "python -m pytest tests/test_api_contracts.py tests/test_quant_api.py -q",
                 "python -m pytest tests/test_rag_retriever_runtime.py -q",
-                "python -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000",
+                "python -m uvicorn gateway.main:app --host 0.0.0.0 --port 8012",
             ],
         },
         {
@@ -2058,7 +2058,7 @@ def _formal_bundle_specs(context: dict[str, Any]) -> list[dict[str, Any]]:
             "heading": "4. 建议复现命令",
             "bullets": [
                 "python -m pytest tests/test_graph_runtime.py tests/test_retriever_agent_runtime.py -q",
-                "python -m uvicorn gateway.main:app --host 0.0.0.0 --port 8000",
+                "python -m uvicorn gateway.main:app --host 0.0.0.0 --port 8012",
                 "调用 /agent/analyze 接口并保存一组真实 trace。",
             ],
         },

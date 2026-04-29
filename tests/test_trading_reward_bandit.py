@@ -9,6 +9,7 @@ from gateway.trading.reward_bandit import (
 )
 from gateway.trading.scheduler import TradingScheduler
 from gateway.trading.service import TradingAgentService
+from gateway.config import settings
 
 
 class _FakePaperRewardStore:
@@ -194,6 +195,8 @@ def test_settlement_waits_for_missing_n3_and_n5_closes():
     assert settled["settlements"]["n5"]["status"] == "pending"
     assert settled["status"] == "partially_settled"
     assert settled["partial_score"] is not None
+    assert settled["rlvr"]["partial_score"] == settled["partial_score"]
+    assert settled["rlvr"]["final_score"] is None
     assert settled.get("score") is None
 
 
@@ -259,6 +262,7 @@ def test_scheduled_paper_reward_candidates_job_uses_default_run_params():
             "per_order_notional": None,
             "benchmark": "SPY",
             "allow_duplicates": False,
+            "submit_orders": bool(getattr(settings, "PAPER_REWARD_SUBMIT_ENABLED", False)),
         }
     ]
     assert result["status"] == "completed"
@@ -272,14 +276,22 @@ def test_paper_reward_service_full_feedback_loop_with_mocks():
     service.quant_system = _FakeQuantSystem()
     service.store = _FakePaperRewardStore()
 
-    run = service.run_paper_reward_candidates(max_candidates=5, per_order_notional=1.0)
+    previous = getattr(settings, "PAPER_REWARD_SUBMIT_ENABLED", False)
+    settings.PAPER_REWARD_SUBMIT_ENABLED = True
+    try:
+        run = service.run_paper_reward_candidates(max_candidates=5, per_order_notional=1.0, submit_orders=True)
+    finally:
+        settings.PAPER_REWARD_SUBMIT_ENABLED = previous
     assert run["candidate_count"] == 5
     assert run["submitted_count"] == 5
+    assert run["submit_allowed"] is True
     assert len(service.store.candidates) == 5
 
     settled = service.settle_paper_reward_candidates(limit=5)
     assert settled["updated_count"] == 5
     assert settled["bandit_updated"] is True
+    assert settled["updated_candidates"][0]["rlvr"]["final_score"] is not None
+    assert settled["updated_candidates"][0]["rlvr"]["bandit_updated_at"] is not None
     assert service.store.bandit_state["arms"]
     assert all(candidate["status"] == "settled" for candidate in service.store.candidates.values())
 
