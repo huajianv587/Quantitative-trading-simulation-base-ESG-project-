@@ -285,7 +285,7 @@ def build_analysis_output(module: str, payload: dict[str, Any] | None = None, *,
         key=lambda record: (-_safe_float(record.get("score")), -_safe_float(record.get("confidence")), str(record.get("symbol"))),
     )
     numeric_summary = _numeric_summary(ranked_records)
-    top_symbols = [record["symbol"] for record in ranked_records[: min(5, len(ranked_records))]]
+    top_symbols = _infer_symbols(ranked_records)[: min(5, len(ranked_records))]
     score_values = [_safe_float(record.get("score")) for record in ranked_records]
     return_values = [_safe_float(record.get("expected_return")) for record in ranked_records]
 
