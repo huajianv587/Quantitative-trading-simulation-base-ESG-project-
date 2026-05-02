@@ -1017,7 +1017,29 @@ class TradingAgentService:
             latest = self.store.list_debate_runs(limit=1, symbol=symbol)
             debate_source = latest[0] if latest else None
         if not debate_source:
-            raise ValueError(f"No debate run available for {symbol}")
+            approval = RiskApproval(
+                approval_id=f"risk-{symbol.upper()}-{uuid.uuid4().hex[:10]}",
+                generated_at=utc_now(),
+                symbol=symbol.upper(),
+                debate_id=None,
+                requested_action="block",
+                approved_action="block",
+                verdict="reject",
+                signal_ttl_minutes=signal_ttl_minutes,
+                hard_blocks=["missing_debate_run"],
+                risk_flags=["risk_evaluation_requires_debate_evidence"],
+                rationale=[
+                    f"No debate run is available for {symbol.upper()}.",
+                    "Risk approval is blocked until a debate/evidence trace exists.",
+                ],
+                metadata={
+                    "status": "blocked",
+                    "reason": "missing_debate_run",
+                    "next_action": "run_debate_before_risk_approval",
+                },
+                lineage=["trading_risk_evaluate", "missing_debate_gate"],
+            )
+            return self.store.save_risk_approval(approval)
         debate = DebateReport.model_validate(debate_source)
         approval = self._build_risk_approval(symbol=symbol, debate=debate, signal_ttl_minutes=signal_ttl_minutes)
         return self.store.save_risk_approval(approval)

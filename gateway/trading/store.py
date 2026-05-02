@@ -189,6 +189,13 @@ class TradingStore:
         return payload
 
     def list_debate_runs(self, *, limit: int = 20, symbol: str | None = None) -> list[dict[str, Any]]:
+        rows = self.storage.list_records("debate_runs")
+        if symbol:
+            wanted = str(symbol).upper()
+            rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
+        if rows:
+            rows.sort(key=lambda item: str(item.get("generated_at") or ""), reverse=True)
+            return rows[: max(1, int(limit))]
         filters = {"symbol": str(symbol).upper()} if symbol else None
         return list_table_rows("debate_runs", limit=limit, order_by="generated_at", desc=True, filters=filters)
 
@@ -199,6 +206,13 @@ class TradingStore:
         return payload
 
     def list_risk_approvals(self, *, limit: int = 20, symbol: str | None = None) -> list[dict[str, Any]]:
+        rows = self.storage.list_records("risk_approvals")
+        if symbol:
+            wanted = str(symbol).upper()
+            rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
+        if rows:
+            rows.sort(key=lambda item: str(item.get("generated_at") or ""), reverse=True)
+            return rows[: max(1, int(limit))]
         filters = {"symbol": str(symbol).upper()} if symbol else None
         return list_table_rows("risk_approvals", limit=limit, order_by="generated_at", desc=True, filters=filters)
 
