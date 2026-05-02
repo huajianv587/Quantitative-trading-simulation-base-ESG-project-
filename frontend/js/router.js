@@ -54,6 +54,7 @@ export const ROUTES = {
   '/execution': { module: () => import(`./pages/execution.js?${VER}`), labelKey: 'page.execution', icon: 'zap', group: 'quant' },
   '/paper-performance': { module: () => import(`./pages/paper-performance.js?${VER}`), labelKey: 'page.paper_performance', icon: 'bar-chart-3', group: 'quant' },
   '/validation': { module: () => import(`./pages/validation.js?${VER}`), labelKey: 'page.validation', icon: 'shield', group: 'research' },
+  '/capabilities': { module: () => import(`./pages/capabilities.js?${VER}`), labelKey: 'page.capabilities', icon: 'grid', group: 'research' },
   '/models': { module: () => import(`./pages/models.js?${VER}`), labelKey: 'page.models', icon: 'cpu', group: 'research' },
   '/rl-lab': { module: () => import(`./pages/rl-lab.js?${VER}`), labelKey: 'page.rl_lab', icon: 'cpu', group: 'research' },
   '/chat': { module: () => import(`./pages/chat.js?${VER}`), labelKey: 'page.chat', icon: 'message-square', group: 'research' },

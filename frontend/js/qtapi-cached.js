@@ -283,6 +283,18 @@ export const api = {
     universe: () => _get(Q + '/universe/default'),
   },
 
+  blueprint: {
+    capabilities: () => _get(Q + '/capabilities'),
+    analysisRun: (payload) => _post(Q + '/analysis/run', payload || {}),
+    modelTrain: (payload) => _post(Q + '/models/train', payload || {}),
+    modelPredict: (payload) => _post(Q + '/models/predict', payload || {}),
+    dataPipelineRun: (payload) => _post(Q + '/data/pipeline/run', payload || {}),
+    riskEvaluate: (payload) => _post(Q + '/risk/evaluate', payload || {}),
+    advancedBacktestRun: (payload) => _post(Q + '/backtest/advanced/run', payload || {}),
+    infrastructureCheck: (payload) => _post(Q + '/infrastructure/check', payload || {}),
+    reportingBuild: (payload) => _post(Q + '/reporting/build', payload || {}),
+  },
+
   agent: {
     newSession: (sessionId, userId) => {
       let query = '?session_id=' + encodeURIComponent(sessionId || '');

@@ -3,7 +3,19 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
+from typing import Any
 
+from blueprint_runtime import (
+    build_capabilities_report,
+    build_reporting_production,
+    check_infrastructure_production,
+    evaluate_risk_suite_production,
+    predict_model_production,
+    run_advanced_backtest_production,
+    run_analysis_production,
+    run_data_pipeline_production,
+    train_model_production,
+)
 from gateway.api.quant_schemas import (
     QuantBacktestRequest,
     QuantBacktestSweepRequest,
@@ -108,6 +120,51 @@ def get_default_universe():
         "benchmark": service.default_benchmark,
         "members": [member.model_dump() for member in service.get_default_universe()],
     }
+
+
+@router.get("/capabilities")
+def get_blueprint_capabilities():
+    return build_capabilities_report()
+
+
+@router.post("/analysis/run")
+def run_blueprint_analysis(payload: dict[str, Any] | None = None):
+    return run_analysis_production(payload or {})
+
+
+@router.post("/models/train")
+def train_blueprint_model(payload: dict[str, Any] | None = None):
+    return train_model_production(payload or {})
+
+
+@router.post("/models/predict")
+def predict_blueprint_model(payload: dict[str, Any] | None = None):
+    return predict_model_production(payload or {})
+
+
+@router.post("/data/pipeline/run")
+def run_blueprint_data_pipeline(payload: dict[str, Any] | None = None):
+    return run_data_pipeline_production(payload or {})
+
+
+@router.post("/risk/evaluate")
+def evaluate_blueprint_risk(payload: dict[str, Any] | None = None):
+    return evaluate_risk_suite_production(payload or {})
+
+
+@router.post("/backtest/advanced/run")
+def run_blueprint_advanced_backtest(payload: dict[str, Any] | None = None):
+    return run_advanced_backtest_production(payload or {})
+
+
+@router.post("/infrastructure/check")
+def check_blueprint_infrastructure(payload: dict[str, Any] | None = None):
+    return check_infrastructure_production(payload or {})
+
+
+@router.post("/reporting/build")
+def build_blueprint_reporting(payload: dict[str, Any] | None = None):
+    return build_reporting_production(payload or {})
 
 
 @router.post("/research/run")

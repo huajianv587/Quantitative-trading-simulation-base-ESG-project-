@@ -45,7 +45,7 @@ const NAV_GROUPS = [
     id: 'governance',
     labelKey: 'nav.governance',
     statusKey: 'governance',
-    paths: ['/outcome-center', '/validation', '/models', '/reports', '/data-management', '/rl-lab', '/chat', '/score'],
+    paths: ['/outcome-center', '/validation', '/capabilities', '/models', '/reports', '/data-management', '/rl-lab', '/chat', '/score'],
   },
   {
     id: 'system_admin',

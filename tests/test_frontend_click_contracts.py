@@ -77,6 +77,16 @@ CLICK_TARGETS = {
     "frontend/js/pages/portfolio.js": ["#btn-optimize", "#btn-to-execution", "#s5-execute"],
     "frontend/js/pages/chat.js": ["#send-btn"],
     "frontend/js/pages/score-dashboard.js": ["#score-btn"],
+    "frontend/js/pages/capabilities.js": [
+        "#btn-capabilities-refresh",
+        "#btn-run-blueprint-analysis",
+        "#btn-run-blueprint-model",
+        "#btn-run-blueprint-data",
+        "#btn-run-blueprint-risk",
+        "#btn-run-blueprint-backtest",
+        "#btn-run-blueprint-infra",
+        "#btn-run-blueprint-reporting",
+    ],
     "frontend/js/pages/reports.js": ["#generate-btn"],
     "frontend/js/pages/data-management.js": ["#sync-btn"],
     "frontend/js/pages/push-rules.js": ["#new-rule-btn"],
@@ -128,6 +138,7 @@ def test_router_declares_current_workbench_routes():
         "/execution",
         "/paper-performance",
         "/validation",
+        "/capabilities",
         "/models",
         "/rl-lab",
         "/chat",
@@ -143,7 +154,7 @@ def test_router_declares_current_workbench_routes():
 def test_router_declares_all_current_routes():
     router_source = Path("frontend/js/router.js").read_text(encoding="utf-8")
     routes = re.findall(r"'((?:/)[^']*)':\s*\{", router_source)
-    assert len(routes) == 35
+    assert len(routes) == 36
 
 
 def test_router_redirects_empty_shell_urls_back_to_landing():
@@ -202,6 +213,15 @@ def test_trading_api_client_declares_public_runtime_methods():
         "/api/v1/trading/fusion/status",
         "/platform/dashboard-summary",
         "/platform/dashboard-secondary",
+        "/capabilities",
+        "/analysis/run",
+        "/models/train",
+        "/models/predict",
+        "/data/pipeline/run",
+        "/risk/evaluate",
+        "/backtest/advanced/run",
+        "/infrastructure/check",
+        "/reporting/build",
     ]:
         assert route in api_source
     assert "_post('/api/agent/esg-score" not in api_source
@@ -379,6 +399,7 @@ def test_critical_shell_and_workbench_files_do_not_contain_known_mojibake_fragme
         "frontend/js/pages/autopilot-policy.js",
         "frontend/js/pages/dashboard.js",
         "frontend/js/pages/backtest.js",
+        "frontend/js/pages/capabilities.js",
         "frontend/js/pages/rl-lab.js",
     ]
     for relative_path in targets:
@@ -420,5 +441,6 @@ def test_i18n_declares_required_shell_label_keys():
         "'page.outcome_center':",
         "'common.backend_online':",
         "'common.page_failed_load':",
+        "'page.capabilities':",
     ]:
         assert expected in content

@@ -219,6 +219,18 @@ export var api = {
     universe: function() { return _get(Q + '/universe/default'); },
   },
 
+  blueprint: {
+    capabilities: function() { return _get(Q + '/capabilities'); },
+    analysisRun: function(payload) { return _post(Q + '/analysis/run', payload || {}); },
+    modelTrain: function(payload) { return _post(Q + '/models/train', payload || {}); },
+    modelPredict: function(payload) { return _post(Q + '/models/predict', payload || {}); },
+    dataPipelineRun: function(payload) { return _post(Q + '/data/pipeline/run', payload || {}); },
+    riskEvaluate: function(payload) { return _post(Q + '/risk/evaluate', payload || {}); },
+    advancedBacktestRun: function(payload) { return _post(Q + '/backtest/advanced/run', payload || {}); },
+    infrastructureCheck: function(payload) { return _post(Q + '/infrastructure/check', payload || {}); },
+    reportingBuild: function(payload) { return _post(Q + '/reporting/build', payload || {}); },
+  },
+
   agent: {
     newSession: function(sessionId, userId) {
       var query = '?session_id=' + encodeURIComponent(sessionId || '');
