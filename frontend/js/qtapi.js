@@ -223,13 +223,13 @@ export var api = {
     newSession: function(sessionId, userId) {
       var query = '?session_id=' + encodeURIComponent(sessionId || '');
       if (userId) query += '&user_id=' + encodeURIComponent(userId);
-      return _post('/api/session' + query, undefined);
+      return _post('/session' + query, undefined);
     },
     history: function(sessionId, limit) {
-      return _get('/api/history/' + encodeURIComponent(sessionId) + '?limit=' + encodeURIComponent(limit || 20));
+      return _get('/history/' + encodeURIComponent(sessionId) + '?limit=' + encodeURIComponent(limit || 20));
     },
-    analyze: function(payload) { return _post('/api/agent/analyze', payload); },
-    esgScore: function(payload) { return _post('/api/agent/esg-score', payload); },
+    analyze: function(payload) { return _post('/agent/analyze', payload); },
+    esgScore: function(payload) { return _post('/agent/esg-score', payload); },
   },
 
   research: {

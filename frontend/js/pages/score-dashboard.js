@@ -328,13 +328,16 @@ function renderErrorState(container, company, ticker, detail) {
 function renderScore(container, response) {
   _lastScoreResponse = response;
   const report = response.esg_report || {};
+  const eReport = report.e_scores || {};
+  const sReport = report.s_scores || {};
+  const gReport = report.g_scores || {};
   const overall = firstDef(report.overall_score, report.overall, 72.4);
-  const eScore = firstDef(report.e_score, report.environment_score, 68.1);
-  const sScore = firstDef(report.s_score, report.social_score, 74.8);
-  const gScore = firstDef(report.g_score, report.governance_score, 74.2);
-  const company = report.company || 'Company';
+  const eScore = firstDef(report.e_score, report.environment_score, eReport.overall_score, report.pillar_breakdown?.RawE, 68.1);
+  const sScore = firstDef(report.s_score, report.social_score, sReport.overall_score, report.pillar_breakdown?.RawS, 74.8);
+  const gScore = firstDef(report.g_score, report.governance_score, gReport.overall_score, report.pillar_breakdown?.RawG, 74.2);
+  const company = report.company || report.company_name || 'Company';
   const ticker = report.ticker || '-';
-  const rating = report.rating || ratingFromScore(overall);
+  const rating = report.rating || report.house_grade || ratingFromScore(overall);
   const percentile = report.percentile || Math.round(overall * 1.05);
 
   container.querySelector('#esg-company-name').textContent = company;
@@ -348,7 +351,7 @@ function renderScore(container, response) {
   window.setTimeout(() => {
     drawRingGauge(container.querySelector('#esg-ring'), overall);
     drawRadar(container, eScore, sScore, gScore);
-    drawTrendLine(container.querySelector('#esg-trend-canvas'), report.trend);
+    drawTrendLine(container.querySelector('#esg-trend-canvas'), report.trend || report.historical_data);
   }, 40);
 
   renderDimBars(container, eScore, sScore, gScore);
@@ -372,10 +375,15 @@ function renderDimBars(container, eScore, sScore, gScore) {
 
 function renderDimensionCards(container, report, eScore, sScore, gScore) {
   const scores = { environment: eScore, social: sScore, governance: gScore };
+  const metricScores = {
+    environment: extractMetricScores(report.e_scores),
+    social: extractMetricScores(report.s_scores),
+    governance: extractMetricScores(report.g_scores),
+  };
   const subs = subScores();
   container.querySelector('#esg-dim-cards').innerHTML = dimensions().map(dimension => {
     const score = scores[dimension.key];
-    const values = report.sub_scores?.[dimension.key] || [];
+    const values = report.sub_scores?.[dimension.key] || metricScores[dimension.key] || [];
     const rows = subs[dimension.key].map((name, index) => {
       const value = values[index] ?? score;
       return `
@@ -396,6 +404,12 @@ function renderDimensionCards(container, report, eScore, sScore, gScore) {
         ${rows}
       </article>`;
   }).join('');
+}
+
+function extractMetricScores(scoreBlock) {
+  return Object.values(scoreBlock?.metrics || {})
+    .map(metric => Number(metric?.score))
+    .filter(Number.isFinite);
 }
 
 function renderPeers(container, peers, overall) {

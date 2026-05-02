@@ -157,6 +157,8 @@ def test_trading_api_client_declares_public_runtime_methods():
     for route in [
         "/session",
         "/history/",
+        "/agent/analyze",
+        "/agent/esg-score",
         "/research/context",
         "/intelligence/scan",
         "/intelligence/evidence",
@@ -202,6 +204,8 @@ def test_trading_api_client_declares_public_runtime_methods():
         "/platform/dashboard-secondary",
     ]:
         assert route in api_source
+    assert "_post('/api/agent/esg-score" not in api_source
+    assert "_post('/api/session" not in api_source
 
 
 def test_real_only_pages_no_longer_reference_mock_or_demo_fallbacks():
@@ -351,6 +355,7 @@ def test_app_config_prefers_runtime_origin_over_localhost_hardcode():
 def test_launcher_opens_root_and_verifies_quant_fingerprint():
     content = Path("start.cmd").read_text(encoding="utf-8")
     assert 'set "APP_URL=%API_URL%/"' in content
+    assert "/livez" in content
     assert "app_id -eq 'quant-terminal'" in content
     assert "service_name -eq 'Quant Terminal'" in content
     assert "PORT_CANDIDATES=8012" in content

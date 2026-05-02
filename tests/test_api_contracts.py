@@ -283,6 +283,17 @@ def test_esg_score_endpoint_preserves_service_unavailable(monkeypatch):
     assert response.json()["detail"] == "Data Source Manager not ready"
 
 
+def test_legacy_api_agent_alias_preserves_frontend_compatibility(monkeypatch):
+    monkeypatch.setattr(main_module.runtime, "esg_scorer", object())
+    monkeypatch.setattr(main_module.runtime, "data_source_manager", None)
+    client = TestClient(main_module.app)
+
+    response = client.post("/api/agent/esg-score", json={"company": "Tesla"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Data Source Manager not ready"
+
+
 def test_sync_status_tracks_background_result(monkeypatch):
     fake_manager = _FakeDataSourceManager()
     monkeypatch.setattr(main_module.runtime, "data_source_manager", fake_manager)

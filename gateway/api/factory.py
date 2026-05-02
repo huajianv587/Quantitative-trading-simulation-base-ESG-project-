@@ -91,6 +91,7 @@ def create_app(app_runtime: RuntimeContext = runtime) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(auth.router, prefix="/api", include_in_schema=False)
     app.include_router(agent.router)
+    app.include_router(agent.router, prefix="/api", include_in_schema=False)
     app.include_router(reports.router)
     app.include_router(admin.router)
     app.include_router(user.router)
