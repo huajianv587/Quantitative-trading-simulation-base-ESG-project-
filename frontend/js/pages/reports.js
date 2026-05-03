@@ -291,13 +291,16 @@ async function generateReport() {
   const payload = {
     report_type: _activeType,
     companies: companies(),
-    async: false,
+    metrics: { sharpe: 1.2, cumulative_return: 0.08 },
   };
   btn.disabled = true;
   btn.textContent = c('generating');
   try {
-    const response = await api.reports.generate(payload);
-    _currentReport = normalizeReport(response);
+    const response = await api.jobs.create({
+      job_type: 'report_generation',
+      payload,
+    });
+    _currentReport = normalizeReport(response.result?.artifact?.payload || response.result || response);
     renderReport();
     await refreshArchive();
     toast.success(c('generated'), _currentReport.report_id || _activeType);

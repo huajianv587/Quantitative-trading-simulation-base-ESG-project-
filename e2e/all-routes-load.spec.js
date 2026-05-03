@@ -31,7 +31,7 @@ async function waitForRouteShell(page) {
   }, { timeout: 30000 });
 }
 
-test('all 31 routes load without shell crash (zh dark)', async ({ page, baseURL }) => {
+test('all routes load without shell crash (zh dark)', async ({ page, baseURL }) => {
   test.setTimeout(600000);
   const consoleErrors = [];
   const failedRequests = [];
@@ -64,7 +64,7 @@ test('all 31 routes load without shell crash (zh dark)', async ({ page, baseURL 
     await page.screenshot({ path: screenshotPath(slug(route)), fullPage: true });
   }
 
-  expect(ROUTES).toHaveLength(31);
+  expect(ROUTES).toHaveLength(36);
   expect(consoleErrors).toEqual([]);
   expect(failedRequests).toEqual([]);
 });

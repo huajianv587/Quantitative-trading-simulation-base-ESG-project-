@@ -41,6 +41,9 @@ function _scopeForRequest(method, path, explicitScope) {
   if (normalized.indexOf('/ops') === 0) return 'ops';
   if (normalized.indexOf('/scheduler') === 0) return 'scheduler';
   if (normalized.indexOf('/user') === 0) return 'user';
+  if (normalized.indexOf('/api/v1/platform') === 0) return 'ops';
+  if (normalized.indexOf('/api/v1/jobs') === 0) return 'ops';
+  if (normalized.indexOf('/api/v1/data') === 0) return 'ops';
   if (normalized.indexOf('/api/v1/trading') === 0 || normalized.indexOf('/api/v1/watchlist') === 0) return 'trading';
   if (normalized.indexOf('/api/v1/connectors') === 0) return 'research';
   if (normalized.indexOf('/api/v1/quant/execution') === 0
@@ -201,6 +204,8 @@ export var api = {
   },
 
   platform: {
+    schemaHealth: function() { return _get('/api/v1/platform/schema-health', { scope: 'ops' }); },
+    releaseHealth: function() { return _get('/api/v1/platform/release-health', { scope: 'ops' }); },
     overview: function() { return _get(Q + '/platform/overview'); },
     dashboardSummary: function(provider) {
       var query = provider ? ('?provider=' + encodeURIComponent(provider)) : '';
@@ -217,6 +222,19 @@ export var api = {
       return _get(Q + '/dashboard/chart' + query);
     },
     universe: function() { return _get(Q + '/universe/default'); },
+  },
+
+  jobs: {
+    create: function(payload) { return _post('/api/v1/jobs', payload || {}, { scope: 'ops' }); },
+    get: function(jobId) { return _get('/api/v1/jobs/' + encodeURIComponent(jobId), { scope: 'ops' }); },
+    cancel: function(jobId) { return _post('/api/v1/jobs/' + encodeURIComponent(jobId) + '/cancel', {}, { scope: 'ops' }); },
+    retry: function(jobId) { return _post('/api/v1/jobs/' + encodeURIComponent(jobId) + '/retry', {}, { scope: 'ops' }); },
+    logs: function(jobId) { return _get('/api/v1/jobs/' + encodeURIComponent(jobId) + '/logs', { scope: 'ops' }); },
+  },
+
+  dataConfig: {
+    center: function() { return _get('/api/v1/data/config-center', { scope: 'ops' }); },
+    saveProvider: function(payload) { return _post('/api/v1/data/config-center/providers', payload || {}, { scope: 'ops' }); },
   },
 
   blueprint: {
@@ -590,6 +608,8 @@ export var api = {
       return _post('/api/v1/trading/strategies/' + encodeURIComponent(strategyId) + '/allocation', payload || {}, { scope: 'execution' });
     },
     executionPathStatus: function() { return _get('/api/v1/trading/execution-path/status'); },
+    safetyCenter: function() { return _get('/api/v1/trading/safety-center'); },
+    automationTimeline: function() { return _get('/api/v1/trading/automation/timeline'); },
     dashboardState: function(provider) {
       var query = provider ? ('?provider=' + encodeURIComponent(provider)) : '';
       return _get('/api/v1/trading/dashboard/state' + query);

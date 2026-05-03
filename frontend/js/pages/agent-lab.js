@@ -257,7 +257,9 @@ function renderReportPreview() {
 }
 
 function timeline(rows) {
-  _container.querySelector('#agent-timeline').innerHTML = `
+  const host = _container?.querySelector('#agent-timeline');
+  if (!host) return;
+  host.innerHTML = `
     <div class="workbench-list workbench-scroll-list">
       ${rows.map((row) => `
         <article class="workbench-item">
@@ -352,6 +354,7 @@ async function runWorkflow() {
     timeline(rows);
     const outcomes = await api.outcomes.evaluate({ symbol: symbol(), decision_id: decision.decision_id });
     if (!isMounted()) return;
+    if (!report) return;
 
     rows[5] = {
       step: t('Outcome shadow log', '结果影子日志'),

@@ -40,7 +40,7 @@ const COPY = {
     notSet: '未设置',
     evidenceHint: '扫描证据后会加载带来源链路的条目。',
     factorHint: '运行因子发现后会生成 IC、RankIC 和门禁结果。',
-    factorReviewHint: '门禁通过或待复核',
+    factorReviewHint: '门禁通过或等待复核',
     pathSummary: '路径摘要',
     factorAttribution: '因子归因',
     historicalAnalogs: '历史相似事件',
@@ -61,12 +61,13 @@ const STATUS_COPY_ZH = {
   clean: '正常',
   clear: '清晰',
   configured: '已配置',
+  degraded: '降级',
   derived: '自动推导',
   disabled: '已停用',
   enabled: '已启用',
   error: '错误',
   failed: '失败',
-  filled: '已填充',
+  filled: '已成交',
   flagged: '已标记',
   forming: '形成中',
   guarded: '受保护',
@@ -81,7 +82,7 @@ const STATUS_COPY_ZH = {
   no: '否',
   off: '关闭',
   on: '开启',
-  paper: '模拟',
+  paper: 'Paper',
   pass: '通过',
   paused: '已暂停',
   pending: '待处理',
@@ -103,6 +104,7 @@ const STATUS_COPY_ZH = {
   short: '看空',
   stored: '已存储',
   submitted: '已提交',
+  succeeded: '成功',
   tagged: '已标注',
   tracked: '已追踪',
   untouched: '未触达',
@@ -140,6 +142,7 @@ const POSITIVE_STATUSES = new Set([
   'shadow',
   'stored',
   'submitted',
+  'succeeded',
   'tagged',
   'tracked',
   'untouched',
@@ -176,7 +179,7 @@ export function esc(value) {
     '<': '&lt;',
     '>': '&gt;',
     '"': '&quot;',
-    '\'': '&#39;',
+    "'": '&#39;',
   }[ch]));
 }
 
@@ -226,8 +229,6 @@ export function emptyState(title = text('empty'), detail = '') {
 
 export function renderError(el, err, options = {}) {
   if (!el) return;
-
-  // 使用统一的错误处理系统
   if (window.errorHandler) {
     const errorInfo = window.errorHandler.parseError(err, {
       context: options.context || 'workbench',
@@ -241,7 +242,6 @@ export function renderError(el, err, options = {}) {
     el.innerHTML = '';
     el.appendChild(errorUI);
   } else {
-    // 降级处理
     el.innerHTML = emptyState(text('requestFailed'), err?.message || String(err || ''));
   }
 }
@@ -444,17 +444,16 @@ export function renderFactorCards(cards, options = {}) {
 }
 
 export function renderProtectionChecks(checks) {
-  var entries = checks && typeof checks === 'object' ? Object.entries(checks) : [];
+  const entries = checks && typeof checks === 'object' ? Object.entries(checks) : [];
   if (!entries.length) return emptyState('Protection Checks', text('notSet'));
   return `<div class="workbench-kv-list compact-kv-list">
-    ${entries.map(function(entry) {
-      var key = entry[0];
-      var value = entry[1] || {};
-      var violations = Array.isArray(value.violations) ? value.violations : [];
+    ${entries.map(([key, value]) => {
+      const payload = value || {};
+      const violations = Array.isArray(payload.violations) ? payload.violations : [];
       return `<div class="workbench-kv-row">
         <span>${esc(key.replace(/_/g, ' '))}</span>
-        <strong>${statusBadge(value.passed ? 'pass' : 'blocked')}</strong>
-        <em>${esc(violations.length ? violations.slice(0, 2).join(', ') : (value.detail || 'clean'))}</em>
+        <strong>${statusBadge(payload.passed ? 'pass' : 'blocked')}</strong>
+        <em>${esc(violations.length ? violations.slice(0, 2).join(', ') : (payload.detail || 'clean'))}</em>
       </div>`;
     }).join('')}
   </div>`;
@@ -499,7 +498,7 @@ export function renderRegistryGate(payload) {
 
 export function renderMarketDepthDiagnostics(payload) {
   if (!payload || typeof payload !== 'object') return emptyState('Market Depth', text('notSet'));
-  var latest = Array.isArray(payload.latest) ? payload.latest : [];
+  const latest = Array.isArray(payload.latest) ? payload.latest : [];
   return `
     <section class="workbench-section">
       <div class="workbench-section__title">Market Depth</div>
@@ -515,9 +514,7 @@ export function renderMarketDepthDiagnostics(payload) {
       </div>
       ${renderTokenPreview(payload.blocking_reasons || [], { tone: 'risk', maxItems: 6, emptyLabel: 'no blockers' })}
       ${latest.length ? `<div class="workbench-kv-list compact-kv-list">
-        ${latest.slice(0, 3).map(function(snapshot) {
-          return `<div class="workbench-kv-row"><span>${esc(snapshot.symbol || '')}</span><strong>${esc(snapshot.spread_bps || 0)} bps / ${esc(snapshot.session || '-')}</strong></div>`;
-        }).join('')}
+        ${latest.slice(0, 3).map((snapshot) => `<div class="workbench-kv-row"><span>${esc(snapshot.symbol || '')}</span><strong>${esc(snapshot.spread_bps || 0)} bps / ${esc(snapshot.session || '-')}</strong></div>`).join('')}
       </div>` : ''}
     </section>
   `;
@@ -525,7 +522,7 @@ export function renderMarketDepthDiagnostics(payload) {
 
 export function renderSimulationSummary(payload) {
   if (!payload) return emptyState(text('noSimulation'), text('noSimulationHint'));
-  var scenario = payload.scenario || {};
+  const scenario = payload.scenario || {};
   return `
     <div class="workbench-metric-grid functional-empty__metrics">
       ${metric(text('expected'), pct(payload.expected_return ?? payload.mean_return ?? 0))}
@@ -543,9 +540,9 @@ export function renderSimulationSummary(payload) {
 
 export function renderSimulationResult(payload) {
   if (!payload) return renderSimulationSummary(payload);
-  var micro = payload.microstructure || {};
-  var sandbox = payload.execution_quality_sandbox || {};
-  var replay = payload.order_book_replay || {};
+  const micro = payload.microstructure || {};
+  const sandbox = payload.execution_quality_sandbox || {};
+  const replay = payload.order_book_replay || {};
   return `
     ${renderSimulationSummary(payload)}
     ${renderMarketDepthDiagnostics(payload.market_depth_status || replay)}
@@ -555,7 +552,7 @@ export function renderSimulationResult(payload) {
       <div class="workbench-mini-grid">
         ${miniMetric('best session', micro.metrics?.best_session || sandbox.best_session || '-')}
         ${miniMetric('spread', num(micro.metrics?.avg_spread_bps || replay.summary?.avg_spread_bps || 0, 2))}
-        ${miniMetric('depth', num(micro.metrics?.avg_depth || replay.summary?.avg_bid_depth || 0, 2))}
+        ${miniMetric('depth', num(micro.metrics?.avg_depth || replay.summary?.avg_depth || replay.summary?.avg_bid_depth || 0, 2))}
         ${miniMetric('imbalance', num(micro.metrics?.avg_imbalance || replay.summary?.avg_imbalance || 0, 3))}
       </div>
       ${sandbox.fallback_banner ? `<div class="empty-state empty-state--compact"><div class="empty-state__text">${esc(sandbox.fallback_banner)}</div></div>` : ''}

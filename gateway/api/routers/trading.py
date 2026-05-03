@@ -20,6 +20,7 @@ from gateway.api.trading_schemas import (
     TradingWatchlistAddRequest,
 )
 from gateway.app_runtime import runtime
+from gateway.platform.production_ops import build_automation_timeline, build_trading_safety_center
 from gateway.trading.service import get_trading_service
 
 router = APIRouter(tags=["trading"])
@@ -249,3 +250,20 @@ def trading_dashboard_state(provider: str = "auto") -> dict[str, Any]:
 @router.get("/api/v1/trading/fusion/status")
 def trading_fusion_status() -> dict[str, Any]:
     return _trading_service().fusion_reference_manifest()
+
+
+@router.get("/api/v1/trading/safety-center")
+def trading_safety_center() -> dict[str, Any]:
+    try:
+        trading_service = _trading_service()
+    except HTTPException:
+        trading_service = None
+    return build_trading_safety_center(
+        quant_service=runtime.quant_system,
+        trading_service=trading_service,
+    )
+
+
+@router.get("/api/v1/trading/automation/timeline")
+def trading_automation_timeline() -> dict[str, Any]:
+    return build_automation_timeline(quant_service=runtime.quant_system)

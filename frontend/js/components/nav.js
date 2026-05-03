@@ -24,34 +24,40 @@ const ICONS = {
 
 const NAV_GROUPS = [
   {
-    id: 'market_intel',
-    labelKey: 'nav.market_intel',
-    statusKey: 'market',
-    paths: ['/research', '/market-radar', '/connector-center', '/agent-lab'],
-  },
-  {
-    id: 'decision_hub',
-    labelKey: 'nav.decision_hub',
-    statusKey: 'decision',
-    paths: ['/intelligence', '/debate-desk', '/risk-board', '/factor-lab', '/simulation'],
-  },
-  {
-    id: 'trading_exec',
-    labelKey: 'nav.trading_exec',
+    id: 'trading_workbench',
+    labelKey: 'nav.trading_workbench',
     statusKey: 'trading',
-    paths: ['/trading-ops', '/autopilot-policy', '/strategy-registry', '/portfolio', '/backtest', '/execution'],
+    paths: ['/trading-ops', '/autopilot-policy', '/strategy-registry', '/portfolio', '/execution', '/paper-performance'],
   },
   {
-    id: 'governance',
-    labelKey: 'nav.governance',
-    statusKey: 'governance',
-    paths: ['/outcome-center', '/validation', '/capabilities', '/models', '/reports', '/data-management', '/rl-lab', '/chat', '/score'],
+    id: 'research_workbench',
+    labelKey: 'nav.research_workbench',
+    statusKey: 'research',
+    paths: ['/research', '/intelligence', '/market-radar', '/factor-lab', '/simulation', '/agent-lab', '/chat', '/score'],
   },
   {
-    id: 'system_admin',
-    labelKey: 'nav.system_admin',
-    statusKey: 'system',
-    paths: ['/push-rules', '/subscriptions'],
+    id: 'risk_approval',
+    labelKey: 'nav.risk_approval',
+    statusKey: 'risk',
+    paths: ['/debate-desk', '/risk-board', '/outcome-center', '/validation'],
+  },
+  {
+    id: 'data_models',
+    labelKey: 'nav.data_models',
+    statusKey: 'data',
+    paths: ['/connector-center', '/data-management', '/dataset', '/models', '/rl-lab', '/backtest', '/sweep', '/tearsheet'],
+  },
+  {
+    id: 'ops_reports',
+    labelKey: 'nav.ops_reports',
+    statusKey: 'ops',
+    paths: ['/reports', '/push-rules', '/subscriptions'],
+  },
+  {
+    id: 'blueprint_center',
+    labelKey: 'nav.blueprint_center',
+    statusKey: 'blueprint',
+    paths: ['/capabilities'],
   },
 ];
 
@@ -110,11 +116,13 @@ function routeMeta(path) {
 function groupStatus(group) {
   const count = group.paths.filter((path) => !!routeMeta(path)).length;
   const statusMap = {
-    market: t('nav.status.live'),
-    decision: `${count}`,
     trading: t('nav.status.paper'),
-    governance: t('nav.status.audit'),
+    research: t('nav.status.live'),
+    risk: t('nav.status.audit'),
+    data: `${count}`,
     system: t('nav.status.ops'),
+    ops: t('nav.status.ops'),
+    blueprint: t('nav.status.blueprint'),
   };
   return statusMap[group.statusKey] || `${count}`;
 }

@@ -50,3 +50,16 @@ jobs:
         run: |
           npx playwright test e2e/site-click-audit.spec.js --grep "site-wide"
           npx playwright test e2e/trading-agent-workbench.spec.js --grep "cached snapshot"
+
+      - name: Run full app acceptance
+        run: |
+          npx playwright test e2e/full-app-acceptance.spec.js
+
+      - name: Upload full app acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-app-acceptance
+          path: |
+            test-results/playwright/full-app-acceptance
+            playwright-report

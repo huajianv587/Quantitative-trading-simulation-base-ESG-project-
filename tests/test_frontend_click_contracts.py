@@ -209,8 +209,14 @@ def test_trading_api_client_declares_public_runtime_methods():
         "/api/v1/trading/autopilot/disarm",
         "/api/v1/trading/strategies",
         "/api/v1/trading/execution-path/status",
+        "/api/v1/trading/safety-center",
+        "/api/v1/trading/automation/timeline",
         "/api/v1/trading/dashboard/state",
         "/api/v1/trading/fusion/status",
+        "/api/v1/platform/schema-health",
+        "/api/v1/platform/release-health",
+        "/api/v1/data/config-center",
+        "/api/v1/jobs",
         "/platform/dashboard-summary",
         "/platform/dashboard-secondary",
         "/capabilities",
@@ -352,6 +358,15 @@ def test_nav_preserves_multi_group_expansion_and_mobile_defaults():
     assert "defaultGroupState" in nav_source
     assert "const openAllGroups = !isDesktopNavViewport();" in nav_source
     assert "setStoredGroups(openState);" in nav_source
+    for group_id in [
+        "trading_workbench",
+        "research_workbench",
+        "risk_approval",
+        "data_models",
+        "ops_reports",
+        "blueprint_center",
+    ]:
+        assert group_id in nav_source
 
 
 def test_compact_error_and_degraded_patterns_exist():
@@ -426,6 +441,11 @@ def test_i18n_declares_clean_chinese_shell_labels():
     content = Path("frontend/js/i18n.js").read_text(encoding="utf-8")
     for expected in [
         "'nav.platform': '平台'",
+        "'nav.trading_workbench': '交易工作台'",
+        "'nav.risk_approval': '风控与审批'",
+        "'nav.data_models': '数据与模型'",
+        "'nav.ops_reports': '运维与报告'",
+        "'nav.blueprint_center': '蓝图能力中心'",
         "'page.dashboard': '控制台'",
         "'page.market_radar': '市场雷达'",
         "'page.debate_desk': '辩论台'",
@@ -442,6 +462,12 @@ def test_i18n_declares_required_shell_label_keys():
     content = Path("frontend/js/i18n.js").read_text(encoding="utf-8")
     for expected in [
         "'nav.platform':",
+        "'nav.trading_workbench':",
+        "'nav.research_workbench':",
+        "'nav.risk_approval':",
+        "'nav.data_models':",
+        "'nav.ops_reports':",
+        "'nav.blueprint_center':",
         "'page.dashboard':",
         "'page.market_radar':",
         "'page.debate_desk':",
@@ -453,3 +479,11 @@ def test_i18n_declares_required_shell_label_keys():
         "'page.capabilities':",
     ]:
         assert expected in content
+
+
+def test_full_app_acceptance_spec_is_committed_without_png_artifacts():
+    content = Path("e2e/full-app-acceptance.spec.js").read_text(encoding="utf-8")
+    assert "test-results', 'playwright', 'full-app-acceptance" in content
+    assert "/api/v1/trading/safety-center" in content
+    assert "live_auto_submit.allowed).toBe(false)" in content
+    assert "MOJIBAKE_PATTERN" in content

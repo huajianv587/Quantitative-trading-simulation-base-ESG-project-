@@ -72,6 +72,7 @@ function bindEvents(container) {
 
 async function createSubscription(container) {
   const button = container.querySelector('#create-sub-btn');
+  if (!button) return;
   button.disabled = true;
   button.textContent = 'Creating...';
   try {
@@ -87,15 +88,20 @@ async function createSubscription(container) {
   } catch (err) {
     toast.error('Subscription failed', err.message);
   } finally {
-    button.disabled = false;
-    button.textContent = 'Create Subscription';
+    if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = 'Create Subscription';
+    }
   }
 }
 
 async function loadSubscriptions(container) {
+  if (!container || !container.isConnected) return;
   const body = container.querySelector('#subscriptions-body');
+  if (!body) return;
   try {
     const response = await api.user.subscriptions.list();
+    if (!container.isConnected || !body.isConnected) return;
     const subscriptions = response?.subscriptions || [];
     if (!subscriptions.length) {
       body.innerHTML = '<div class="text-muted text-sm">No subscriptions found.</div>';
@@ -130,6 +136,7 @@ async function loadSubscriptions(container) {
       });
     });
   } catch (err) {
+    if (!body.isConnected) return;
     body.innerHTML = `<div class="text-muted text-sm">${err.message}</div>`;
   }
 }

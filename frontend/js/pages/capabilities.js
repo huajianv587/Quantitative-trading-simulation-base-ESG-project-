@@ -2,6 +2,7 @@ import { api } from '../qtapi.js?v=8';
 import { toast } from '../components/toast.js?v=8';
 
 let _state = null;
+let _opsState = null;
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -61,6 +62,24 @@ function resultBox(payload) {
   return `<pre style="white-space:pre-wrap;max-height:360px;overflow:auto;font-size:11px">${esc(JSON.stringify(payload, null, 2))}</pre>`;
 }
 
+function opsCards() {
+  const state = _opsState || {};
+  const items = [
+    ['Schema', state.schemaHealth?.status, '/api/v1/platform/schema-health'],
+    ['Release', state.releaseHealth?.status, '/api/v1/platform/release-health'],
+    ['Data Config', state.dataConfig?.status, '/api/v1/data/config-center'],
+    ['Trading Safety', state.tradingSafety?.status, '/api/v1/trading/safety-center'],
+    ['Automation Timeline', state.automationTimeline?.status, '/api/v1/trading/automation/timeline'],
+  ];
+  return items.map(([label, status, endpoint]) => `
+    <article class="workbench-metric-card">
+      <div class="workbench-metric-card__label">${esc(label)}</div>
+      <div class="workbench-metric-card__value">${esc(String(status || 'loading').toUpperCase())}</div>
+      <div style="font-size:11px;color:var(--text-dim);font-family:var(--f-mono);overflow:hidden;text-overflow:ellipsis">${esc(endpoint)}</div>
+    </article>
+  `).join('');
+}
+
 function shell() {
   return `
     <div class="page-header">
@@ -102,6 +121,15 @@ function shell() {
       <button class="workbench-action-btn" id="btn-run-blueprint-reporting">Build Reporting</button>
     </div>
 
+    <section class="workbench-section" style="margin:18px 0">
+      <div class="workbench-section__title">Production Ops</div>
+      <div class="workbench-action-grid" style="margin-bottom:12px">
+        <button class="workbench-action-btn" id="btn-refresh-ops">Refresh Ops Health</button>
+        <button class="workbench-action-btn" id="btn-run-job-smoke">Run Job Smoke</button>
+      </div>
+      <div class="workbench-metric-grid">${opsCards()}</div>
+    </section>
+
     <div class="grid-2">
       <section>
         <div class="grid-2" id="capability-modules">${moduleCards()}</div>
@@ -123,7 +151,16 @@ function shell() {
 }
 
 async function load(container) {
-  _state = await api.blueprint.capabilities();
+  const [capabilities, schemaHealth, releaseHealth, dataConfig, tradingSafety, automationTimeline] = await Promise.all([
+    api.blueprint.capabilities(),
+    api.platform.schemaHealth(),
+    api.platform.releaseHealth(),
+    api.dataConfig.center(),
+    api.trading.safetyCenter(),
+    api.trading.automationTimeline(),
+  ]);
+  _state = capabilities;
+  _opsState = { schemaHealth, releaseHealth, dataConfig, tradingSafety, automationTimeline };
   container.innerHTML = shell();
   bind(container);
 }
@@ -147,35 +184,73 @@ async function runAction(container, label, fn) {
 
 function bind(container) {
   container.querySelector('#btn-capabilities-refresh')?.addEventListener('click', () => load(container));
-  container.querySelector('#btn-run-blueprint-analysis')?.addEventListener('click', () => runAction(container, 'Analysis', () => api.blueprint.analysisRun({
+  container.querySelector('#btn-refresh-ops')?.addEventListener('click', () => runAction(container, 'Ops health', async () => {
+    const [schemaHealth, releaseHealth, dataConfig, tradingSafety, automationTimeline] = await Promise.all([
+      api.platform.schemaHealth(),
+      api.platform.releaseHealth(),
+      api.dataConfig.center(),
+      api.trading.safetyCenter(),
+      api.trading.automationTimeline(),
+    ]);
+    _opsState = { schemaHealth, releaseHealth, dataConfig, tradingSafety, automationTimeline };
+    container.innerHTML = shell();
+    bind(container);
+    return _opsState;
+  }));
+  container.querySelector('#btn-run-job-smoke')?.addEventListener('click', () => runAction(container, 'Job smoke', () => api.jobs.create({
+    job_type: 'release_health_smoke',
+    payload: { source: 'blueprint_capabilities_page' },
+  })));
+  container.querySelector('#btn-run-blueprint-analysis')?.addEventListener('click', () => runAction(container, 'Analysis', () => api.jobs.create({
+    job_type: 'blueprint_analysis',
+    payload: {
     family: 'technical',
     symbol: 'AAPL',
     prices: [180, 181.5, 179.2, 183.4, 184.1, 186.2, 185.6, 188.4, 190.1, 191.3, 193.0],
+    },
   })));
-  container.querySelector('#btn-run-blueprint-model')?.addEventListener('click', () => runAction(container, 'Model training', () => api.blueprint.modelTrain({
+  container.querySelector('#btn-run-blueprint-model')?.addEventListener('click', () => runAction(container, 'Model training', () => api.jobs.create({
+    job_type: 'model_train',
+    payload: {
     model_key: 'web_linear_alpha',
     X: [[1, 0.2], [0.8, 0.1], [1.2, 0.3], [0.7, -0.1]],
     y: [0.03, 0.018, 0.041, 0.004],
+    },
   })));
-  container.querySelector('#btn-run-blueprint-data')?.addEventListener('click', () => runAction(container, 'Data pipeline', () => api.blueprint.dataPipelineRun({
+  container.querySelector('#btn-run-blueprint-data')?.addEventListener('click', () => runAction(container, 'Data pipeline', () => api.jobs.create({
+    job_type: 'data_pipeline',
+    payload: {
     symbols: ['AAPL', 'MSFT', 'NVDA'],
     loader: 'price_loader',
+    },
   })));
-  container.querySelector('#btn-run-blueprint-risk')?.addEventListener('click', () => runAction(container, 'Risk evaluation', () => api.blueprint.riskEvaluate({
+  container.querySelector('#btn-run-blueprint-risk')?.addEventListener('click', () => runAction(container, 'Risk evaluation', () => api.jobs.create({
+    job_type: 'risk_evaluate',
+    payload: {
     nav: [1.0, 0.98, 1.02, 0.97, 1.04],
     max_drawdown_limit: 0.08,
     returns: [0.01, -0.02, 0.04, -0.01],
+    },
   })));
-  container.querySelector('#btn-run-blueprint-backtest')?.addEventListener('click', () => runAction(container, 'Advanced backtest', () => api.blueprint.advancedBacktestRun({
+  container.querySelector('#btn-run-blueprint-backtest')?.addEventListener('click', () => runAction(container, 'Advanced backtest', () => api.jobs.create({
+    job_type: 'advanced_backtest',
+    payload: {
     returns: [0.01, -0.004, 0.006, 0.002, -0.003, 0.012],
     weights: { AAPL: 0.35, MSFT: 0.4, NVDA: 0.25 },
     notional: 100000,
+    },
   })));
-  container.querySelector('#btn-run-blueprint-infra')?.addEventListener('click', () => runAction(container, 'Infrastructure check', () => api.blueprint.infrastructureCheck({
+  container.querySelector('#btn-run-blueprint-infra')?.addEventListener('click', () => runAction(container, 'Infrastructure check', () => api.jobs.create({
+    job_type: 'infrastructure_check',
+    payload: {
     metrics: { population_drift: 0.08, run_cost_usd: 12, budget_usd: 100, trial_count: 5, best_score: 0.74 },
+    },
   })));
-  container.querySelector('#btn-run-blueprint-reporting')?.addEventListener('click', () => runAction(container, 'Reporting', () => api.blueprint.reportingBuild({
+  container.querySelector('#btn-run-blueprint-reporting')?.addEventListener('click', () => runAction(container, 'Reporting', () => api.jobs.create({
+    job_type: 'report_generation',
+    payload: {
     metrics: { sharpe: 1.2, cumulative_return: 0.08 },
+    },
   })));
 }
 

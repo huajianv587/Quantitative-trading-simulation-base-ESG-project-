@@ -428,9 +428,14 @@ async function runBacktest(container) {
   };
 
   try {
-    const result = await api.backtests.run(payload);
+    const job = await api.jobs.create({
+      job_type: 'advanced_backtest',
+      payload,
+    });
+    const result = job.result || job;
+    result.job_id = job.job_id;
     showResults(container, result);
-    toast.success(c('complete'), `${c('dataSource')}: ${result.data_source || 'unknown'}`);
+    toast.success(c('complete'), `${c('dataSource')}: ${result.data_source || result.status || 'job_queue'}`);
     loadHistory(container);
   } catch (error) {
     toast.error(c('failed'), error.message || '');

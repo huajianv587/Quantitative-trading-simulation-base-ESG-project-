@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -36,27 +37,47 @@ APP_FILE_LOG_LEVEL = _env_level("APP_FILE_LOG_LEVEL", logging.DEBUG)
 ERROR_FILE_LOG_LEVEL = _env_level("ERROR_FILE_LOG_LEVEL", logging.WARNING)
 APP_LOG_MAX_BYTES = _env_int("APP_LOG_MAX_BYTES", 5 * 1024 * 1024)
 APP_LOG_BACKUP_COUNT = _env_int("APP_LOG_BACKUP_COUNT", 5)
+_SHARED_HANDLERS: list[logging.Handler] | None = None
 
 
-def get_logger(name: str) -> logging.Logger:
-    logger = logging.getLogger(name)
-    if logger.handlers:
-        return logger
+class WindowsSafeRotatingFileHandler(RotatingFileHandler):
+    """Keep logging usable when another local process holds the log file."""
 
-    logger.setLevel(min(CONSOLE_LOG_LEVEL, APP_FILE_LOG_LEVEL, ERROR_FILE_LOG_LEVEL))
-    logger.propagate = False
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rollover_blocked_until = 0.0
+
+    def shouldRollover(self, record: logging.LogRecord) -> bool:  # noqa: N802 - logging API
+        if time.time() < self._rollover_blocked_until:
+            return False
+        return super().shouldRollover(record)
+
+    def doRollover(self) -> None:  # noqa: N802 - logging API
+        try:
+            super().doRollover()
+        except PermissionError:
+            self._rollover_blocked_until = time.time() + 60
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 32:
+                self._rollover_blocked_until = time.time() + 60
+                return
+            raise
+
+
+def _build_shared_handlers(formatter: logging.Formatter) -> list[logging.Handler]:
+    global _SHARED_HANDLERS
+    if _SHARED_HANDLERS is not None:
+        return _SHARED_HANDLERS
+
+    handlers: list[logging.Handler] = []
 
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(CONSOLE_LOG_LEVEL)
     console.setFormatter(formatter)
-    logger.addHandler(console)
+    handlers.append(console)
 
     try:
-        app_file = RotatingFileHandler(
+        app_file = WindowsSafeRotatingFileHandler(
             LOG_DIR / "app.log",
             maxBytes=APP_LOG_MAX_BYTES,
             backupCount=APP_LOG_BACKUP_COUNT,
@@ -64,9 +85,9 @@ def get_logger(name: str) -> logging.Logger:
         )
         app_file.setLevel(APP_FILE_LOG_LEVEL)
         app_file.setFormatter(formatter)
-        logger.addHandler(app_file)
+        handlers.append(app_file)
 
-        error_file = RotatingFileHandler(
+        error_file = WindowsSafeRotatingFileHandler(
             LOG_DIR / "error.log",
             maxBytes=APP_LOG_MAX_BYTES,
             backupCount=APP_LOG_BACKUP_COUNT,
@@ -74,9 +95,25 @@ def get_logger(name: str) -> logging.Logger:
         )
         error_file.setLevel(ERROR_FILE_LOG_LEVEL)
         error_file.setFormatter(formatter)
-        logger.addHandler(error_file)
+        handlers.append(error_file)
     except OSError:
-        # Keep the application usable even when file logging is not writable.
         pass
+
+    _SHARED_HANDLERS = handlers
+    return handlers
+
+
+def get_logger(name: str) -> logging.Logger:
+    logger = logging.getLogger(name)
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    logger.setLevel(min(CONSOLE_LOG_LEVEL, APP_FILE_LOG_LEVEL, ERROR_FILE_LOG_LEVEL))
+    logger.propagate = False
+    for handler in _build_shared_handlers(formatter):
+        if handler not in logger.handlers:
+            logger.addHandler(handler)
 
     return logger

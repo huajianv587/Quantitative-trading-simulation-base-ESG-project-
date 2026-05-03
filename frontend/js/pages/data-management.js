@@ -450,8 +450,10 @@ function renderJob() {
   const total = Number(job.companies_total || job.companies_to_sync || 0);
   const synced = Number(job.companies_synced || 0);
   const failed = Number(job.companies_failed || 0);
-  const complete = total > 0 ? Math.min(100, Math.round(((synced + failed) / total) * 100)) : (job.status === 'started' ? 5 : 100);
-  const done = String(job.status || '').startsWith('completed');
+  const status = String(job.status || '').toLowerCase();
+  const terminal = ['completed', 'completed_with_errors', 'succeeded', 'failed', 'degraded', 'blocked', 'cancelled'].includes(status);
+  const complete = total > 0 ? Math.min(100, Math.round(((synced + failed) / total) * 100)) : (terminal ? 100 : 5);
+  const done = terminal;
   countEl.textContent = done ? '' : _activeJobId;
   target.innerHTML = `
     <div style="display:flex;flex-direction:column;gap:12px">
@@ -486,20 +488,17 @@ async function startSync() {
   btn.disabled = true;
   btn.textContent = c('syncing');
   try {
-    const response = await api.admin.dataSync.start({
-      companies,
-      sources: providers,
-      force_refresh: forceRefresh,
+    const response = await api.jobs.create({
+      job_type: 'data_sync',
+      payload: {
+        symbols: companies,
+        providers,
+        force_refresh: forceRefresh,
+        loader: 'data_management_ui',
+      },
     });
     _activeJobId = response.job_id;
-    _lastJob = {
-      job_id: response.job_id,
-      status: response.status,
-      companies_total: response.companies_to_sync || companies.length,
-      companies_synced: 0,
-      companies_failed: 0,
-      updated_at: new Date().toISOString(),
-    };
+    _lastJob = normalizeSyncJob(response, companies.length);
     renderJob();
     toast.success(c('syncStarted'), response.job_id);
     pollStatus(response.job_id);
@@ -524,16 +523,17 @@ function pollStatus(jobId) {
 
   const handleStatus = (status) => {
     if (!isMounted()) return;
-    _lastJob = status;
+    _lastJob = normalizeSyncJob(status);
     _activeJobId = status.job_id || jobId;
     renderJob();
-    if (String(status.status || '').startsWith('completed')) {
+    const normalized = String(status.status || '').toLowerCase();
+    if (['completed', 'completed_with_errors', 'succeeded', 'failed', 'degraded', 'blocked', 'cancelled'].includes(normalized)) {
       window.clearInterval(_pollTimer);
       _pollTimer = null;
-      if (status.status === 'completed_with_errors') {
-        toast.error(c('syncErrors'), `${status.companies_failed || 0} failed`);
+      if (['failed', 'degraded', 'blocked', 'cancelled', 'completed_with_errors'].includes(normalized)) {
+        toast.error(c('syncErrors'), `${_lastJob.companies_failed || 0} failed`);
       } else {
-        toast.success(c('syncComplete'), `${status.companies_synced || 0}/${status.companies_total || 0}`);
+        toast.success(c('syncComplete'), `${_lastJob.companies_synced || 0}/${_lastJob.companies_total || 0}`);
       }
       refreshAll({ silent: true });
     }
@@ -541,7 +541,7 @@ function pollStatus(jobId) {
 
   _pollTimer = window.setInterval(async () => {
     try {
-      const status = await api.admin.dataSync.status(jobId);
+      const status = await api.jobs.get(jobId);
       handleStatus(status);
     } catch (error) {
       window.clearInterval(_pollTimer);
@@ -550,4 +550,20 @@ function pollStatus(jobId) {
       toast.error(c('syncFailed'), error.message || c('syncErrorDetail'));
     }
   }, 1200);
+}
+
+function normalizeSyncJob(job, fallbackTotal = 0) {
+  const result = job?.result || {};
+  const dataset = result.dataset || {};
+  const payload = job?.payload || {};
+  const symbols = payload.symbols || payload.companies || [];
+  const total = Number(job?.companies_total || dataset.symbol_count || (Array.isArray(symbols) ? symbols.length : fallbackTotal) || fallbackTotal || 0);
+  const terminal = ['succeeded', 'completed'].includes(String(job?.status || '').toLowerCase());
+  return {
+    ...job,
+    companies_total: total,
+    companies_synced: Number(job?.companies_synced || dataset.record_count || (terminal ? total : 0) || 0),
+    companies_failed: Number(job?.companies_failed || (['failed', 'blocked'].includes(String(job?.status || '').toLowerCase()) ? total : 0) || 0),
+    updated_at: job?.updated_at || job?.finished_at || new Date().toISOString(),
+  };
 }

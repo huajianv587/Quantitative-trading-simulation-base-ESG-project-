@@ -380,7 +380,7 @@ async function evaluateRisk() {
 }
 
 function renderBoard() {
-  if (!_board) return;
+  if (!_container || !_container.isConnected || !_board) return;
   renderLatestApproval();
   renderControls();
   renderLedger();
@@ -389,6 +389,7 @@ function renderBoard() {
 
 function renderLatestApproval() {
   const host = _container.querySelector('#risk-latest');
+  if (!host) return;
   const latest = _board.latest_approval;
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!latest) {
@@ -424,6 +425,7 @@ function renderLatestApproval() {
 
 function renderControls() {
   const host = _container.querySelector('#risk-controls');
+  if (!host) return;
   const controls = _board.controls || {};
   const latest = _board.latest_approval || {};
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
@@ -455,6 +457,7 @@ function renderControls() {
 
 function renderLedger() {
   const host = _container.querySelector('#risk-ledger');
+  if (!host) return;
   const approvals = Array.isArray(_board.approvals) ? _board.approvals : [];
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!approvals.length) {
@@ -490,6 +493,7 @@ function renderLedger() {
 
 function renderAlerts() {
   const host = _container.querySelector('#risk-alerts');
+  if (!host) return;
   const alerts = Array.isArray(_board.alerts) ? _board.alerts : [];
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!alerts.length) {
