@@ -508,7 +508,10 @@ def test_i18n_declares_required_shell_label_keys():
 
 def test_full_app_acceptance_spec_is_committed_without_png_artifacts():
     content = Path("e2e/full-app-acceptance.spec.js").read_text(encoding="utf-8")
+    assert "'storage', 'quant', 'acceptance', 'full-app-acceptance', 'latest'" in content
+    assert "MIRROR_OUTPUT_DIR" in content
     assert "test-results', 'playwright', 'full-app-acceptance" in content
+    assert "mirrorOutputDir()" in content
     assert "/api/v1/trading/safety-center" in content
     assert "live_auto_submit.allowed).toBe(false)" in content
     assert "MOJIBAKE_PATTERN" in content

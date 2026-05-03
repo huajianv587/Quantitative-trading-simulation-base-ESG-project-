@@ -2,7 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const { test, expect } = require('@playwright/test');
 
-const OUTPUT_DIR = path.join(process.cwd(), 'test-results', 'playwright', 'full-app-acceptance');
+const OUTPUT_DIR = process.env.FULL_APP_ACCEPTANCE_DIR
+  || path.join(process.cwd(), 'storage', 'quant', 'acceptance', 'full-app-acceptance', 'latest');
+const MIRROR_OUTPUT_DIR = path.join(process.cwd(), 'test-results', 'playwright', 'full-app-acceptance');
 const REPORT_PATH = path.join(OUTPUT_DIR, 'report.json');
 
 const ROUTES = [
@@ -123,6 +125,18 @@ function screenshotPath(route, suffix = 'default') {
   return path.join(OUTPUT_DIR, `${slug(route)}__${suffix}.png`);
 }
 
+function prepareOutputDirs() {
+  fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
+  fs.rmSync(MIRROR_OUTPUT_DIR, { recursive: true, force: true });
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
+
+function mirrorOutputDir() {
+  fs.rmSync(MIRROR_OUTPUT_DIR, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(MIRROR_OUTPUT_DIR), { recursive: true });
+  fs.cpSync(OUTPUT_DIR, MIRROR_OUTPUT_DIR, { recursive: true });
+}
+
 async function waitForRouteReady(page) {
   await page.waitForFunction(() => {
     const root = document.querySelector('#app-root');
@@ -153,7 +167,7 @@ async function assertStatusPayload(payload, label) {
 test.describe('full app acceptance', () => {
   test('all workbench routes render, respond, and keep screenshots', async ({ page, request, baseURL }) => {
     test.setTimeout(45 * 60 * 1000);
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+    prepareOutputDirs();
 
     const pageErrors = [];
     const failedRequests = [];
@@ -233,6 +247,7 @@ test.describe('full app acceptance', () => {
     const report = {
       generatedAt: new Date().toISOString(),
       outputDir: OUTPUT_DIR,
+      mirrorOutputDir: MIRROR_OUTPUT_DIR,
       routeCount: ROUTES.length,
       apiChecks,
       routes: routeReports,
@@ -240,7 +255,9 @@ test.describe('full app acceptance', () => {
       failedRequests,
     };
     fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2), 'utf8');
+    mirrorOutputDir();
     expect(fs.existsSync(REPORT_PATH)).toBeTruthy();
+    expect(fs.existsSync(path.join(MIRROR_OUTPUT_DIR, 'report.json'))).toBeTruthy();
     expect(pageErrors).toEqual([]);
     expect(failedRequests).toEqual([]);
   });

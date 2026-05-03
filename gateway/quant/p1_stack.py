@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -138,11 +139,16 @@ class SequenceForecasterRuntime:
         self._models: dict[str, Any] = {}
         self._history_frame: pd.DataFrame | None = None
         self._load_attempted = False
+        self._load_lock = threading.RLock()
 
     def available(self) -> bool:
-        return self.enabled and bool(self._models) and bool(self.manifests)
+        with self._load_lock:
+            return self.enabled and bool(self._models) and bool(self.manifests)
 
     def status(self) -> dict[str, Any]:
+        with self._load_lock:
+            loaded_targets = list(self._models.keys())
+            manifests = dict(self.manifests)
         return {
             "enabled": self.enabled,
             "available": self.available(),
@@ -151,8 +157,8 @@ class SequenceForecasterRuntime:
             "blend_weight": self.blend_weight,
             "device": self._device,
             "requested_targets": list(self.requested_targets),
-            "loaded_targets": list(self._models.keys()),
-            "manifests": dict(self.manifests),
+            "loaded_targets": loaded_targets,
+            "manifests": manifests,
             "history_rows": 0 if self._history_frame is None else int(len(self._history_frame)),
         }
 
@@ -164,8 +170,11 @@ class SequenceForecasterRuntime:
         if not self.available():
             return payload
         torch = self._torch
-        for target_key, model in self._models.items():
-            manifest = self.manifests.get(target_key, {})
+        with self._load_lock:
+            models_snapshot = list(self._models.items())
+            manifests_snapshot = dict(self.manifests)
+        for target_key, model in models_snapshot:
+            manifest = manifests_snapshot.get(target_key, {})
             window_size = int(manifest.get("window_size", 20) or 20)
             windows = [
                 self._build_window(signal, frame.iloc[index].to_dict(), window_size)
@@ -193,10 +202,11 @@ class SequenceForecasterRuntime:
         return np.stack([base * scale for scale in multipliers], axis=0)
 
     def _ensure_loaded(self) -> None:
-        if self._load_attempted:
-            return
-        self._load_attempted = True
-        self._load()
+        with self._load_lock:
+            if self._load_attempted:
+                return
+            self._load_attempted = True
+            self._load()
 
     def _load(self) -> None:
         if not self.enabled:

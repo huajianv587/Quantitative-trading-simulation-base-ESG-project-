@@ -75,8 +75,10 @@ npx playwright test e2e/full-app-acceptance.spec.js
 截图和 JSON 报告保存在：
 
 ```text
-test-results/playwright/full-app-acceptance
+storage/quant/acceptance/full-app-acceptance/latest
 ```
+
+脚本也会同步镜像一份到 `test-results/playwright/full-app-acceptance`，用于兼容 Playwright/CI artifact；稳定验收路径以上面的 `storage/quant/.../latest` 为准，后续 Playwright 运行不会自动清理它。
 
 ## Supabase Schema
 

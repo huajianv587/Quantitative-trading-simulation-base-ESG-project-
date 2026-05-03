@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
 
 from gateway.quant.models import FactorScore, ResearchSignal
-from gateway.quant.p1_stack import P1ModelSuiteRuntime
+from gateway.quant.p1_stack import P1ModelSuiteRuntime, SequenceForecasterRuntime
 from training.p1_training_lib import fit_and_persist_suite
 from training.prepare_alpha_data import split_dataset
 from training.prepare_p1_data import enrich_p1_features, synthetic_p1_dataset
@@ -91,6 +93,27 @@ def test_p1_runtime_loads_suite_and_enriches_signals(tmp_path):
     assert ranked[0].predicted_drawdown_20d is not None
     assert ranked[0].regime_label in {"risk_on", "neutral", "risk_off"}
     assert ranked[0].alpha_rank == 1
+
+
+def test_sequence_forecaster_load_is_thread_safe(tmp_path):
+    runtime = SequenceForecasterRuntime(checkpoint_dir=tmp_path / "sequence", data_dir=tmp_path / "data")
+    calls = []
+
+    def fake_load() -> None:
+        calls.append(time.time())
+        time.sleep(0.02)
+        runtime.manifests["return_1d"] = {"window_size": 3}
+        runtime._models["return_1d"] = object()
+        runtime.manifests["return_5d"] = {"window_size": 3}
+        runtime._models["return_5d"] = object()
+
+    runtime._load = fake_load
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda _: runtime._ensure_loaded(), range(16)))
+
+    assert len(calls) == 1
+    assert runtime.available() is True
+    assert set(runtime.status()["loaded_targets"]) == {"return_1d", "return_5d"}
 
 
 def test_p1_training_scripts_run_on_synthetic_data(tmp_path):

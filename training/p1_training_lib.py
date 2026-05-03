@@ -170,9 +170,10 @@ def fit_and_persist_suite(
 ) -> dict[str, Any]:
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    now_utc = pd.Timestamp.now(tz="UTC")
     manifest = {
-        "generated_at": pd.Timestamp.utcnow().isoformat(),
-        "suite_version": pd.Timestamp.utcnow().strftime("p1-suite-%Y%m%d%H%M%S"),
+        "generated_at": now_utc.isoformat(),
+        "suite_version": now_utc.strftime("p1-suite-%Y%m%d%H%M%S"),
         "backend_requested": backend,
         "models": [],
     }

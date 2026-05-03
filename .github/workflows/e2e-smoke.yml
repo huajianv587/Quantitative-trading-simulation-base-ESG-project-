@@ -61,5 +61,6 @@ jobs:
         with:
           name: full-app-acceptance
           path: |
+            storage/quant/acceptance/full-app-acceptance/latest
             test-results/playwright/full-app-acceptance
             playwright-report
