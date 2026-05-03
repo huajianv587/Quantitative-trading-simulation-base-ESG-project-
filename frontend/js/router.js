@@ -89,6 +89,7 @@ class Router {
     this._mod = null;
     this._container = null;
     this._current = null;
+    this._navSeq = 0;
   }
 
   init(container) {
@@ -137,6 +138,7 @@ class Router {
 
     if (this._mod && this._mod.destroy) await this._mod.destroy();
     this._current = path;
+    const navSeq = ++this._navSeq;
     this._applyTitle(path);
 
     const shell = document.querySelector('.app-shell');
@@ -145,13 +147,16 @@ class Router {
     window.dispatchEvent(new CustomEvent('route-change', { detail: { path } }));
     this._container.innerHTML = '';
     this._container.classList.remove('page-ready');
+    this._container.dataset.route = path;
 
     try {
       this._mod = await config.module();
       await this._mod.render(this._container);
+      if (navSeq !== this._navSeq) return;
       applyLangToPage();
       requestAnimationFrame(() => this._container.classList.add('page-ready'));
     } catch (err) {
+      if (navSeq !== this._navSeq) return;
       console.error('Page load failed:', err);
       if (window.errorHandler) {
         const errorInfo = window.errorHandler.parseError(err, {

@@ -599,29 +599,42 @@ function updateModeBadge(container) {
 }
 
 function updateAccountPill(container, connected, mode) {
+  if (!container?.isConnected) return;
   const pill = container.querySelector('#ws-pill');
   if (!pill) return;
   pill.textContent = connected ? c('accountOnline') : c('accountOffline');
   pill.className = connected ? 'live-pill' : 'live-pill live-pill--off';
-  container.querySelector('#execution-monitor-sub').textContent = connected
-    ? `${c('subtitle')} / ${humanMode(mode)}`
-    : `${c('subtitle')} / ${c('accountOffline')}`;
+  const sub = container.querySelector('#execution-monitor-sub');
+  if (sub) {
+    sub.textContent = connected
+      ? `${c('subtitle')} / ${humanMode(mode)}`
+      : `${c('subtitle')} / ${c('accountOffline')}`;
+  }
 }
 
 function renderAccountFallback(container, reason) {
+  if (!container?.isConnected) return;
   updateAccountPill(container, false, currentMode());
-  container.querySelector('#account-id').textContent = '--';
-  container.querySelector('#account-clock').textContent = '--';
-  container.querySelector('#account-warning-count').textContent = '1';
-  container.querySelector('#broker-status-note').textContent = reason;
-  container.querySelector('#account-equity').textContent = '--';
-  container.querySelector('#account-buying-power').textContent = '--';
-  container.querySelector('#account-cash').textContent = '--';
-  container.querySelector('#account-daily-change').textContent = '--';
-  container.querySelector('#execution-clock').textContent = c('accountOffline');
-  container.querySelector('#session-pnl').textContent = '--';
-  container.querySelector('#session-pnl').style.color = 'var(--text-dim)';
-  container.querySelector('#btn-kill').disabled = true;
+  const setText = (selector, value) => {
+    const node = container.querySelector(selector);
+    if (node) node.textContent = value;
+  };
+  setText('#account-id', '--');
+  setText('#account-clock', '--');
+  setText('#account-warning-count', '1');
+  setText('#broker-status-note', reason);
+  setText('#account-equity', '--');
+  setText('#account-buying-power', '--');
+  setText('#account-cash', '--');
+  setText('#account-daily-change', '--');
+  setText('#execution-clock', c('accountOffline'));
+  const pnl = container.querySelector('#session-pnl');
+  if (pnl) {
+    pnl.textContent = '--';
+    pnl.style.color = 'var(--text-dim)';
+  }
+  const kill = container.querySelector('#btn-kill');
+  if (kill) kill.disabled = true;
 }
 
 function syncModeFields(payload) {
@@ -656,10 +669,12 @@ function liveBlockedState() {
 }
 
 async function loadAccount(container) {
+  if (!container?.isConnected) return;
   const broker = currentBroker(container);
   const mode = currentMode();
   try {
     const payload = await api.execution.account(broker, mode);
+    if (!container?.isConnected) return;
     const account = payload.account || {};
     const warnings = payload.warnings || [];
     const clock = payload.market_clock || {};
@@ -683,6 +698,7 @@ async function loadAccount(container) {
     container.querySelector('#btn-kill').disabled = !payload.connected;
     updateAccountPill(container, Boolean(payload.connected), payload.effective_mode || payload.mode || mode);
   } catch (error) {
+    if (!container?.isConnected) return;
     renderAccountFallback(container, error.message || 'Could not load broker account.');
     toast.error(c('brokerStatus'), error.message || 'Unknown error');
   }
@@ -765,15 +781,20 @@ async function submitExecution(container, liveConfirmed) {
 }
 
 async function loadOrders(container) {
+  if (!container?.isConnected) return;
   const broker = currentBroker(container);
   const mode = currentMode();
   try {
     const data = await api.execution.orders(broker, 'all', 100, mode);
+    if (!container?.isConnected) return;
     _orders = data.orders || [];
     syncModeFields(data);
     renderOrders(container);
   } catch (error) {
-    container.querySelector('#orders-body').innerHTML = `
+    if (!container?.isConnected) return;
+    const body = container.querySelector('#orders-body');
+    if (!body) return;
+    body.innerHTML = `
       <div class="empty-state" style="min-height:120px">
         <div class="empty-state__title">${c('orderFeed')}</div>
         <div class="empty-state__text">${error.message || 'Unknown error'}</div>
@@ -783,10 +804,13 @@ async function loadOrders(container) {
 }
 
 function renderOrders(container) {
+  if (!container?.isConnected) return;
   const body = container.querySelector('#orders-body');
+  if (!body) return;
   const filter = container.querySelector('#filter-status')?.value || 'all';
   const filtered = filter === 'all' ? _orders : _orders.filter((item) => item.status === filter);
-  container.querySelector('#order-count').textContent = `${filtered.length} orders`;
+  const count = container.querySelector('#order-count');
+  if (count) count.textContent = `${filtered.length} orders`;
 
   if (!filtered.length) {
     body.innerHTML = `
@@ -822,11 +846,14 @@ function renderOrders(container) {
 }
 
 async function loadPositions(container) {
+  if (!container?.isConnected) return;
   const broker = currentBroker(container);
   const mode = currentMode();
   const target = container.querySelector('#positions-body');
+  if (!target) return;
   try {
     const payload = await api.execution.positions(broker, mode);
+    if (!container?.isConnected || !target.isConnected) return;
     const positions = payload.positions || [];
     syncModeFields(payload);
     if (!positions.length) {

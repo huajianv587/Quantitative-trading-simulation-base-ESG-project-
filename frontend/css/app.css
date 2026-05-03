@@ -5448,3 +5448,76 @@ body.light .rl-lab-path {
 .ind-modal-wrap.ind-modal-visible .ind-modal-panel {
   animation:indModalGlow 2s ease-in-out infinite;
 }
+
+.click-contract-status {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 9998;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  width: min(360px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, .10);
+  background: rgba(8, 13, 28, .92);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .32);
+  color: var(--text-primary);
+  font-family: var(--f-mono);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity .18s ease, transform .18s ease, border-color .18s ease;
+}
+
+.click-contract-status.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.click-contract-status__dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 0 16px rgba(0, 255, 136, .45);
+}
+
+.click-contract-status__title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .03em;
+}
+
+.click-contract-status__text {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.click-contract-status--pending .click-contract-status__dot {
+  background: var(--amber);
+  box-shadow: 0 0 16px rgba(251, 191, 36, .42);
+}
+
+.click-contract-status--degraded {
+  border-color: rgba(251, 191, 36, .28);
+}
+
+.click-contract-status--degraded .click-contract-status__dot {
+  background: var(--amber);
+  box-shadow: 0 0 16px rgba(251, 191, 36, .42);
+}
+
+.click-contract-status--blocked {
+  border-color: rgba(255, 61, 87, .32);
+}
+
+.click-contract-status--blocked .click-contract-status__dot {
+  background: var(--red);
+  box-shadow: 0 0 16px rgba(255, 61, 87, .42);
+}

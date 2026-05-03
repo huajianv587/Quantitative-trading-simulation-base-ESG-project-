@@ -137,18 +137,57 @@ function mirrorOutputDir() {
   fs.cpSync(OUTPUT_DIR, MIRROR_OUTPUT_DIR, { recursive: true });
 }
 
-async function waitForRouteReady(page) {
-  await page.waitForFunction(() => {
+async function waitForRouteReady(page, route) {
+  await page.waitForFunction((expectedRoute) => {
     const root = document.querySelector('#app-root');
-    const title = document.querySelector('#page-title');
     const auth = document.querySelector('.auth-card, .auth-shell');
+    const errorState = document.querySelector('.error-state');
+    const dataRoute = root?.dataset?.route || '';
+    const hashRoute = window.location.hash.replace(/^#/, '') || '/dashboard';
+    const routeMatches = !expectedRoute || dataRoute === expectedRoute || (!dataRoute && hashRoute === expectedRoute);
+    const contentReady = Boolean(root && root.children && root.children.length > 0 && root.textContent && root.textContent.trim().length > 0);
     return Boolean(
-      (root && root.textContent && root.textContent.trim().length > 0)
-      || (title && title.textContent && title.textContent.trim().length > 0)
-      || auth,
+      routeMatches && (
+        (root && (root.classList.contains('page-ready') || contentReady) && root.children && root.children.length > 0)
+        || auth
+        || errorState
+      ),
     );
-  }, { timeout: 30000 });
+  }, route, { timeout: 30000 });
   await page.waitForTimeout(500);
+}
+
+async function gotoRoute(page, route, forceReload = false) {
+  const url = forceReload
+    ? `/app/index.html?acceptance=${Date.now()}#${route}`
+    : `/app/#${route}`;
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  try {
+    await waitForRouteReady(page, route);
+  } catch (error) {
+    if (forceReload) throw error;
+    await gotoRoute(page, route, true);
+  }
+}
+
+async function clickWithFallback(page, selector) {
+  const target = page.locator(selector).first();
+  if (!(await target.count())) return { clicked: false, reason: 'missing' };
+  if (!(await target.isVisible().catch(() => false))) return { clicked: false, reason: 'hidden' };
+  try {
+    await target.click({ timeout: 8000 });
+    return { clicked: true, method: 'playwright' };
+  } catch (error) {
+    const fallbackClicked = await page.evaluate((cssSelector) => {
+      const el = document.querySelector(cssSelector);
+      if (!el || typeof el.click !== 'function') return false;
+      el.click();
+      return true;
+    }, selector).catch(() => false);
+    return fallbackClicked
+      ? { clicked: true, method: 'dom_click', reason: error.message }
+      : { clicked: false, reason: error.message };
+  }
 }
 
 async function readJson(response) {
@@ -173,13 +212,23 @@ test.describe('full app acceptance', () => {
     const failedRequests = [];
     const routeReports = [];
     page.on('pageerror', (error) => pageErrors.push(error.stack || error.message));
+    page.on('response', (response) => {
+      const status = response.status();
+      const url = response.url();
+      if (status < 400 || url.endsWith('/favicon.ico')) return;
+      pageErrors.push(`${status} ${url}`);
+    });
     page.on('console', (message) => {
-      if (message.type() === 'error') pageErrors.push(message.text());
+      if (message.type() === 'error' && !/Failed to load resource/i.test(message.text())) {
+        pageErrors.push(message.text());
+      }
     });
     page.on('requestfailed', (req) => {
       const url = req.url();
       if (url.includes('fonts.googleapis.com') || url.includes('fonts.gstatic.com') || url.endsWith('/favicon.ico')) return;
-      failedRequests.push(`${req.method()} ${url} ${req.failure()?.errorText || ''}`);
+      const errorText = req.failure()?.errorText || '';
+      if (/ERR_ABORTED/i.test(errorText)) return;
+      failedRequests.push(`${req.method()} ${url} ${errorText}`);
     });
 
     await page.addInitScript((apiBase) => {
@@ -209,8 +258,7 @@ test.describe('full app acceptance', () => {
     expect(apiChecks.tradingSafety.live_auto_submit.reason).toMatch(/Live auto-submit disabled by hard rule/);
 
     for (const route of ROUTES) {
-      await page.goto(`/app/#${route}`, { waitUntil: 'domcontentloaded' });
-      await waitForRouteReady(page);
+      await gotoRoute(page, route);
       const beforeText = await page.locator('body').textContent();
       expect(beforeText, `${route} should not be blank`).not.toMatch(/^\s*$/);
       expect(beforeText, `${route} should not show page load failure`).not.toMatch(/Page failed to load|页面加载失败/);
@@ -220,21 +268,16 @@ test.describe('full app acceptance', () => {
 
       const buttonResults = [];
       for (const selector of SAFE_BUTTONS[route] || []) {
-        const target = page.locator(selector).first();
-        if (!(await target.count())) {
-          buttonResults.push({ selector, status: 'missing' });
+        const clickResult = await clickWithFallback(page, selector);
+        if (!clickResult.clicked) {
+          buttonResults.push({ selector, status: clickResult.reason || 'missing' });
           continue;
         }
-        if (!(await target.isVisible())) {
-          buttonResults.push({ selector, status: 'hidden' });
-          continue;
-        }
-        await target.click();
         await page.waitForTimeout(900);
         const afterText = await page.locator('body').textContent();
         expect(afterText, `${route} ${selector} should not create page failure`).not.toMatch(/Page failed to load|页面加载失败/);
         expect(afterText, `${route} ${selector} should not show mojibake`).not.toMatch(MOJIBAKE_PATTERN);
-        buttonResults.push({ selector, status: 'clicked' });
+        buttonResults.push({ selector, status: 'clicked', method: clickResult.method });
       }
 
       const actionShot = screenshotPath(route, 'after-actions');

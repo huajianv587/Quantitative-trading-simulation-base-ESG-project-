@@ -901,7 +901,11 @@ async function handleSearchRecipe() {
     renderRecipeState();
     renderLatestPayload();
     updateAuditState();
-    toast.success('Recipe search complete', `${result.recipe_key} · trial ${result.best_trial}`);
+    if (['blocked', 'degraded'].includes(String(result.status || '').toLowerCase())) {
+      toast.warning('Recipe search blocked', result.reason || result.recipe_key || '');
+    } else {
+      toast.success('Recipe search complete', `${result.recipe_key} · trial ${result.best_trial}`);
+    }
     recordUiAuditEvent('rl_recipe_search', '#rl-search-recipe', payload, {
       recipe_key: result.recipe_key,
       best_trial: result.best_trial,
@@ -986,7 +990,12 @@ async function handleBacktest() {
     renderActionOutput('#rl-train-output', result);
     renderLatestPayload();
     updateAuditState();
-    toast.success('RL backtest complete', result.run_id || '');
+    const resultStatus = result.metrics?.status || result.config?.status || 'ready';
+    if (['blocked', 'degraded'].includes(String(resultStatus).toLowerCase())) {
+      toast.warning('RL backtest blocked', result.metrics?.reason || result.config?.reason || result.run_id || '');
+    } else {
+      toast.success('RL backtest complete', result.run_id || '');
+    }
     recordUiAuditEvent('rl_backtest', '#rl-run-backtest', payload, { run_id: result.run_id, artifacts: result.artifacts || {} });
     await loadOverview(false);
   } catch (error) {

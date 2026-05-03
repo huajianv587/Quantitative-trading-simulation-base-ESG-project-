@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -130,6 +131,20 @@ def search_recipe(request: QuantRLSearchRequest) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        return {
+            "status": "blocked",
+            "reason": str(exc),
+            "missing_config": ["compatible RL checkpoint and dataset feature schema"],
+            "next_actions": [
+                "Rebuild the dataset for the selected recipe/action_type pair.",
+                "Train or select a checkpoint with matching feature dimensions before running recipe search.",
+            ],
+            "recipe_key": request.recipe_key,
+            "search_backend": "blocked",
+            "best_params": {},
+            "trials": [],
+        }
 
 
 @router.post("/datasets/demo")
@@ -176,6 +191,29 @@ def backtest(request: QuantRLBacktestRequest) -> QuantRLBacktestResponse:
         return QuantRLBacktestResponse(**payload)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        reason = str(exc)
+        return QuantRLBacktestResponse(
+            run_id=f"blocked-rl-backtest-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            metrics={
+                "status": "blocked",
+                "reason": reason,
+                "missing_config": ["compatible RL checkpoint and dataset feature schema"],
+                "next_actions": [
+                    "Train a checkpoint with the selected dataset/action_type pair.",
+                    "Rebuild the dataset and rerun backtest with matching feature dimensions.",
+                ],
+            },
+            artifacts={},
+            config={
+                "status": "blocked",
+                "algorithm": request.algorithm,
+                "action_type": request.action_type,
+                "dataset_path": request.dataset_path,
+                "checkpoint_path": request.checkpoint_path,
+                "reason": reason,
+            },
+        )
 
 
 @router.post("/promote", response_model=QuantRLPromoteResponse)

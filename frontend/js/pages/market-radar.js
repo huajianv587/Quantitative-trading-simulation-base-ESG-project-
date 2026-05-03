@@ -607,7 +607,7 @@ function renderEvidencePage(items, pageItems, pageCount) {
 }
 
 function renderSummary(payload = {}) {
-  if (!_container) return;
+  if (!_container?.isConnected) return;
   const filtered = filteredItems();
   const providersCount = new Set(filtered.map((item) => item.provider)).size;
   const symbolsCount = new Set(filtered.map((item) => item.symbol)).size;
@@ -622,7 +622,9 @@ function renderSummary(payload = {}) {
   const latestAlert = _lastAlerts[0] || null;
   const overlayWarnings = Array.isArray(_overlayState.warnings) ? _overlayState.warnings : [];
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
-  _container.querySelector('#market-radar-summary').innerHTML = `
+  const summary = _container.querySelector('#market-radar-summary');
+  if (!summary) return;
+  summary.innerHTML = `
     ${degradedBanner}
     <div class="quality-summary-panel">
       <div class="workbench-metric-grid">
@@ -693,7 +695,7 @@ function renderSummary(payload = {}) {
 }
 
 function renderItems(payload = {}) {
-  if (!_container) return;
+  if (!_container?.isConnected) return;
   const filtered = filteredItems();
   const pageCount = Math.max(1, Math.ceil(filtered.length / _view.pageSize));
   _view.page = Math.min(Math.max(1, _view.page), pageCount);
@@ -701,6 +703,8 @@ function renderItems(payload = {}) {
   if (!_selectedItemId || !pageItems.some((item) => String(item.item_id || '') === String(_selectedItemId))) {
     _selectedItemId = pageItems[0]?.item_id || null;
   }
-  _container.querySelector('#market-radar-feed').innerHTML = renderEvidencePage(filtered, pageItems, pageCount);
+  const feed = _container.querySelector('#market-radar-feed');
+  if (!feed) return;
+  feed.innerHTML = renderEvidencePage(filtered, pageItems, pageCount);
   renderSummary(payload);
 }

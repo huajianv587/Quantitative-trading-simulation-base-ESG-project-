@@ -230,12 +230,15 @@ def test_trading_api_client_declares_public_runtime_methods():
         "/api/v1/trading/fusion/status",
         "/api/v1/platform/schema-health",
         "/api/v1/platform/release-health",
+        "/api/v1/platform/ui-action/evidence",
+        "/api/v1/platform/ui-action/evidence/latest",
         "/api/v1/data/config-center",
         "/api/v1/jobs",
         "/platform/dashboard-summary",
         "/platform/dashboard-secondary",
         "/capabilities",
         "/analysis/run",
+        "/backtests/sweep",
         "/models/train",
         "/models/predict",
         "/data/pipeline/run",
@@ -247,6 +250,25 @@ def test_trading_api_client_declares_public_runtime_methods():
         assert route in api_source
     assert "_post('/api/agent/esg-score" not in api_source
     assert "_post('/api/session" not in api_source
+
+
+def test_global_click_contract_records_ui_only_actions_and_feedback():
+    app_source = Path("frontend/js/app.js").read_text(encoding="utf-8")
+    module_source = Path("frontend/js/modules/click-contract.js").read_text(encoding="utf-8")
+    css_source = Path("frontend/css/app.css").read_text(encoding="utf-8")
+    platform_source = Path("gateway/api/routers/platform.py").read_text(encoding="utf-8")
+
+    assert "initClickContracts" in app_source
+    assert "recordUiAction" in module_source
+    assert "click-contract-status" in module_source
+    assert "business_request_count" in module_source
+    assert "pending_backend_evidence" in module_source
+    assert "event.type === 'request-start'" in module_source
+    assert "pointerdown" in module_source
+    assert "#zoom-in-btn" in module_source
+    assert "ui_action_evidence" in platform_source
+    assert "@router.post(\"/ui-action/evidence\")" in platform_source
+    assert ".click-contract-status" in css_source
 
 
 def test_real_only_pages_no_longer_reference_mock_or_demo_fallbacks():
@@ -297,6 +319,11 @@ def test_real_only_pages_no_longer_reference_mock_or_demo_fallbacks():
             "#rl-build-demo",
             "Generate Demo Dataset",
             "use_demo_if_missing",
+        ],
+        "frontend/js/pages/sweep.js": [
+            "Mock data for now",
+            "sweep_001",
+            "sweep_002",
         ],
     }
     for relative_path, forbidden in expectations.items():
@@ -529,6 +556,22 @@ def test_full_app_acceptance_spec_is_committed_without_png_artifacts():
     assert "MIRROR_OUTPUT_DIR" in content
     assert "test-results', 'playwright', 'full-app-acceptance" in content
     assert "mirrorOutputDir()" in content
+    assert "root.children && root.children.length > 0" in content
+    assert "const title = document.querySelector('#page-title')" not in content
     assert "/api/v1/trading/safety-center" in content
     assert "live_auto_submit.allowed).toBe(false)" in content
     assert "MOJIBAKE_PATTERN" in content
+
+
+def test_all_click_contract_spec_exercises_visible_clicks():
+    content = Path("e2e/all-click-contract.spec.js").read_text(encoding="utf-8")
+    assert "all visible app and shell clicks" in content
+    assert "TARGET_SELECTOR" in content
+    assert "SHELL_SELECTOR" in content
+    assert "assertClickContract" in content
+    assert "pending_backend_evidence" in content
+    assert "storage', 'quant', 'acceptance', 'click-contract', 'latest'" in content
+    assert "zeroTargetRoutes" in content
+    assert "root.children && root.children.length > 0" in content
+    assert "const title = document.querySelector('#page-title')" not in content
+    assert "expect(totalTargets.length).toBeGreaterThan(80)" in content

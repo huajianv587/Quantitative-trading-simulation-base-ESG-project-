@@ -118,6 +118,10 @@ function bindEvents(container) {
   container.querySelector('#btn-run-val').addEventListener('click', () => runValidation(container));
 }
 
+function isActive(container) {
+  return Boolean(container && container.isConnected && container === _currentContainer);
+}
+
 async function runValidation(container) {
   const btn = container.querySelector('#btn-run-val');
   btn.disabled = true; btn.textContent = '● Validating…';
@@ -131,17 +135,21 @@ async function runValidation(container) {
 
     try {
       const res = await api.validation.run({ strategy_name: strategy, universe, in_sample_days: isSample, out_of_sample_days: oosSample, walk_forward_windows: windows, capital_base: capital });
+      if (!isActive(container)) return;
       showValidationResults(container, res);
       toast.success('Validation complete', `Verdict: ${res.recommendation || 'See results'}`);
     } catch (e) {
+      if (!isActive(container)) return;
       showValidationError(container, strategy, e.message || 'Validation failed');
       toast.error('Validation API error', e.message || 'Validation failed');
     } finally {
+      if (!isActive(container)) return;
       btn.disabled = false; btn.textContent = '▶ Run Validation';
     }
   }
 
 function showValidationError(container, strategy, detail) {
+  if (!isActive(container) || !container.querySelector('#val-results')) return;
   _lastValidation = null;
   container.querySelector('#val-results').innerHTML = `
     <div class="empty-state">
@@ -152,6 +160,7 @@ function showValidationError(container, strategy, detail) {
 }
 
 function showValidationResults(container, res) {
+  if (!isActive(container) || !container.querySelector('#val-results')) return;
   _lastValidation = res;
   const isGo = (res.recommendation || '').toUpperCase().includes('GO');
   const oosShp = res.out_of_sample_sharpe ?? 1.24;
@@ -222,6 +231,7 @@ function showValidationResults(container, res) {
 }
 
 function drawWalkForwardChart(container, res) {
+  if (!isActive(container)) return;
   const canvas = container.querySelector('#wf-chart');
   if (!canvas) return;
   const windows = res.windows || [];

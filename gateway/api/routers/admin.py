@@ -164,7 +164,13 @@ def create_push_rule(req: CreatePushRuleRequest):
         }
     except Exception as exc:
         logger.error(f"Create rule error: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
+        return {
+            "status": "degraded",
+            "rule_id": None,
+            "rule_name": req.rule_name,
+            "reason": str(exc),
+            "next_actions": ["Check report scheduler storage and retry from Push Rules."],
+        }
 
 
 @router.get("/admin/push-rules")

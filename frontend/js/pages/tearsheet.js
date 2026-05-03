@@ -249,16 +249,18 @@ async function loadBacktestList(container) {
   try {
     const result = await api.backtests.list();
 
-    if (result.success && result.data && result.data.length > 0) {
-      result.data.forEach(bt => {
+    const backtests = result?.data || result?.backtests || [];
+    if (backtests.length > 0) {
+      backtests.forEach(bt => {
         const option = document.createElement('option');
         option.value = bt.backtest_id;
-        option.textContent = `${bt.strategy_name} - ${new Date(bt.timestamp).toLocaleDateString()}`;
+        option.textContent = `${bt.strategy_name || bt.backtest_id} - ${new Date(bt.timestamp || bt.generated_at || Date.now()).toLocaleDateString()}`;
         select.appendChild(option);
       });
     }
   } catch (err) {
-    console.error('Failed to load backtests:', err);
+    if (!container?.isConnected) return;
+    console.warn('Backtest list unavailable:', err?.message || err);
   }
 }
 

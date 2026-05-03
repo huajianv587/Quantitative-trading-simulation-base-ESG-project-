@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from typing import Any
 
 from blueprint_runtime import (
@@ -491,6 +491,19 @@ def run_backtest_sweep(req: QuantBacktestSweepRequest):
     )
 
 
+@router.get("/backtests/sweep")
+def list_backtest_sweeps(limit: int = Query(20, ge=1, le=200)):
+    rows = _quant_service().storage.list_records("backtest_sweeps")[:limit]
+    return {
+        "status": "ready" if rows else "degraded",
+        "success": True,
+        "sweeps": rows,
+        "count": len(rows),
+        "reason": None if rows else "no_backtest_sweep_records",
+        "next_actions": [] if rows else ["Run a parameter sweep before opening historical sweep details."],
+    }
+
+
 @router.get("/backtests")
 def list_backtests():
     return {"backtests": _quant_service().list_backtests()}
@@ -508,7 +521,14 @@ def get_backtest(backtest_id: str):
 def get_backtest_sweep(run_id: str):
     payload = _quant_service().get_backtest_sweep(run_id)
     if payload is None:
-        raise HTTPException(status_code=404, detail="Backtest sweep not found")
+        return {
+            "status": "degraded",
+            "success": False,
+            "run_id": run_id,
+            "reason": "backtest_sweep_not_found",
+            "missing_config": ["backtest_sweeps storage record"],
+            "next_actions": ["Run a new parameter sweep or choose a sweep id from /api/v1/quant/backtests/sweep."],
+        }
     return payload
 
 

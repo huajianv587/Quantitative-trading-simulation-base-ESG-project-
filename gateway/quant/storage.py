@@ -4,6 +4,7 @@ import io
 import json
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -327,7 +328,16 @@ class QuantStorageGateway:
         with self._file_lock:
             try:
                 tmp_path.write_text(data, encoding="utf-8")
-                tmp_path.replace(path)
+                for attempt in range(6):
+                    try:
+                        tmp_path.replace(path)
+                        break
+                    except PermissionError as exc:
+                        if attempt >= 5:
+                            logger.warning(f"Atomic JSON replace failed for {path}; falling back to direct write: {exc}")
+                            path.write_text(data, encoding="utf-8")
+                            break
+                        time.sleep(0.05 * (attempt + 1))
             finally:
                 if tmp_path.exists():
                     try:

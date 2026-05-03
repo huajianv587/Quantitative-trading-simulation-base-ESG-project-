@@ -263,6 +263,10 @@ function bindEvents(container) {
   container.querySelector('#btn-export-esg')?.addEventListener('click', () => toast.info(c('export'), c('exportPending')));
 }
 
+function isActive(container) {
+  return Boolean(container && container.isConnected && container === _currentContainer);
+}
+
 async function runScore(container) {
   const btn = container.querySelector('#score-btn');
   btn.disabled = true;
@@ -275,19 +279,24 @@ async function runScore(container) {
 
     try {
       const response = await api.agent.esgScore({ company, ticker, peers, include_visualization: false });
+      if (!isActive(container)) return;
       renderScore(container, response || {});
       toast.success(c('run'), company);
     } catch (err) {
+      if (!isActive(container)) return;
       _lastScoreResponse = null;
       renderErrorState(container, company, ticker, err.message || c('apiError'));
       toast.error(c('apiError'), err.message || c('apiError'));
     } finally {
-      btn.disabled = false;
-      btn.textContent = c('run');
+      if (isActive(container)) {
+        btn.disabled = false;
+        btn.textContent = c('run');
+      }
     }
   }
 
 function renderEmptyState(container) {
+  if (!isActive(container)) return;
   container.querySelector('#esg-company-name').textContent = '—';
   container.querySelector('#esg-ticker-val').textContent = '—';
   container.querySelector('#esg-verdict-tag').innerHTML = `
@@ -315,6 +324,7 @@ function renderEmptyState(container) {
 }
 
 function renderErrorState(container, company, ticker, detail) {
+  if (!isActive(container)) return;
   renderEmptyState(container);
   container.querySelector('#esg-company-name').textContent = company || '—';
   container.querySelector('#esg-ticker-val').textContent = ticker || '—';
@@ -326,6 +336,7 @@ function renderErrorState(container, company, ticker, detail) {
 }
 
 function renderScore(container, response) {
+  if (!isActive(container)) return;
   _lastScoreResponse = response;
   const report = response.esg_report || {};
   const eReport = report.e_scores || {};
@@ -361,6 +372,7 @@ function renderScore(container, response) {
 }
 
 function renderDimBars(container, eScore, sScore, gScore) {
+  if (!isActive(container)) return;
   container.querySelector('#esg-dim-row').innerHTML = [
     ['E', eScore, '#00FF88'],
     ['S', sScore, '#00E5FF'],
@@ -374,6 +386,7 @@ function renderDimBars(container, eScore, sScore, gScore) {
 }
 
 function renderDimensionCards(container, report, eScore, sScore, gScore) {
+  if (!isActive(container)) return;
   const scores = { environment: eScore, social: sScore, governance: gScore };
   const metricScores = {
     environment: extractMetricScores(report.e_scores),
@@ -413,6 +426,7 @@ function extractMetricScores(scoreBlock) {
 }
 
 function renderPeers(container, peers, overall) {
+  if (!isActive(container)) return;
   if (!peers.length) {
     container.querySelector('#peer-table').innerHTML = '';
     return;
@@ -438,6 +452,7 @@ function renderPeers(container, peers, overall) {
 }
 
 function renderQuickCompare(container, peers) {
+  if (!isActive(container)) return;
   container.querySelector('#quick-compare-list').innerHTML = peers.map(peer => `
     <div class="score-compare-row">
       <span>${escapeHtml(peer.ticker)}</span>
@@ -492,6 +507,7 @@ function drawRingGauge(canvas, value) {
 }
 
 function drawRadar(container, e, s, g) {
+  if (!isActive(container)) return;
   const canvas = container.querySelector('#esg-radar');
   const legendEl = container.querySelector('#radar-legend');
   if (!canvas) return;

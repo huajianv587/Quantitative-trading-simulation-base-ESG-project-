@@ -99,6 +99,19 @@ function _generateTraceId() {
 // Last response trace id surfaced to the UI.
 var _lastTraceId = null;
 
+function _emitApiEvent(type, detail) {
+  try {
+    window.dispatchEvent(new CustomEvent('qtapi:' + type, {
+      detail: {
+        timestamp: new Date().toISOString(),
+        ...detail,
+      },
+    }));
+  } catch (_ignore) {
+    // Ignore telemetry dispatch failures.
+  }
+}
+
 function _apiKeyForScope(scope) {
   if (!scope || scope === 'public') return '';
   if (scope === 'admin') return window.__ESG_ADMIN_API_KEY__ || window.__ESG_API_KEY__ || '';
@@ -135,6 +148,9 @@ function _mergeHeaders(method, path, scope, body, extraHeaders) {
 
 function _req(method, path, body, opts) {
   var options = opts || {};
+  var startedAt = Date.now();
+  var detail = { method: method, path: path, scope: _scopeForRequest(method, path, options.scope) };
+  _emitApiEvent('request-start', detail);
   var requestOptions = {
     method: method,
     headers: _mergeHeaders(method, path, options.scope, body, options.headers),
@@ -142,6 +158,12 @@ function _req(method, path, body, opts) {
   if (body !== undefined) requestOptions.body = JSON.stringify(body);
 
   return fetch(getApiBaseUrl() + path, requestOptions).then(function(res) {
+    _emitApiEvent('request-end', {
+      ...detail,
+      ok: res.ok,
+      status: res.status,
+      duration_ms: Date.now() - startedAt,
+    });
     // Preserve the latest response trace id.
     var traceId = res.headers.get('X-Trace-ID');
     if (traceId) _lastTraceId = traceId;
@@ -174,6 +196,14 @@ function _req(method, path, body, opts) {
       });
     }
     return res.json();
+  }).catch(function(error) {
+    _emitApiEvent('request-error', {
+      ...detail,
+      ok: false,
+      error: error && error.message ? error.message : String(error || 'request_failed'),
+      duration_ms: Date.now() - startedAt,
+    });
+    throw error;
   });
 }
 
@@ -206,6 +236,8 @@ export var api = {
   platform: {
     schemaHealth: function() { return _get('/api/v1/platform/schema-health', { scope: 'ops' }); },
     releaseHealth: function() { return _get('/api/v1/platform/release-health', { scope: 'ops' }); },
+    recordUiAction: function(payload) { return _post('/api/v1/platform/ui-action/evidence', payload || {}, { scope: 'ops' }); },
+    latestUiActions: function(limit) { return _get('/api/v1/platform/ui-action/evidence/latest?limit=' + encodeURIComponent(limit || 50), { scope: 'ops' }); },
     overview: function() { return _get(Q + '/platform/overview'); },
     dashboardSummary: function(provider) {
       var query = provider ? ('?provider=' + encodeURIComponent(provider)) : '';
@@ -296,6 +328,7 @@ export var api = {
     get: function(id) { return _get(Q + '/backtests/' + id); },
     run: function(payload) { return _post(Q + '/backtests/run', payload); },
     sweep: function(payload) { return _post(Q + '/backtests/sweep', payload || {}); },
+    listSweeps: function(limit) { return _get(Q + '/backtests/sweep?limit=' + encodeURIComponent(limit || 20)); },
     getSweep: function(id) { return _get(Q + '/backtests/sweep/' + id); },
   },
 

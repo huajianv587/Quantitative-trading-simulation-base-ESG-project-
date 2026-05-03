@@ -1395,6 +1395,7 @@ function buildAnalysisModel(signal, selectedScenarioKey, candleSource) {
 }
 
 function renderAiPanel(signal) {
+  if (!_container?.isConnected) return;
   const panel = _container.querySelector('#ai-analysis');
   if (!panel) return;
   if (!signal) {
@@ -1462,6 +1463,7 @@ function renderAiPanel(signal) {
 }
 
 function updateIndicators(candles) {
+  if (!_container?.isConnected) return;
   const panel = _container.querySelector('#tech-indicators');
   if (!panel) return;
   const indicators = computeAllIndicators(candles || []);
@@ -2087,6 +2089,7 @@ async function loadActiveKline() {
   }
   const response = await fetchCandles(signal.symbol, _activeTF);
   if (requestId !== _chartRequestSeq) return;
+  if (!_container?.isConnected) return;
   _lastCandleResponse = response;
   _chartLoading = false;
   syncDashboardStateFromChart(_lastCandleResponse, signal.symbol);

@@ -328,11 +328,8 @@ async function loadRecentSweeps(container) {
   try {
     historyEl.innerHTML = '<div class="loading-overlay"><div class="spinner"></div></div>';
 
-    // Mock data for now - replace with actual API call when available
-    const sweeps = [
-      { run_id: 'sweep_001', strategy: 'ESG Multi-Factor', timestamp: new Date().toISOString(), status: 'completed', best_sharpe: 1.85 },
-      { run_id: 'sweep_002', strategy: 'Momentum', timestamp: new Date(Date.now() - 86400000).toISOString(), status: 'completed', best_sharpe: 1.62 },
-    ];
+    const payload = await api.backtests.listSweeps(20);
+    const sweeps = payload?.sweeps || [];
 
     if (sweeps.length === 0) {
       historyEl.innerHTML = `<div class="empty-state">${c('noSweeps')}</div>`;
@@ -342,12 +339,12 @@ async function loadRecentSweeps(container) {
     historyEl.innerHTML = sweeps.map(sweep => `
       <div class="history-item">
         <div class="history-item__header">
-          <span class="history-item__title">${sweep.strategy}</span>
-          <span class="badge badge--${sweep.status === 'completed' ? 'success' : 'warning'}">${sweep.status}</span>
+          <span class="history-item__title">${sweep.strategy_name || sweep.strategy || sweep.run_id}</span>
+          <span class="badge badge--${sweep.status === 'completed' || sweep.status === 'ready' ? 'success' : 'warning'}">${sweep.status || sweep.protection_status || payload?.status || 'ready'}</span>
         </div>
         <div class="history-item__meta">
-          <span>Sharpe: ${sweep.best_sharpe?.toFixed(2) || 'N/A'}</span>
-          <span>${new Date(sweep.timestamp).toLocaleString()}</span>
+          <span>Sharpe: ${Number(sweep.best_sharpe ?? sweep.best_run?.metrics?.sharpe ?? sweep.best_run?.sharpe ?? 0).toFixed(2)}</span>
+          <span>${new Date(sweep.timestamp || sweep.generated_at || Date.now()).toLocaleString()}</span>
         </div>
         <button class="btn btn-sm btn-secondary view-sweep-btn" data-sweep-id="${sweep.run_id}">${c('viewDetails')}</button>
       </div>

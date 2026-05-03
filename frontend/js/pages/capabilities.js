@@ -152,14 +152,20 @@ function shell() {
 }
 
 async function load(container) {
+  const safeLoad = async (label, promise) => promise.catch((error) => ({
+    status: 'degraded',
+    reason: error?.message || String(error || 'request_failed'),
+    next_actions: [`Retry ${label} from Blueprint Capability Center.`],
+  }));
   const [capabilities, schemaHealth, releaseHealth, dataConfig, tradingSafety, automationTimeline] = await Promise.all([
-    api.blueprint.capabilities(),
-    api.platform.schemaHealth(),
-    api.platform.releaseHealth(),
-    api.dataConfig.center(),
-    api.trading.safetyCenter(),
-    api.trading.automationTimeline(),
+    safeLoad('capabilities', api.blueprint.capabilities()),
+    safeLoad('schema health', api.platform.schemaHealth()),
+    safeLoad('release health', api.platform.releaseHealth()),
+    safeLoad('data config', api.dataConfig.center()),
+    safeLoad('trading safety', api.trading.safetyCenter()),
+    safeLoad('automation timeline', api.trading.automationTimeline()),
   ]);
+  if (!container?.isConnected) return;
   _state = capabilities;
   _opsState = { schemaHealth, releaseHealth, dataConfig, tradingSafety, automationTimeline };
   container.innerHTML = shell();

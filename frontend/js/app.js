@@ -4,6 +4,7 @@ import { initNav, updateHealth } from './components/nav.js?v=8';
 import { toast, initErrorListener, clearAllToasts } from './components/toast.js?v=8';
 import { t, setLang, getLang, onLangChange } from './i18n.js?v=8';
 import { ensureUiAuditLog } from './modules/ui-audit.js?v=8';
+import { initClickContracts } from './modules/click-contract.js?v=8';
 import { errorHandler } from './utils/error-handler.js?v=1';
 
 function getTheme() {
@@ -132,6 +133,7 @@ function showBackendDisconnectedBanner() {
 
 async function init() {
   ensureUiAuditLog();
+  initClickContracts();
   initTheme();
   initNav();
   initErrorListener();

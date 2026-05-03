@@ -362,9 +362,11 @@ function filteredCards(container, cards) {
 }
 
 async function refreshRegistry(container, showToast) {
+  if (!container?.isConnected) return;
   setLoading(container.querySelector('#factor-card-panel'), c('registryLoading'));
   try {
     const data = await api.factors.registry(50);
+    if (!container?.isConnected) return;
     _latest = { cards: data.factors || data.factor_cards || [], payload: data };
     persistPayloadSnapshot(FACTOR_LAB_CACHE_KEY, data, { source: 'registry' });
     _degradedMeta = null;
@@ -372,6 +374,7 @@ async function refreshRegistry(container, showToast) {
     renderResults(container, _latest.cards, _latest.payload);
     if (showToast) toast.success(c('refresh'), `${_latest.cards.length} cards`);
   } catch (err) {
+    if (!container?.isConnected) return;
     const cached = loadPayloadSnapshot(FACTOR_LAB_CACHE_KEY, FACTOR_LAB_CACHE_TTL_MS);
     if (cached?.payload) {
       _latest = {
@@ -387,6 +390,7 @@ async function refreshRegistry(container, showToast) {
 }
 
 async function runDiscover(container) {
+  if (!container?.isConnected) return;
   const cfg = readConfig(container);
   setLoading(container.querySelector('#factor-card-panel'), c('loading'));
   try {
@@ -398,6 +402,7 @@ async function runDiscover(container) {
       evidence_run_id: cfg.evidence_run_id,
       quota_guard: true,
     });
+    if (!container?.isConnected) return;
     _latest = { cards: payload.factor_cards || [], payload };
     persistPayloadSnapshot(FACTOR_LAB_CACHE_KEY, payload, { source: 'discover' });
     _degradedMeta = null;
@@ -405,6 +410,7 @@ async function runDiscover(container) {
     renderResults(container, _latest.cards, _latest.payload);
     toast.success(c('discover'), `${_latest.cards.length} cards`);
   } catch (err) {
+    if (!container?.isConnected) return;
     const cached = loadPayloadSnapshot(FACTOR_LAB_CACHE_KEY, FACTOR_LAB_CACHE_TTL_MS);
     if (cached?.payload) {
       _latest = {
@@ -422,6 +428,7 @@ async function runDiscover(container) {
 }
 
 function renderResults(container, cards, payload) {
+  if (!container?.isConnected) return;
   const allCards = cards || [];
   const statusBase = filteredByMinIc(container, allCards);
   const visible = filteredCards(container, allCards);
@@ -430,7 +437,9 @@ function renderResults(container, cards, payload) {
   const pageItems = visible.slice((_view.page - 1) * _view.pageSize, _view.page * _view.pageSize);
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
 
-  container.querySelector('#factor-card-panel').innerHTML = `
+  const panel = container.querySelector('#factor-card-panel');
+  if (!panel) return;
+  panel.innerHTML = `
     ${degradedBanner}
     <div class="workbench-metric-grid factor-card-metrics">
       ${metric(getLang() === 'zh' ? '因子数' : 'Factors', num(visible.length, 0))}
@@ -447,6 +456,9 @@ function renderResults(container, cards, payload) {
 }
 
 function renderRunSummary(container, cards, visible, payload) {
+  if (!container?.isConnected) return;
+  const target = container.querySelector('#factor-run-summary');
+  if (!target) return;
   const counts = statusCounts(cards);
   const cfg = readConfig(container);
   const avgAbsIc = avg(visible.map((card) => Math.abs(Number(card.ic || 0))));
@@ -461,7 +473,7 @@ function renderRunSummary(container, cards, visible, payload) {
     { label: c('costGate'), value: visible.some((card) => String(card.transaction_cost_sensitivity || '').includes('high')) ? c('review') : c('pass') },
     { label: c('corrGate'), value: protection?.protection_status === 'blocked' ? c('review') : c('pass') },
   ];
-  container.querySelector('#factor-run-summary').innerHTML = `
+  target.innerHTML = `
     <div class="factor-summary-block">
       <div class="workbench-section__title">${c('summary')}</div>
       <div class="factor-summary-grid">
@@ -495,6 +507,9 @@ function renderRunSummary(container, cards, visible, payload) {
 }
 
 function renderTable(container, statusBase, cards, pageItems, pageCount) {
+  if (!container?.isConnected) return;
+  const panel = container.querySelector('#factor-table-panel');
+  if (!panel) return;
   const statusTabs = `
     <div class="factor-status-tabs" role="tablist" aria-label="Factor status filter">
       ${STATUS_FILTERS.map((filter) => {
@@ -509,7 +524,7 @@ function renderTable(container, statusBase, cards, pageItems, pageCount) {
     </div>`;
 
   if (!cards.length) {
-    container.querySelector('#factor-table-panel').innerHTML = `${statusTabs}${emptyState()}`;
+    panel.innerHTML = `${statusTabs}${emptyState()}`;
     return;
   }
 
@@ -543,7 +558,7 @@ function renderTable(container, statusBase, cards, pageItems, pageCount) {
   const start = (Math.max(1, _view.page) - 1) * _view.pageSize + 1;
   const end = Math.min(cards.length, _view.page * _view.pageSize);
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
-  container.querySelector('#factor-table-panel').innerHTML = `
+  panel.innerHTML = `
     ${degradedBanner}
     ${statusTabs}
     <div class="factor-gate-table factor-gate-table--browser" data-page-size="${_view.pageSize}">
@@ -562,6 +577,9 @@ function renderTable(container, statusBase, cards, pageItems, pageCount) {
 }
 
 function renderLineage(container, payload, cards) {
+  if (!container?.isConnected) return;
+  const panel = container.querySelector('#factor-lineage-panel');
+  if (!panel) return;
   const policy = payload?.promotion_policy || payload?.registry_policy || 'Only promoted factors can become runtime inputs; research-only factors remain visible but gated.';
   const lineage = Array.isArray(payload?.lineage) && payload.lineage.length
     ? payload.lineage.slice(0, 5)
@@ -586,7 +604,7 @@ function renderLineage(container, payload, cards) {
     blocking_reasons: protection?.blocking_reasons || [],
   };
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
-  container.querySelector('#factor-lineage-panel').innerHTML = `
+  panel.innerHTML = `
     ${degradedBanner}
     <div class="workbench-metric-grid factor-lineage-metrics">
       ${metric(c('promoted'), num(counts.promoted || 0, 0), 'positive')}
