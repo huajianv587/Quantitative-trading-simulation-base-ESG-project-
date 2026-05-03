@@ -132,7 +132,7 @@ def test_deployment_preflight_evaluate_persists_cached_readiness(monkeypatch, tm
 
 def test_paper_performance_backfill_records_alpaca_orders(monkeypatch, tmp_path):
     service = _service(tmp_path)
-    order_day = "2026-01-02"
+    order_day = (datetime.now(service.trading_calendar.timezone).date() - timedelta(days=5)).isoformat()
     monkeypatch.setattr(service.trading_calendar, "is_session", lambda _day: True)
     monkeypatch.setattr(service.trading_calendar, "status", lambda: {"is_session": True, "session_date": order_day})
     monkeypatch.setattr(service.trading_calendar, "session_info", lambda day: SimpleNamespace(model_dump=lambda: {"session_date": str(day), "calendar_id": "XNYS"}))

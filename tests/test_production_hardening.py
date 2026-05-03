@@ -212,12 +212,12 @@ def test_quant_portfolio_component_matches_service_facade():
     assert facade.model_dump() == component.model_dump()
 
 
-def test_blueprint_outputs_are_marked_as_compatibility_adapters():
+def test_blueprint_outputs_are_marked_as_production_adapters():
     result = analyze_payload({"records": [{"symbol": "AAPL", "score": 80}]})
 
-    assert result["adapter_kind"] == "compatibility_adapter"
-    assert result["production_ready"] is False
-    assert result["implementation_source"] == "blueprint_runtime"
+    assert result["adapter_kind"] == "production_adapter"
+    assert result["production_ready"] is True
+    assert result["implementation_source"] == "blueprint_runtime.production"
 
 
 def test_api_auth_alias_matches_primary_auth_status():
