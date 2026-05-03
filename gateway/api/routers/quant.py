@@ -323,7 +323,27 @@ def send_paper_weekly_digest(req: QuantWeeklyDigestSendRequest | None = None):
 def get_latest_session_evidence():
     payload = _quant_service().latest_session_evidence()
     if payload is None:
-        raise HTTPException(status_code=404, detail="Session evidence not found")
+        return {
+            "status": "degraded",
+            "available": False,
+            "reason": "session_evidence_not_found",
+            "session_date": None,
+            "complete": False,
+            "stages": {},
+            "stage_order": [],
+            "missing_stages": [
+                "preopen",
+                "workflow",
+                "paper_submit",
+                "broker_sync",
+                "outcomes",
+                "snapshot",
+                "promotion",
+                "digest",
+                "backup",
+            ],
+            "next_actions": ["run_scheduler_session_or_paper_workflow"],
+        }
     return payload
 
 

@@ -364,6 +364,15 @@ def test_compact_error_and_degraded_patterns_exist():
         assert selector in error_css
 
 
+def test_fullscreen_loading_styles_do_not_override_panel_loading_overlay():
+    app_css = Path("frontend/css/app.css").read_text(encoding="utf-8")
+    loading_css = Path("frontend/css/loading-error.css").read_text(encoding="utf-8")
+
+    assert ".loading-overlay {" in app_css
+    assert ".loading-overlay {" not in loading_css
+    assert ".loading-overlay--screen {" in loading_css
+
+
 def test_app_config_prefers_runtime_origin_over_localhost_hardcode():
     content = Path("frontend/app-config.js").read_text(encoding="utf-8")
     assert "window.__ESG_APP_ORIGIN__" in content

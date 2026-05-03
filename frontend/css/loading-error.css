@@ -11,7 +11,7 @@
   animation: spin 0.8s linear infinite;
 }
 
-.loading-overlay {
+.loading-overlay--screen {
   position: fixed;
   inset: 0;
   background: rgba(3,3,8,0.85);
@@ -328,7 +328,7 @@
 }
 
 /* ── Light Mode Overrides ────────────────────────────────────── */
-body.light .loading-overlay {
+body.light .loading-overlay--screen {
   background: rgba(238,241,248,0.9);
 }
 

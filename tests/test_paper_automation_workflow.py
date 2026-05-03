@@ -674,6 +674,25 @@ def test_paper_performance_frontend_contract():
     assert "renderCloudPreflight" in trading_ops
 
 
+def test_latest_session_evidence_missing_returns_degraded_payload(monkeypatch):
+    class _FakeService:
+        def latest_session_evidence(self):
+            return None
+
+    monkeypatch.setattr(quant_router, "_quant_service", lambda: _FakeService())
+    client = TestClient(main_module.app)
+
+    response = client.get("/api/v1/quant/session-evidence/latest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["available"] is False
+    assert payload["reason"] == "session_evidence_not_found"
+    assert payload["complete"] is False
+    assert "workflow" in payload["missing_stages"]
+
+
 def test_unattended_compose_and_ci_contracts():
     compose = open("docker-compose.yml", encoding="utf-8").read()
     compose_5090 = open("docker-compose.5090.yml", encoding="utf-8").read()
