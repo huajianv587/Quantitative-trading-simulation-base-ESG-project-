@@ -64,7 +64,7 @@ test('all routes load without shell crash (zh dark)', async ({ page, baseURL }) 
     await page.screenshot({ path: screenshotPath(slug(route)), fullPage: true });
   }
 
-  expect(ROUTES).toHaveLength(36);
+  expect(ROUTES).toHaveLength(41);
   expect(consoleErrors).toEqual([]);
   expect(failedRequests).toEqual([]);
 });

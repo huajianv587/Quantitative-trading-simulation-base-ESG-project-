@@ -27,7 +27,7 @@ const NAV_GROUPS = [
     id: 'trading_workbench',
     labelKey: 'nav.trading_workbench',
     statusKey: 'trading',
-    paths: ['/trading-ops', '/autopilot-policy', '/strategy-registry', '/portfolio', '/execution', '/paper-performance'],
+    paths: ['/trading-ops', '/trading-safety', '/automation-timeline', '/autopilot-policy', '/strategy-registry', '/portfolio', '/execution', '/paper-performance'],
   },
   {
     id: 'research_workbench',
@@ -45,13 +45,13 @@ const NAV_GROUPS = [
     id: 'data_models',
     labelKey: 'nav.data_models',
     statusKey: 'data',
-    paths: ['/connector-center', '/data-management', '/dataset', '/models', '/rl-lab', '/backtest', '/sweep', '/tearsheet'],
+    paths: ['/connector-center', '/data-config-center', '/data-management', '/dataset', '/models', '/rl-lab', '/backtest', '/sweep', '/tearsheet'],
   },
   {
     id: 'ops_reports',
     labelKey: 'nav.ops_reports',
     statusKey: 'ops',
-    paths: ['/reports', '/push-rules', '/subscriptions'],
+    paths: ['/ops-health', '/job-console', '/reports', '/push-rules', '/subscriptions'],
   },
   {
     id: 'blueprint_center',

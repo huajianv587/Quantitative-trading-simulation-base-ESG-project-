@@ -60,6 +60,12 @@ def test_job_queue_create_status_cancel_retry_and_logs():
     assert loaded.status_code == 200
     assert loaded.json()["job_id"] == job_id
 
+    listed = client.get("/api/v1/jobs?limit=10")
+    assert listed.status_code == 200
+    listed_payload = listed.json()
+    assert listed_payload["status"] in {"ready", "degraded", "blocked"}
+    assert any(item["job_id"] == job_id for item in listed_payload["jobs"])
+
     cancelled = client.post(f"/api/v1/jobs/{job_id}/cancel")
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"

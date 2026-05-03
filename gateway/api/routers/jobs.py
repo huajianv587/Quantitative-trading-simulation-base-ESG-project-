@@ -20,6 +20,12 @@ def create_job(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     return _service().create_job(payload or {})
 
 
+@router.get("")
+@router.get("/")
+def list_jobs(limit: int = 50, status: str | None = None) -> dict[str, Any]:
+    return _service().list_jobs(limit=limit, status=status)
+
+
 @router.get("/{job_id}")
 def get_job(job_id: str) -> dict[str, Any]:
     return _service().get_job(job_id)
@@ -38,4 +44,3 @@ def retry_job(job_id: str) -> dict[str, Any]:
 @router.get("/{job_id}/logs")
 def job_logs(job_id: str) -> dict[str, Any]:
     return _service().job_logs(job_id)
-

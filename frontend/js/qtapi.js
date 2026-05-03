@@ -225,6 +225,12 @@ export var api = {
   },
 
   jobs: {
+    list: function(params) {
+      params = params || {};
+      var query = '?limit=' + encodeURIComponent(params.limit || 50);
+      if (params.status) query += '&status=' + encodeURIComponent(params.status);
+      return _get('/api/v1/jobs' + query, { scope: 'ops' });
+    },
     create: function(payload) { return _post('/api/v1/jobs', payload || {}, { scope: 'ops' }); },
     get: function(jobId) { return _get('/api/v1/jobs/' + encodeURIComponent(jobId), { scope: 'ops' }); },
     cancel: function(jobId) { return _post('/api/v1/jobs/' + encodeURIComponent(jobId) + '/cancel', {}, { scope: 'ops' }); },

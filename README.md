@@ -30,6 +30,13 @@ python -m gateway.main
 http://127.0.0.1:8012/app/
 ```
 
+关键生产化页面：
+- `/app/#/trading-safety`：交易安全中心，证明 Live 永不自动提交，Paper 提交必须通过门禁。
+- `/app/#/automation-timeline`：自动分析/自动下单证据时间线。
+- `/app/#/data-config-center`：数据源配置中心，展示 provider、API key 缺口、优先级、质量和 fallback。
+- `/app/#/job-console`：长任务队列控制台，支持创建、取消、重试和查看日志。
+- `/app/#/ops-health`：发布健康检查，汇总 Schema、Job、数据、交易安全和 E2E 验收状态。
+
 ## 运行模式
 
 - `APP_MODE=local`：本地开发，缺 Supabase 时写入 `storage/quant/`。

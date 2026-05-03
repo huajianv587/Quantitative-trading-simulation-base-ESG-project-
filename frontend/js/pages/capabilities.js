@@ -65,17 +65,18 @@ function resultBox(payload) {
 function opsCards() {
   const state = _opsState || {};
   const items = [
-    ['Schema', state.schemaHealth?.status, '/api/v1/platform/schema-health'],
-    ['Release', state.releaseHealth?.status, '/api/v1/platform/release-health'],
-    ['Data Config', state.dataConfig?.status, '/api/v1/data/config-center'],
-    ['Trading Safety', state.tradingSafety?.status, '/api/v1/trading/safety-center'],
-    ['Automation Timeline', state.automationTimeline?.status, '/api/v1/trading/automation/timeline'],
+    ['Schema', state.schemaHealth?.status, '/api/v1/platform/schema-health', '#/ops-health'],
+    ['Release', state.releaseHealth?.status, '/api/v1/platform/release-health', '#/ops-health'],
+    ['Data Config', state.dataConfig?.status, '/api/v1/data/config-center', '#/data-config-center'],
+    ['Trading Safety', state.tradingSafety?.status, '/api/v1/trading/safety-center', '#/trading-safety'],
+    ['Automation Timeline', state.automationTimeline?.status, '/api/v1/trading/automation/timeline', '#/automation-timeline'],
   ];
-  return items.map(([label, status, endpoint]) => `
+  return items.map(([label, status, endpoint, route]) => `
     <article class="workbench-metric-card">
       <div class="workbench-metric-card__label">${esc(label)}</div>
       <div class="workbench-metric-card__value">${esc(String(status || 'loading').toUpperCase())}</div>
       <div style="font-size:11px;color:var(--text-dim);font-family:var(--f-mono);overflow:hidden;text-overflow:ellipsis">${esc(endpoint)}</div>
+      <a class="path-chip" href="${esc(route)}">Open page</a>
     </article>
   `).join('');
 }

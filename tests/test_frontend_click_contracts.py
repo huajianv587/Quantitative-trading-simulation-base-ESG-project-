@@ -49,6 +49,13 @@ CLICK_TARGETS = {
         "#btn-monitor-stop",
         "#btn-trading-cycle",
     ],
+    "frontend/js/pages/trading-safety-center.js": [
+        "#btn-safety-refresh",
+        "#/automation-timeline",
+    ],
+    "frontend/js/pages/automation-timeline.js": [
+        "#btn-timeline-refresh",
+    ],
     "frontend/js/pages/outcome-center.js": [
         "#btn-outcome-refresh",
         "#btn-outcome-record",
@@ -88,7 +95,10 @@ CLICK_TARGETS = {
         "#btn-run-blueprint-reporting",
     ],
     "frontend/js/pages/reports.js": ["#generate-btn"],
+    "frontend/js/pages/ops-health.js": ["#btn-ops-health-refresh", "#btn-ops-run-smoke"],
+    "frontend/js/pages/job-console.js": ["#btn-job-refresh", "#btn-job-smoke", "data-job-action"],
     "frontend/js/pages/data-management.js": ["#sync-btn"],
+    "frontend/js/pages/data-config-center.js": ["#btn-data-config-refresh", "#btn-save-provider"],
     "frontend/js/pages/push-rules.js": ["#new-rule-btn"],
     "frontend/js/pages/subscriptions.js": ["#create-sub-btn"],
 }
@@ -130,6 +140,8 @@ def test_router_declares_current_workbench_routes():
         "/debate-desk",
         "/risk-board",
         "/trading-ops",
+        "/trading-safety",
+        "/automation-timeline",
         "/autopilot-policy",
         "/strategy-registry",
         "/outcome-center",
@@ -144,7 +156,10 @@ def test_router_declares_current_workbench_routes():
         "/chat",
         "/score",
         "/reports",
+        "/ops-health",
+        "/job-console",
         "/data-management",
+        "/data-config-center",
         "/push-rules",
         "/subscriptions",
     ]:
@@ -154,7 +169,7 @@ def test_router_declares_current_workbench_routes():
 def test_router_declares_all_current_routes():
     router_source = Path("frontend/js/router.js").read_text(encoding="utf-8")
     routes = re.findall(r"'((?:/)[^']*)':\s*\{", router_source)
-    assert len(routes) == 36
+    assert len(routes) == 41
 
 
 def test_router_redirects_empty_shell_urls_back_to_landing():
@@ -420,10 +435,15 @@ def test_critical_shell_and_workbench_files_do_not_contain_known_mojibake_fragme
         "frontend/js/pages/risk-board.js",
         "frontend/js/pages/outcome-center.js",
         "frontend/js/pages/trading-ops.js",
+        "frontend/js/pages/trading-safety-center.js",
+        "frontend/js/pages/automation-timeline.js",
         "frontend/js/pages/autopilot-policy.js",
         "frontend/js/pages/dashboard.js",
         "frontend/js/pages/backtest.js",
         "frontend/js/pages/capabilities.js",
+        "frontend/js/pages/ops-health.js",
+        "frontend/js/pages/job-console.js",
+        "frontend/js/pages/data-config-center.js",
         "frontend/js/pages/rl-lab.js",
     ]
     for relative_path in targets:
@@ -473,7 +493,12 @@ def test_i18n_declares_required_shell_label_keys():
         "'page.debate_desk':",
         "'page.risk_board':",
         "'page.trading_ops':",
+        "'page.trading_safety':",
+        "'page.automation_timeline':",
         "'page.outcome_center':",
+        "'page.ops_health':",
+        "'page.job_console':",
+        "'page.data_config_center':",
         "'common.backend_online':",
         "'common.page_failed_load':",
         "'page.capabilities':",

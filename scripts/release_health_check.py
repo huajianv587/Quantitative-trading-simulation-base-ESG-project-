@@ -45,6 +45,7 @@ def run_check(base_url: str, timeout: float) -> dict[str, Any]:
         ("trading_safety", "GET", "/api/v1/trading/safety-center", None),
         ("automation_timeline", "GET", "/api/v1/trading/automation/timeline", None),
         ("data_config", "GET", "/api/v1/data/config-center", None),
+        ("job_queue_list", "GET", "/api/v1/jobs?limit=10", None),
         ("job_queue_smoke", "POST", "/api/v1/jobs", {"job_type": "release_health_smoke", "payload": {"source": "release_health_check"}}),
     ]
     checks: dict[str, Any] = {}

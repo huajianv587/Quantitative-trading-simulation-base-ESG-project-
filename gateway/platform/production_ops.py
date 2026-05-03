@@ -279,6 +279,31 @@ class JobQueueService:
             "next_actions": [] if backend == "supabase" else ["Apply job queue migration and configure Supabase credentials."],
         }
 
+    def list_jobs(self, *, limit: int = 50, status: str | None = None) -> dict[str, Any]:
+        normalized_status = str(status or "").strip().lower()
+        rows = self.storage.list_records("jobs")
+        if _remote_enabled("JOB_QUEUE_REMOTE_WRITE"):
+            try:
+                remote_rows = list_table_rows("quant_jobs", limit=max(limit, 50), order_by="created_at", desc=True)
+                if remote_rows:
+                    known = {str(row.get("job_id")) for row in rows}
+                    rows.extend(row for row in remote_rows if str(row.get("job_id")) not in known)
+            except Exception:
+                pass
+
+        if normalized_status:
+            rows = [row for row in rows if str(row.get("status") or "").lower() == normalized_status]
+        rows = sorted(rows, key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+        limited = rows[: max(1, min(int(limit or 50), 200))]
+        return {
+            "status": self.queue_health()["status"],
+            "queue": self.queue_health(),
+            "count": len(limited),
+            "jobs": _jsonable(limited),
+            "reason": None if limited else "No job records are available in the current namespace.",
+            "next_actions": [] if limited else ["Create a smoke, data, backtest, or report job from the Job Console."],
+        }
+
     def create_job(self, request: dict[str, Any] | None = None) -> dict[str, Any]:
         body = dict(request or {})
         job_type = str(body.get("job_type") or body.get("kind") or body.get("type") or "noop").strip().lower()
