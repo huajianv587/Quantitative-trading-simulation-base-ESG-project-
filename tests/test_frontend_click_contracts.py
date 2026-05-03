@@ -411,6 +411,23 @@ def test_app_config_prefers_runtime_origin_over_localhost_hardcode():
     assert "http://localhost:8000" not in content
 
 
+def test_playwright_config_does_not_reuse_stale_servers_by_default():
+    content = Path("playwright.config.js").read_text(encoding="utf-8")
+    assert "hashWorkspacePortSeed(__dirname)" in content
+    assert "process.pid" not in content
+    assert "E2E_REUSE_SERVER" in content
+    assert "reuseExistingServer," in content
+    assert "reuseExistingServer: true" not in content
+
+
+def test_release_health_check_verifies_server_fingerprint():
+    content = Path("scripts/release_health_check.py").read_text(encoding="utf-8")
+    assert "livez_fingerprint" in content
+    assert "app_id" in content
+    assert "quant-terminal" in content
+    assert "stale or unrelated server" in content
+
+
 def test_launcher_opens_root_and_verifies_quant_fingerprint():
     content = Path("start.cmd").read_text(encoding="utf-8")
     assert 'set "APP_URL=%API_URL%/"' in content

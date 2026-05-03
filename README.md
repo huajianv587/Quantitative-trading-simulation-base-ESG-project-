@@ -72,6 +72,14 @@ python scripts/reset_acceptance_state.py --namespace local
 npx playwright test e2e/full-app-acceptance.spec.js
 ```
 
+默认情况下，Playwright 会使用仓库路径派生的确定性端口并启动自己的 API，避免误连到旧服务。调试时如需复用已有服务，可显式设置：
+
+```bash
+E2E_PORT=39123 E2E_REUSE_SERVER=true npx playwright test e2e/full-app-acceptance.spec.js
+```
+
+PowerShell 等价写法：`$env:E2E_PORT=39123; $env:E2E_REUSE_SERVER="true"; npx playwright test e2e/full-app-acceptance.spec.js`
+
 截图和 JSON 报告保存在：
 
 ```text

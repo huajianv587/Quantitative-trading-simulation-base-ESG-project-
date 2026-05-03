@@ -2,7 +2,17 @@ const fs = require('fs');
 const path = require('path');
 const { defineConfig } = require('@playwright/test');
 
-const port = Number(process.env.E2E_PORT || 39123);
+function hashWorkspacePortSeed(input) {
+  let hash = 0;
+  for (const char of String(input || '')) {
+    hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
+  }
+  return hash;
+}
+
+const defaultPort = 39123 + (hashWorkspacePortSeed(__dirname) % 1000);
+const port = Number(process.env.E2E_PORT || defaultPort);
+const reuseExistingServer = String(process.env.E2E_REUSE_SERVER || '').toLowerCase() === 'true';
 const venvPython = process.platform === 'win32'
   ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
   : path.join(__dirname, '.venv', 'bin', 'python');
@@ -27,7 +37,7 @@ module.exports = defineConfig({
   webServer: {
     command: `${pythonCommand} scripts/run_e2e_server.py`,
     url: `http://127.0.0.1:${port}/health`,
-    reuseExistingServer: true,
+    reuseExistingServer,
     timeout: 240000,
     env: {
       ...process.env,

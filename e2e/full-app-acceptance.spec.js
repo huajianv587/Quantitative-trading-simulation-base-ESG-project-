@@ -188,6 +188,7 @@ test.describe('full app acceptance', () => {
       localStorage.setItem('qt-theme', 'dark');
     }, baseURL);
 
+    const livez = await readJson(await request.get('/livez'));
     const apiChecks = {
       schemaHealth: await readJson(await request.get('/api/v1/platform/schema-health')),
       releaseHealth: await readJson(await request.get('/api/v1/platform/release-health')),
@@ -202,6 +203,8 @@ test.describe('full app acceptance', () => {
     for (const [label, payload] of Object.entries(apiChecks)) {
       await assertStatusPayload(payload, label);
     }
+    expect(livez.app_id).toBe('quant-terminal');
+    expect(livez.service_name).toBe('Quant Terminal');
     expect(apiChecks.tradingSafety.live_auto_submit.allowed).toBe(false);
     expect(apiChecks.tradingSafety.live_auto_submit.reason).toMatch(/Live auto-submit disabled by hard rule/);
 
@@ -249,6 +252,7 @@ test.describe('full app acceptance', () => {
       outputDir: OUTPUT_DIR,
       mirrorOutputDir: MIRROR_OUTPUT_DIR,
       routeCount: ROUTES.length,
+      livez,
       apiChecks,
       routes: routeReports,
       pageErrors,

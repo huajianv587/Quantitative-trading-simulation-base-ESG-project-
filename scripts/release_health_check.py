@@ -57,6 +57,16 @@ def run_check(base_url: str, timeout: float) -> dict[str, Any]:
             checks[name] = {"status_code": None, "error": str(exc), "path": path}
             hard_failures.append(name)
 
+    livez_body = ((checks.get("livez") or {}).get("body") or {})
+    if not isinstance(livez_body, dict) or livez_body.get("app_id") != "quant-terminal" or livez_body.get("service_name") != "Quant Terminal":
+        checks["livez_fingerprint"] = {
+            "status_code": None,
+            "error": "Unexpected /livez fingerprint; the check may be pointed at a stale or unrelated server.",
+            "expected": {"app_id": "quant-terminal", "service_name": "Quant Terminal"},
+            "actual": livez_body,
+        }
+        hard_failures.append("livez_fingerprint")
+
     job_body = ((checks.get("job_queue_smoke") or {}).get("body") or {})
     job_id = job_body.get("job_id") if isinstance(job_body, dict) else None
     if job_id:
