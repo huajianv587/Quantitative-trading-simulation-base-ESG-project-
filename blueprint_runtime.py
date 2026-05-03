@@ -970,9 +970,33 @@ def build_capabilities_report() -> dict[str, Any]:
                 "last_checked_at": _iso_now(),
             }
         )
+    overall_status = "blocked" if any(item["status"] == "blocked" for item in modules) else (
+        "degraded" if any(item["status"] == "degraded" for item in modules) else "ready"
+    )
+    missing_config_values: list[str] = []
+    for item in modules:
+        missing_config_values.extend(item.get("config_gaps") or [])
+        missing_config_values.extend(item.get("dependencies", {}).get("missing_required") or [])
+    missing_config = sorted(set(missing_config_values))
+    degraded_modules = [item["module"] for item in modules if item["status"] == "degraded"]
+    blocked_modules = [item["module"] for item in modules if item["status"] == "blocked"]
     return {
         "generated_at": _iso_now(),
-        "overall_status": "blocked" if any(item["status"] == "blocked" for item in modules) else ("degraded" if any(item["status"] == "degraded" for item in modules) else "ready"),
+        "overall_status": overall_status,
+        "reason": None
+        if overall_status == "ready"
+        else (
+            f"Blocked modules: {', '.join(blocked_modules)}"
+            if blocked_modules
+            else f"Optional dependencies or configuration gaps detected in: {', '.join(degraded_modules)}"
+        ),
+        "missing_config": missing_config,
+        "next_actions": []
+        if overall_status == "ready"
+        else [
+            "Open Blueprint Capability Center to inspect each degraded or blocked module.",
+            "Configure the listed providers or install optional dependencies before production cutover.",
+        ],
         "modules": modules,
     }
 

@@ -116,6 +116,17 @@ SUSPICIOUS_FRAGMENTS = [
     "鐠",
     "鈥",
     "锟",
+    "鎿",
+    "璇",
+    "妫",
+    "鍦",
+    "濡",
+    "鍚",
+    "绔",
+    "帴",
+    "佹",
+    "撅",
+    "缁",
 ]
 
 
@@ -489,6 +500,7 @@ def test_critical_shell_and_workbench_files_do_not_contain_known_mojibake_fragme
         "frontend/js/pages/job-console.js",
         "frontend/js/pages/data-config-center.js",
         "frontend/js/pages/rl-lab.js",
+        "gateway/api/routers/platform.py",
     ]
     for relative_path in targets:
         content = Path(relative_path).read_text(encoding="utf-8")
