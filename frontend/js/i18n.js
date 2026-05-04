@@ -4,6 +4,7 @@ const STRINGS = {
   en: {
     'app.name': 'Quant Terminal',
     'app.tagline': 'ALPHA ENGINE · LIVE',
+    'app.logo_tag': 'ALPHA ENGINE · LIVE',
 
     'nav.platform': 'Platform',
     'nav.trading_workbench': 'Trading Workbench',
@@ -123,6 +124,7 @@ const STRINGS = {
   zh: {
     'app.name': 'Quant Terminal',
     'app.tagline': '量化引擎 · 在线',
+    'app.logo_tag': '量化引擎 · 在线',
 
     'nav.platform': '平台',
     'nav.trading_workbench': '交易工作台',
