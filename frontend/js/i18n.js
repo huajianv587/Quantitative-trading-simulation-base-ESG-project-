@@ -111,6 +111,14 @@ const STRINGS = {
     'auth.login': 'Sign In',
     'auth.register': 'Create Account',
     'auth.logout': 'Sign Out',
+
+    'account.account': 'Account',
+    'account.signed_in': 'Signed in',
+    'account.not_signed_in': 'Not signed in',
+    'account.appearance': 'Appearance',
+    'account.dark': 'Dark',
+    'account.light': 'Light',
+    'account.language': 'Language',
   },
   zh: {
     'app.name': 'Quant Terminal',
@@ -222,6 +230,14 @@ const STRINGS = {
     'auth.login': '登录',
     'auth.register': '注册',
     'auth.logout': '退出登录',
+
+    'account.account': '账号',
+    'account.signed_in': '已登录',
+    'account.not_signed_in': '未登录',
+    'account.appearance': '显示',
+    'account.dark': '深色',
+    'account.light': '浅色',
+    'account.language': '语言',
   },
 };
 
@@ -382,7 +398,7 @@ export function setLang(lang) {
   const next = lang === 'zh' ? 'zh' : 'en';
   localStorage.setItem(STORAGE_KEY, next);
   setDocumentLang(next);
-  listeners.forEach((listener) => {
+  [...listeners].forEach((listener) => {
     try {
       listener(next);
     } catch (error) {

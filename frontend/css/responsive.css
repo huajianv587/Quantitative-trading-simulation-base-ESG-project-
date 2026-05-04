@@ -183,6 +183,31 @@
   .app-content {
     padding: 16px;
     padding-top: 72px; /* Account for fixed topbar */
+    padding-bottom: 112px;
+  }
+
+  .shell-account-host {
+    position: fixed;
+    left: 12px;
+    right: auto;
+    bottom: 12px;
+    width: min(320px, calc(100vw - 24px));
+    padding: 0;
+    z-index: 140;
+  }
+
+  .shell-account-trigger {
+    min-height: 56px;
+    padding: 9px 10px;
+  }
+
+  .shell-account-menu {
+    left: 0;
+    right: auto;
+    width: min(340px, calc(100vw - 24px));
+    max-height: calc(100vh - 96px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   /* Mobile Menu Toggle */
@@ -665,6 +690,52 @@
   body {
     background: white;
     color: black;
+  }
+}
+
+.workbench-action-btn,
+.workbench-action-grid .btn,
+.connector-action-grid .btn,
+.intelligence-action-grid .btn,
+.run-panel__foot .btn {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .app-sidebar:not(.mobile-open) {
+    transform: translateY(-100%) !important;
+    pointer-events: none;
+  }
+
+  .app-sidebar.mobile-open {
+    pointer-events: auto;
+  }
+
+  .run-panel__foot {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .run-panel__foot .btn {
+    flex: 1 1 auto !important;
+    width: 100%;
+  }
+
+  .factor-gate-table.factor-gate-table--browser {
+    grid-template-columns: 1fr;
+  }
+
+  .factor-gate-table--browser .factor-gate-row {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .factor-gate-table--browser .factor-gate-main {
+    grid-template-columns: 1fr;
   }
 }
 

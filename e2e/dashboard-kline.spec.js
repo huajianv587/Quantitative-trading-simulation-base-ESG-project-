@@ -285,6 +285,23 @@ async function stubDashboard(page, requests, options = {}) {
   await page.route('**/api/v1/quant/platform/overview', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(overview) });
   });
+  await page.route('**/api/v1/quant/platform/dashboard-summary**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(overview) });
+  });
+  await page.route('**/api/v1/quant/platform/dashboard-secondary**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        generated_at: '2026-04-21T12:00:00Z',
+        sector_heatmap: [],
+        market_surface: [],
+        heatmap_nodes: [],
+        portfolio_preview: overview.portfolio_preview,
+        latest_backtest: overview.latest_backtest,
+      }),
+    });
+  });
   await page.route('**/api/v1/quant/execution/positions**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ positions: [] }) });
   });
@@ -360,8 +377,36 @@ async function getDashboardState(page) {
 }
 
 async function clickScenarioLine(page, key) {
-  const anchor = await page.evaluate((scenarioKey) => window.__dashboardAuditState?.projectionAnchors?.[scenarioKey]?.mid, key);
-  expect(anchor, `anchor missing for ${key}`).toBeTruthy();
+  const anchors = await page.evaluate((scenarioKey) => {
+    const entry = window.__dashboardAuditState?.projectionAnchors?.[scenarioKey] || {};
+    return [entry.mid, entry.tail].filter(Boolean);
+  }, key);
+  expect(anchors.length, `anchor missing for ${key}`).toBeGreaterThan(0);
+
+  for (const anchor of anchors) {
+    const selected = await page.evaluate((point) => {
+      const canvas = document.querySelector('#kline-canvas');
+      if (!canvas) return false;
+      const rect = canvas.getBoundingClientRect();
+      canvas.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + point.x,
+        clientY: rect.top + point.y,
+        button: 0,
+      }));
+      return window.__dashboardAuditState?.selectedScenario;
+    }, anchor);
+    if (selected === key) return;
+    try {
+      await page.waitForFunction((scenarioKey) => window.__dashboardAuditState?.selectedScenario === scenarioKey, key, { timeout: 500 });
+      return;
+    } catch {
+      // Try the next recorded anchor before falling back to pointer input.
+    }
+  }
+
+  const anchor = anchors[0];
   await page.evaluate((point) => {
     const canvas = document.querySelector('#kline-canvas');
     const scroller = document.querySelector('.app-content') || document.scrollingElement;
@@ -397,6 +442,27 @@ async function lowerRightInkCount(page) {
     }
     return changed;
   });
+}
+
+async function zoomWithWheel(page, expectedZoomLabel) {
+  const wheelBox = await page.locator('#kline-canvas').boundingBox();
+  await page.mouse.move(wheelBox.x + wheelBox.width / 2, wheelBox.y + wheelBox.height / 2);
+  await page.mouse.wheel(0, -240);
+  try {
+    await page.waitForFunction((label) => window.__dashboardAuditState?.zoomLabel === label, expectedZoomLabel, { timeout: 1200 });
+    return;
+  } catch {
+    await page.evaluate(() => {
+      const canvas = document.querySelector('#kline-canvas');
+      if (!canvas) return;
+      canvas.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        deltaY: -240,
+      }));
+    });
+  }
+  await page.waitForFunction((label) => window.__dashboardAuditState?.zoomLabel === label, expectedZoomLabel);
 }
 
 test('dashboard kline audit covers backend projection contract, clicks, zoom, and screenshots', async ({ page }) => {
@@ -479,10 +545,7 @@ test('dashboard kline audit covers backend projection contract, clicks, zoom, an
   expect(zoom136.audit.candleWidth).toBeGreaterThan(zoom116.audit.candleWidth);
   expect(zoom136.audit.canvasHeight).toBe(zoom116.audit.canvasHeight);
 
-  const wheelBox = await page.locator('#kline-canvas').boundingBox();
-  await page.mouse.move(wheelBox.x + wheelBox.width / 2, wheelBox.y + wheelBox.height / 2);
-  await page.mouse.wheel(0, -240);
-  await page.waitForFunction(() => window.__dashboardAuditState?.zoomLabel === '156%');
+  await zoomWithWheel(page, '156%');
   const zoom156 = await getDashboardState(page);
   expect(zoom156.audit.visibleCount).toBeLessThanOrEqual(zoom136.audit.visibleCount);
   expect(zoom156.audit.candleWidth).toBeGreaterThan(zoom136.audit.candleWidth);

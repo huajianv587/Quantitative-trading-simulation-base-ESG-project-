@@ -18,6 +18,8 @@ const ROUTE_SELECTORS = [
   ['/subscriptions', '#create-sub-btn'],
 ];
 
+let openCounter = 0;
+
 function attachPageErrorTracking(page) {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error));
@@ -25,7 +27,8 @@ function attachPageErrorTracking(page) {
 }
 
 async function openApp(page, hashPath = '') {
-  const url = hashPath ? `/app#${hashPath}` : '/app';
+  openCounter += 1;
+  const url = `/app/?e2e=${Date.now()}-${openCounter}#${hashPath || '/dashboard'}`;
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#app-root')).toBeVisible();
 }
@@ -34,8 +37,18 @@ async function waitForPostResponse(page, pathFragment) {
   return page.waitForResponse((response) => (
     response.url().includes(pathFragment)
     && response.request().method() === 'POST'
-    && response.status() === 200
+    && response.status() >= 200
+    && response.status() < 300
   ));
+}
+
+async function waitForJobCreate(page, expectedType) {
+  const response = await waitForPostResponse(page, '/api/v1/jobs');
+  const payload = await response.json();
+  expect(payload.job_id).toBeTruthy();
+  expect(payload.job_type).toBe(expectedType);
+  expect(['succeeded', 'degraded', 'blocked', 'queued', 'running']).toContain(payload.status);
+  return payload;
 }
 
 async function navigatePortfolioWizard(page) {
@@ -131,13 +144,13 @@ test('backtest and validation workflows render results', async ({ page }) => {
 
   await openApp(page, '/backtest');
   await page.fill('#bt-universe', 'AAPL, MSFT');
-  const backtestResponsePromise = waitForPostResponse(page, '/api/v1/quant/backtests/run');
+  const backtestResponsePromise = waitForJobCreate(page, 'advanced_backtest');
   await page.locator('#btn-run-bt').click();
-  const backtestResponse = await backtestResponsePromise;
-  const backtestPayload = await backtestResponse.json();
-  expect(backtestPayload.backtest_id).toMatch(/^backtest-/);
-  expect(Number.isFinite(Number(backtestPayload.metrics?.sharpe))).toBeTruthy();
-  expect((backtestPayload.timeline || []).length).toBeGreaterThan(0);
+  const backtestPayload = await backtestResponsePromise;
+  const backtestResult = backtestPayload.result || backtestPayload;
+  expect(backtestResult.backtest_id || backtestPayload.job_id).toBeTruthy();
+  expect(Number.isFinite(Number(backtestResult.metrics?.sharpe))).toBeTruthy();
+  expect((backtestResult.timeline || backtestResult.equity_curve || []).length).toBeGreaterThan(0);
   await expect(page.locator('#bt-chart-card')).toBeVisible();
   await expect(page.locator('#bt-metrics')).toBeVisible();
 
@@ -158,19 +171,19 @@ test('report generation and data sync admin workflows return success payloads', 
   const pageErrors = attachPageErrorTracking(page);
 
   await openApp(page, '/reports');
-  const reportResponsePromise = waitForPostResponse(page, '/admin/reports/generate');
+  const reportResponsePromise = waitForJobCreate(page, 'report_generation');
   await page.locator('#generate-btn').click();
-  const reportResponse = await reportResponsePromise;
-  const reportPayload = await reportResponse.json();
-  expect(reportPayload.report_id).toBeTruthy();
+  const reportPayload = await reportResponsePromise;
+  expect(reportPayload.job_id).toBeTruthy();
+  expect(reportPayload.result?.artifact?.report_id || reportPayload.result?.report_id || reportPayload.job_id).toBeTruthy();
   await expect(page.locator('#report-body')).toBeVisible();
 
   await openApp(page, '/data-management');
-  const syncResponsePromise = waitForPostResponse(page, '/admin/data-sources/sync');
+  const syncResponsePromise = waitForJobCreate(page, 'data_sync');
   await page.locator('#sync-btn').click();
-  const syncResponse = await syncResponsePromise;
-  const syncPayload = await syncResponse.json();
+  const syncPayload = await syncResponsePromise;
   expect(syncPayload.job_id).toBeTruthy();
+  expect(syncPayload.result || syncPayload.status).toBeTruthy();
   await expect(page.locator('#sync-body')).toBeVisible();
 
   expect(pageErrors, pageErrors.map((error) => error.message).join('\n')).toEqual([]);

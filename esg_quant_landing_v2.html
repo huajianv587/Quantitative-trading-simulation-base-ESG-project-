@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ESG Quant IO — 研究到执行，一套闭环</title>
+  <title>ESG Quant IO - Research to execution in one loop</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -83,13 +83,32 @@
     .nav-brand { display: flex; flex-direction: column; }
     .nav-name  { font-weight: 700; font-size: 15px; color: var(--white); line-height: 1; }
     .nav-sub   { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: rgba(0,255,136,.45); letter-spacing: .16em; margin-top: 3px; }
-    .nav-links { display: flex; align-items: center; gap: 32px; }
+    .nav-links { display: flex; align-items: center; gap: 22px; }
     .nav-links a {
       font-size: 13px; color: rgba(255,255,255,.58);
       text-decoration: none; letter-spacing: .03em;
       transition: color .2s;
     }
     .nav-links a:hover { color: var(--white); }
+    .landing-lang-toggle {
+      display: inline-flex; align-items: center;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 7px; overflow: hidden;
+      background: rgba(255,255,255,.03);
+    }
+    .landing-lang-btn {
+      height: 32px; padding: 0 11px;
+      border: 0; border-right: 1px solid rgba(255,255,255,.12);
+      background: transparent; color: rgba(255,255,255,.52);
+      cursor: none; font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      transition: background .18s, color .18s;
+    }
+    .landing-lang-btn:last-child { border-right: 0; }
+    .landing-lang-btn:hover { color: var(--white); }
+    .landing-lang-btn.active {
+      background: rgba(0,255,136,.13); color: var(--green);
+    }
     .nav-cta {
       background: var(--green) !important; color: #000 !important;
       font-weight: 700 !important; padding: 9px 22px !important;
@@ -401,6 +420,54 @@
     }
     .cta-foot a { color:rgba(255,255,255,.17); text-decoration:none; transition:color .2s; }
     .cta-foot a:hover { color:rgba(255,255,255,.38); }
+
+    @media (max-width: 860px) {
+      nav { padding: 14px 18px; flex-wrap: wrap; gap: 12px; }
+      .nav-logo { min-width: 0; }
+      .nav-sub { display: none; }
+      .nav-name { font-size: 14px; white-space: nowrap; }
+      .nav-links { width: 100%; justify-content: flex-end; gap: 8px; }
+      .nav-links > a:not(.nav-cta) { display: none; }
+      .landing-lang-btn { height: 30px; padding: 0 8px; font-size: 9px; }
+      .nav-cta { padding: 8px 12px !important; font-size: 11px !important; }
+      .hero-inner { width: 100%; padding: 116px 18px 0; }
+      .hero-hl { width: 100%; margin-bottom: 22px; }
+      .hl {
+        max-width: calc(100vw - 36px); text-align: center;
+        overflow-wrap: normal; word-break: keep-all;
+      }
+      .hl-1 { font-size: clamp(32px, 10vw, 44px); }
+      .hl-2 { font-size: clamp(40px, 12vw, 48px); }
+      .hl-3 { font-size: clamp(26px, 7.5vw, 36px); }
+      .hero-sub {
+        max-width: min(342px, calc(100vw - 36px));
+        font-size: 13px; line-height: 1.55; letter-spacing: .03em;
+        overflow-wrap: anywhere;
+      }
+      .hero-btns {
+        width: min(342px, calc(100vw - 36px));
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px; margin-bottom: 40px;
+      }
+      .btn-pri,
+      .btn-ghost {
+        min-width: 0; min-height: 52px; width: 100%;
+        padding: 0 16px; font-size: 14px;
+        white-space: normal; text-align: center;
+      }
+      .hero-stats {
+        width: min(342px, calc(100vw - 36px));
+        display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+        align-items: start;
+      }
+      .stat-item { min-width: 0; padding: 0 10px; }
+      .stat-num { font-size: 26px; white-space: nowrap; }
+      .stat-lbl {
+        display: block; font-size: 10px; line-height: 1.35;
+        letter-spacing: .02em; text-transform: none;
+        overflow-wrap: anywhere;
+      }
+    }
   </style>
 </head>
 <body>
@@ -419,10 +486,14 @@
     </div>
   </div>
   <div class="nav-links">
-    <a href="#">平台能力</a>
-    <a href="#">架构层</a>
-    <a href="#">交付路径</a>
-    <a href="/app/#/dashboard" class="nav-cta" id="nav-app-entry" data-app-entry="dashboard">进入控制台</a>
+    <a href="#s-product" data-landing-i18n="nav.capabilities">Platform</a>
+    <a href="#s-product" data-landing-i18n="nav.architecture">Architecture</a>
+    <a href="#s-cta" data-landing-i18n="nav.delivery">Delivery</a>
+    <div class="landing-lang-toggle" data-no-autotranslate="true" translate="no" aria-label="Language">
+      <button class="landing-lang-btn active" type="button" data-landing-lang="en" aria-pressed="true">EN</button>
+      <button class="landing-lang-btn" type="button" data-landing-lang="zh" aria-pressed="false">中文</button>
+    </div>
+    <a href="/app/#/dashboard" class="nav-cta" id="nav-app-entry" data-app-entry="dashboard" data-landing-i18n="nav.console">Enter Console</a>
   </div>
 </nav>
 
@@ -430,29 +501,29 @@
 <section id="s-hero">
   <canvas id="hero-canvas"></canvas>
   <div class="hero-inner">
-    <span class="hero-micro">ESG · QUANT · AI · SINGAPORE</span>
+    <span class="hero-micro" data-landing-i18n="hero.micro">ESG · QUANT · AI · SINGAPORE</span>
     <div class="hero-hl">
-      <span class="hl hl-1">研究。验证。</span>
-      <span class="hl hl-2">执行。</span>
-      <span class="hl hl-3">一套系统，全程闭环。</span>
+      <span class="hl hl-1" data-landing-i18n="hero.line1">Research. Validate.</span>
+      <span class="hl hl-2" data-landing-i18n="hero.line2">Execute.</span>
+      <span class="hl hl-3" data-landing-i18n="hero.line3">One system. One closed loop.</span>
     </div>
-    <p class="hero-sub">机构级量化策略 · ESG原生 · AI驱动 · 为下一代系统性投资者而建</p>
+    <p class="hero-sub" data-landing-i18n="hero.sub">Institutional quant strategy · ESG-native · AI-driven · built for the next generation of systematic investors</p>
     <div class="hero-btns">
-      <a class="btn-pri" href="/app/#/dashboard" id="hero-app-entry" data-app-entry="dashboard">进入控制台 →</a>
-      <a class="btn-ghost" href="#s-product" id="hero-demo-link">查看演示</a>
+      <a class="btn-pri" href="/app/#/dashboard" id="hero-app-entry" data-app-entry="dashboard" data-landing-i18n="hero.console">Enter Console →</a>
+      <a class="btn-ghost" href="#s-product" id="hero-demo-link" data-landing-i18n="hero.demo">View Demo</a>
     </div>
     <div class="hero-stats">
       <div class="stat-item">
         <span class="stat-num" id="s1">0</span>
-        <span class="stat-lbl">Active Strategies</span>
+        <span class="stat-lbl" data-landing-i18n="stats.strategies">Active Strategies</span>
       </div>
       <div class="stat-item">
         <span class="stat-num" id="s2">$0B</span>
-        <span class="stat-lbl">Backtested Volume</span>
+        <span class="stat-lbl" data-landing-i18n="stats.volume">Backtested Volume</span>
       </div>
       <div class="stat-item">
         <span class="stat-num" id="s3">0.00</span>
-        <span class="stat-lbl">Avg Strategy Score</span>
+        <span class="stat-lbl" data-landing-i18n="stats.score">Avg Strategy Score</span>
       </div>
     </div>
   </div>
@@ -461,24 +532,24 @@
 <!-- ══════════════════════════════ PRODUCT ══════════════════════════════ -->
 <section id="s-product">
   <div class="prod-left">
-    <div class="sec-label">PLATFORM</div>
-    <div class="prod-hl">你的完整量化工作流<br>一个终端，全部搞定。</div>
+    <div class="sec-label" data-landing-i18n="product.label">PLATFORM</div>
+    <div class="prod-hl" data-landing-i18n-html="product.headline">Your full quant workflow<br>inside one terminal.</div>
     <ul class="cap-list">
       <li class="cap-item">
         <span class="cap-icon">⚡</span>
-        <span class="cap-txt"><span class="cap-name">AI 信号生成</span> — 跨资产动量，自适应窗口</span>
+        <span class="cap-txt"><span class="cap-name" data-landing-i18n="cap.ai.name">AI Signal Generation</span> <span data-landing-i18n="cap.ai.desc">- Cross-asset momentum with adaptive windows</span></span>
       </li>
       <li class="cap-item">
         <span class="cap-icon">🧬</span>
-        <span class="cap-txt"><span class="cap-name">ESG 因子引擎</span> — 多因子评分直接入模</span>
+        <span class="cap-txt"><span class="cap-name" data-landing-i18n="cap.esg.name">ESG Factor Engine</span> <span data-landing-i18n="cap.esg.desc">- Multi-factor scores flow directly into models</span></span>
       </li>
       <li class="cap-item">
         <span class="cap-icon">📊</span>
-        <span class="cap-txt"><span class="cap-name">回测中心</span> — 累计收益、夏普、CVaR 全输出</span>
+        <span class="cap-txt"><span class="cap-name" data-landing-i18n="cap.backtest.name">Backtest Center</span> <span data-landing-i18n="cap.backtest.desc">- Cumulative return, Sharpe, and CVaR outputs</span></span>
       </li>
       <li class="cap-item">
         <span class="cap-icon">🤖</span>
-        <span class="cap-txt"><span class="cap-name">RAG Copilot</span> — ESG 报告对话，研究链路打通</span>
+        <span class="cap-txt"><span class="cap-name" data-landing-i18n="cap.rag.name">RAG Copilot</span> <span data-landing-i18n="cap.rag.desc">- ESG report chat with the research chain connected</span></span>
       </li>
     </ul>
   </div>
@@ -494,54 +565,54 @@
       </div>
       <div class="dash-main">
         <div class="dash-col-l">
-          <div class="col-lbl">PORTFOLIO EQUITY CURVE</div>
+          <div class="col-lbl" data-landing-i18n="dash.equity">PORTFOLIO EQUITY CURVE</div>
           <canvas id="eq-canvas"></canvas>
           <div class="dash-mini">
-            <div class="mini-s">+34.2% Annual</div>
-            <div class="mini-s">Sharpe 2.41</div>
-            <div class="mini-s">Max DD -8.4%</div>
+            <div class="mini-s" data-landing-i18n="dash.annual">+34.2% Annual</div>
+            <div class="mini-s" data-landing-i18n="dash.sharpe">Sharpe 2.41</div>
+            <div class="mini-s" data-landing-i18n="dash.maxdd">Max DD -8.4%</div>
           </div>
         </div>
         <div class="dash-col-r">
           <div class="live-lbl">
             <div class="live-dot"></div>
-            <span>LIVE SIGNALS</span>
+            <span data-landing-i18n="dash.live">LIVE SIGNALS</span>
           </div>
           <div class="sig-rows">
             <div class="sig-row" data-d="0">
               <span class="sig-asset">NVDA</span>
-              <span class="sig-badge bl">LONG</span>
+              <span class="sig-badge bl" data-landing-i18n="dash.long">LONG</span>
               <div class="sig-bw"><div class="sig-b blong" data-w="82"></div></div>
               <span class="sig-ret">+4.2%</span>
             </div>
             <div class="sig-row" data-d="1">
               <span class="sig-asset">TSLA</span>
-              <span class="sig-badge bs">SHORT</span>
+              <span class="sig-badge bs" data-landing-i18n="dash.short">SHORT</span>
               <div class="sig-bw"><div class="sig-b bshort" data-w="61"></div></div>
               <span class="sig-ret neg">-2.8%</span>
             </div>
             <div class="sig-row" data-d="2">
               <span class="sig-asset">AAPL</span>
-              <span class="sig-badge bl">LONG</span>
+              <span class="sig-badge bl" data-landing-i18n="dash.long">LONG</span>
               <div class="sig-bw"><div class="sig-b blong" data-w="74"></div></div>
               <span class="sig-ret">+2.1%</span>
             </div>
             <div class="sig-row" data-d="3">
               <span class="sig-asset">META</span>
-              <span class="sig-badge bl">LONG</span>
+              <span class="sig-badge bl" data-landing-i18n="dash.long">LONG</span>
               <div class="sig-bw"><div class="sig-b blong" data-w="90"></div></div>
               <span class="sig-ret">+5.7%</span>
             </div>
             <div class="sig-row" data-d="4">
               <span class="sig-asset">XOM</span>
-              <span class="sig-badge bs">SHORT</span>
+              <span class="sig-badge bs" data-landing-i18n="dash.short">SHORT</span>
               <div class="sig-bw"><div class="sig-b bshort" data-w="45"></div></div>
               <span class="sig-ret neg">-1.4%</span>
             </div>
           </div>
         </div>
       </div>
-      <div class="dash-foot">LAST UPDATE 14:32:07 SGT &nbsp;·&nbsp; 12 TRADES TODAY &nbsp;·&nbsp; P&amp;L +$18,440</div>
+      <div class="dash-foot" data-landing-i18n-html="dash.footer">LAST UPDATE 14:32:07 SGT &nbsp;·&nbsp; 12 TRADES TODAY &nbsp;·&nbsp; P&amp;L +$18,440</div>
     </div>
   </div>
 </section>
@@ -551,24 +622,191 @@
   <canvas id="cta-canvas"></canvas>
   <div class="cta-vig"></div>
   <div class="cta-inner">
-    <span class="cta-proof">— 已有 2,800+ 量化研究者在使用 —</span>
-    <h2 class="cta-hl">准备好交易得更聪明了吗？</h2>
-    <p class="cta-sub">免费开始。无需信用卡。ESG数据已内置。</p>
-    <a class="btn-mega" href="/app/#/dashboard" id="cta-free-start" data-app-entry="dashboard">立即免费开始 →</a>
+    <span class="cta-proof" data-landing-i18n="cta.proof">2,800+ quant researchers already use it</span>
+    <h2 class="cta-hl" data-landing-i18n="cta.headline">Ready to trade smarter?</h2>
+    <p class="cta-sub" data-landing-i18n="cta.sub">Start free. No credit card required. ESG data is built in.</p>
+    <a class="btn-mega" href="/app/#/dashboard" id="cta-free-start" data-app-entry="dashboard" data-landing-i18n="cta.start">Start Free →</a>
     <div class="trust-micro">
-      <span>✓ 永久免费层</span>
+      <span data-landing-i18n="trust.free">✓ Permanent free tier</span>
       <span class="tsep">·</span>
-      <span>✓ 无需API密钥即可启动</span>
+      <span data-landing-i18n="trust.no_key">✓ Launch without API keys</span>
       <span class="tsep">·</span>
-      <span>✓ ESG数据已内置</span>
+      <span data-landing-i18n="trust.esg">✓ ESG data built in</span>
     </div>
   </div>
   <div class="cta-foot">
-    © 2026 ESG Quant IO · Singapore · <a href="#">Privacy</a> · <a href="#">Terms</a>
+    © 2026 ESG Quant IO · Singapore · <a href="#" data-landing-i18n="footer.privacy">Privacy</a> · <a href="#" data-landing-i18n="footer.terms">Terms</a>
   </div>
 </section>
 
 <script>
+/* ═══════════════════════════════════════════════════════
+   LANDING I18N
+═══════════════════════════════════════════════════════ */
+const LANDING_LANG_STORAGE_KEY = 'qt-lang';
+const LANDING_COPY = {
+  en: {
+    title: 'ESG Quant IO - Research to execution in one loop',
+    'nav.capabilities': 'Platform',
+    'nav.architecture': 'Architecture',
+    'nav.delivery': 'Delivery',
+    'nav.console': 'Enter Console',
+    'hero.micro': 'ESG · QUANT · AI · SINGAPORE',
+    'hero.line1': 'Research. Validate.',
+    'hero.line2': 'Execute.',
+    'hero.line3': 'One system. One closed loop.',
+    'hero.sub': 'Institutional quant strategy · ESG-native · AI-driven · built for the next generation of systematic investors',
+    'hero.console': 'Enter Console →',
+    'hero.demo': 'View Demo',
+    'stats.strategies': 'Active Strategies',
+    'stats.volume': 'Backtested Volume',
+    'stats.score': 'Avg Strategy Score',
+    'product.label': 'PLATFORM',
+    'product.headline': 'Your full quant workflow<br>inside one terminal.',
+    'cap.ai.name': 'AI Signal Generation',
+    'cap.ai.desc': '- Cross-asset momentum with adaptive windows',
+    'cap.esg.name': 'ESG Factor Engine',
+    'cap.esg.desc': '- Multi-factor scores flow directly into models',
+    'cap.backtest.name': 'Backtest Center',
+    'cap.backtest.desc': '- Cumulative return, Sharpe, and CVaR outputs',
+    'cap.rag.name': 'RAG Copilot',
+    'cap.rag.desc': '- ESG report chat with the research chain connected',
+    'dash.equity': 'PORTFOLIO EQUITY CURVE',
+    'dash.annual': '+34.2% Annual',
+    'dash.sharpe': 'Sharpe 2.41',
+    'dash.maxdd': 'Max DD -8.4%',
+    'dash.live': 'LIVE SIGNALS',
+    'dash.long': 'LONG',
+    'dash.short': 'SHORT',
+    'dash.footer': 'LAST UPDATE 14:32:07 SGT &nbsp;·&nbsp; 12 TRADES TODAY &nbsp;·&nbsp; P&amp;L +$18,440',
+    'cta.proof': '2,800+ quant researchers already use it',
+    'cta.headline': 'Ready to trade smarter?',
+    'cta.sub': 'Start free. No credit card required. ESG data is built in.',
+    'cta.start': 'Start Free →',
+    'trust.free': '✓ Permanent free tier',
+    'trust.no_key': '✓ Launch without API keys',
+    'trust.esg': '✓ ESG data built in',
+    'footer.privacy': 'Privacy',
+    'footer.terms': 'Terms',
+  },
+  zh: {
+    title: 'ESG Quant IO - 研究到执行，一套闭环',
+    'nav.capabilities': '平台能力',
+    'nav.architecture': '架构层',
+    'nav.delivery': '交付路径',
+    'nav.console': '进入控制台',
+    'hero.micro': 'ESG · QUANT · AI · SINGAPORE',
+    'hero.line1': '研究。验证。',
+    'hero.line2': '执行。',
+    'hero.line3': '一套系统，全程闭环。',
+    'hero.sub': '机构级量化策略 · ESG原生 · AI驱动 · 为下一代系统性投资者而建',
+    'hero.console': '进入控制台 →',
+    'hero.demo': '查看演示',
+    'stats.strategies': '活跃策略',
+    'stats.volume': '回测规模',
+    'stats.score': '平均策略评分',
+    'product.label': '平台',
+    'product.headline': '你的完整量化工作流<br>一个终端，全部搞定。',
+    'cap.ai.name': 'AI 信号生成',
+    'cap.ai.desc': '- 跨资产动量，自适应窗口',
+    'cap.esg.name': 'ESG 因子引擎',
+    'cap.esg.desc': '- 多因子评分直接入模',
+    'cap.backtest.name': '回测中心',
+    'cap.backtest.desc': '- 累计收益、夏普、CVaR 全输出',
+    'cap.rag.name': 'RAG Copilot',
+    'cap.rag.desc': '- ESG 报告对话，研究链路打通',
+    'dash.equity': '组合权益曲线',
+    'dash.annual': '年化 +34.2%',
+    'dash.sharpe': '夏普 2.41',
+    'dash.maxdd': '最大回撤 -8.4%',
+    'dash.live': '实时信号',
+    'dash.long': '做多',
+    'dash.short': '做空',
+    'dash.footer': '最后更新 14:32:07 SGT &nbsp;·&nbsp; 今日 12 笔交易 &nbsp;·&nbsp; P&amp;L +$18,440',
+    'cta.proof': '已有 2,800+ 量化研究者在使用',
+    'cta.headline': '准备好交易得更聪明了吗？',
+    'cta.sub': '免费开始。无需信用卡。ESG数据已内置。',
+    'cta.start': '立即免费开始 →',
+    'trust.free': '✓ 永久免费层',
+    'trust.no_key': '✓ 无需API密钥即可启动',
+    'trust.esg': '✓ ESG数据已内置',
+    'footer.privacy': '隐私',
+    'footer.terms': '条款',
+  },
+};
+
+let activeLandingLang = 'en';
+let latestSharpeValue = null;
+
+function normalizeLandingLang(lang) {
+  return String(lang || '').toLowerCase() === 'zh' ? 'zh' : 'en';
+}
+
+function storedLandingLang() {
+  try {
+    return normalizeLandingLang(localStorage.getItem(LANDING_LANG_STORAGE_KEY));
+  } catch (_error) {
+    return 'en';
+  }
+}
+
+function persistLandingLang(lang) {
+  try {
+    localStorage.setItem(LANDING_LANG_STORAGE_KEY, normalizeLandingLang(lang));
+  } catch (_error) {
+    // Storage can be unavailable in constrained browser contexts.
+  }
+}
+
+function formatSharpeStat(value) {
+  const label = activeLandingLang === 'zh' ? '夏普' : 'Sharpe';
+  return `${label} ${Number(value || 0).toFixed(2)}`;
+}
+
+function syncDynamicLandingCopy() {
+  if (latestSharpeValue === null) return;
+  const sharpeEl = document.getElementById('s3');
+  if (sharpeEl) sharpeEl.textContent = formatSharpeStat(latestSharpeValue);
+}
+
+function applyLandingLang(lang, options = {}) {
+  const next = normalizeLandingLang(lang);
+  const copy = LANDING_COPY[next] || LANDING_COPY.en;
+  activeLandingLang = next;
+
+  if (options.persist) persistLandingLang(next);
+
+  document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
+  document.title = copy.title || LANDING_COPY.en.title;
+
+  document.querySelectorAll('[data-landing-i18n]').forEach((node) => {
+    const key = node.getAttribute('data-landing-i18n');
+    const value = copy[key] || LANDING_COPY.en[key];
+    if (typeof value === 'string') node.textContent = value;
+  });
+
+  document.querySelectorAll('[data-landing-i18n-html]').forEach((node) => {
+    const key = node.getAttribute('data-landing-i18n-html');
+    const value = copy[key] || LANDING_COPY.en[key];
+    if (typeof value === 'string') node.innerHTML = value;
+  });
+
+  document.querySelectorAll('[data-landing-lang]').forEach((button) => {
+    const isActive = button.getAttribute('data-landing-lang') === next;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  });
+
+  syncDynamicLandingCopy();
+}
+
+document.querySelectorAll('[data-landing-lang]').forEach((button) => {
+  button.addEventListener('click', () => {
+    applyLandingLang(button.getAttribute('data-landing-lang'), { persist: true });
+  });
+});
+applyLandingLang(storedLandingLang(), { persist: false });
+
 /* ═══════════════════════════════════════════════════════
    CURSOR
 ═══════════════════════════════════════════════════════ */
@@ -697,7 +935,7 @@ setTimeout(()=>{
   counter(document.getElementById('s2'), 4.2,
     v => '$' + v.toFixed(1) + 'B+', 1600);
   counter(document.getElementById('s3'), 2.41,
-    v => 'Sharpe ' + v.toFixed(2), 1600);
+    v => { latestSharpeValue = v; return formatSharpeStat(v); }, 1600);
 }, 1300);
 
 /* ═══════════════════════════════════════════════════════

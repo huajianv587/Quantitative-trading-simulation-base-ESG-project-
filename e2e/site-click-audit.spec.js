@@ -821,7 +821,7 @@ const ROUTES = [
     expectedChannels: ['network'],
     action: async (page) => {
       await page.fill('#bt-universe', 'AAPL, MSFT');
-      const responsePromise = page.waitForResponse((response) => response.url().includes('/api/v1/quant/backtests/run') && response.request().method() === 'POST');
+      const responsePromise = page.waitForResponse((response) => response.url().includes('/api/v1/jobs') && response.request().method() === 'POST');
       await page.click('#btn-run-bt');
       await responsePromise;
       await expect(page.locator('#bt-chart-card')).toBeVisible();
@@ -911,7 +911,12 @@ const ROUTES = [
     root: '#app-root',
     expectedChannels: ['network'],
     action: async (page) => {
-      const responsePromise = page.waitForResponse((response) => response.url().includes('/admin/reports/generate') && response.request().method() === 'POST');
+      const responsePromise = page.waitForResponse((response) => {
+        const request = response.request();
+        return response.url().includes('/api/v1/jobs')
+          && request.method() === 'POST'
+          && (request.postData() || '').includes('"job_type":"report_generation"');
+      });
       await page.click('#generate-btn');
       await responsePromise;
       await expect(page.locator('#report-body')).toBeVisible();
@@ -924,7 +929,12 @@ const ROUTES = [
     root: '#app-root',
     expectedChannels: ['network'],
     action: async (page) => {
-      const responsePromise = page.waitForResponse((response) => response.url().includes('/admin/data-sources/sync') && response.request().method() === 'POST');
+      const responsePromise = page.waitForResponse((response) => {
+        const request = response.request();
+        return response.url().includes('/api/v1/jobs')
+          && request.method() === 'POST'
+          && (request.postData() || '').includes('"job_type":"data_sync"');
+      });
       await page.click('#sync-btn');
       await responsePromise;
       await expect(page.locator('#sync-body')).toBeVisible();

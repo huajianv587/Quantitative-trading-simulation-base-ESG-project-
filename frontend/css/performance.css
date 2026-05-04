@@ -342,10 +342,13 @@
 }
 
 /* 固定定位元素 */
-.app-sidebar,
 .app-topbar,
 #toast-container {
   transform: translateZ(0);
+}
+
+.app-sidebar {
+  will-change: transform;
 }
 
 /* ── 滚动性能优化 ──────────────────────────────────────────────── */

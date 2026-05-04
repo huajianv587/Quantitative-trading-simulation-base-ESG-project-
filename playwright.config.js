@@ -42,6 +42,14 @@ module.exports = defineConfig({
     env: {
       ...process.env,
       E2E_PORT: String(port),
+      APP_MODE: 'acceptance',
+      SUPABASE_URL: '',
+      SUPABASE_API_KEY: '',
+      SUPABASE_SERVICE_ROLE_KEY: '',
+      SUPABASE_KEY: '',
+      SCHEMA_HEALTH_REMOTE_PROBE: 'false',
+      JOB_QUEUE_REMOTE_WRITE: 'false',
+      DATA_CONFIG_REMOTE_WRITE: 'false',
     },
   },
 });

@@ -1,4 +1,4 @@
-import { router, getAuthUser, clearAuth } from './router.js?v=8';
+import { router, getAuthToken, getAuthUser, clearAuth } from './router.js?v=8';
 import { api, getApiEndpointLabel } from './qtapi.js?v=8';
 import { initNav, updateHealth } from './components/nav.js?v=8';
 import { toast, initErrorListener, clearAllToasts } from './components/toast.js?v=8';
@@ -8,71 +8,203 @@ import { initClickContracts } from './modules/click-contract.js?v=8';
 import { errorHandler } from './utils/error-handler.js?v=1';
 
 function getTheme() {
-  return localStorage.getItem('qt-theme') || 'dark';
+  return localStorage.getItem('qt-theme') === 'light' ? 'light' : 'dark';
 }
 
-function themeIcon(mode) {
-  return mode === 'light' ? '☀' : '☾';
-}
+let shellAccountOpen = false;
+let shellAccountGlobalEventsBound = false;
 
 function setTheme(mode) {
-  localStorage.setItem('qt-theme', mode);
-  document.body.classList.toggle('light', mode === 'light');
+  const next = mode === 'light' ? 'light' : 'dark';
+  localStorage.setItem('qt-theme', next);
+  document.body.classList.toggle('light', next === 'light');
   const button = document.getElementById('theme-toggle-btn');
-  if (button) button.textContent = themeIcon(mode);
+  if (button) button.textContent = next === 'light' ? t('account.light') : t('account.dark');
 }
 
 function initTheme() {
   setTheme(getTheme());
 }
 
-function buildTopbarActions() {
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char]));
+}
+
+function getAuthState() {
+  const token = getAuthToken();
+  const user = getAuthUser();
+  return {
+    token,
+    user,
+    isSignedIn: Boolean(token || user),
+  };
+}
+
+function getAccountName(user, isSignedIn) {
+  if (!isSignedIn) return t('auth.login');
+  return user?.name || user?.email || t('account.account');
+}
+
+function getAccountInitials(label, isSignedIn) {
+  if (!isSignedIn) return 'QT';
+  const chars = Array.from(String(label || 'U').trim()).filter((char) => /\S/.test(char));
+  return (chars.slice(0, 2).join('') || 'U').toUpperCase();
+}
+
+function setShellAccountOpen(open) {
+  shellAccountOpen = Boolean(open);
+  const host = document.getElementById('shell-account');
+  const trigger = document.getElementById('shell-account-trigger');
+  const menu = document.getElementById('shell-account-menu');
+  if (!host || !trigger || !menu) return;
+
+  host.classList.toggle('is-open', shellAccountOpen);
+  trigger.setAttribute('aria-expanded', shellAccountOpen ? 'true' : 'false');
+  menu.hidden = !shellAccountOpen;
+}
+
+function bindShellAccountGlobalEvents() {
+  if (shellAccountGlobalEventsBound) return;
+  shellAccountGlobalEventsBound = true;
+
+  document.addEventListener('click', (event) => {
+    if (!event.target?.closest?.('#shell-account')) {
+      setShellAccountOpen(false);
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      setShellAccountOpen(false);
+    }
+  });
+}
+
+function buildShellAccount() {
   const actions = document.getElementById('header-actions');
-  if (!actions) return;
+  if (actions) actions.innerHTML = '';
+
+  const host = document.getElementById('shell-account');
+  if (!host) return;
 
   const lang = getLang();
-  const user = getAuthUser();
   const theme = getTheme();
+  const { user, isSignedIn } = getAuthState();
+  const accountName = getAccountName(user, isSignedIn);
+  const accountMeta = isSignedIn ? t('account.signed_in') : t('account.not_signed_in');
+  const initials = getAccountInitials(accountName, isSignedIn);
+  const themeText = theme === 'light' ? t('account.light') : t('account.dark');
 
-  actions.innerHTML = `
-    <button class="theme-toggle" id="theme-toggle-btn" title="Toggle light/dark mode">${themeIcon(theme)}</button>
-    <div class="topbar-lang-toggle" data-no-autotranslate="true" translate="no">
-      <button class="lang-btn${lang === 'zh' ? ' active' : ''}" id="tb-lang-zh" data-lang="zh" data-no-autotranslate="true" translate="no">中</button>
-      <button class="lang-btn${lang === 'en' ? ' active' : ''}" id="tb-lang-en" data-lang="en" data-no-autotranslate="true" translate="no">EN</button>
+  host.innerHTML = `
+    <div class="shell-account" data-click-contract="off">
+      <button
+        type="button"
+        class="shell-account-trigger${isSignedIn ? '' : ' shell-account-trigger--guest'}"
+        id="shell-account-trigger"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        aria-controls="shell-account-menu"
+      >
+        <span class="shell-account-avatar" aria-hidden="true">${escapeHtml(initials)}</span>
+        <span class="shell-account-trigger__copy">
+          <span class="shell-account-trigger__name">${escapeHtml(accountName)}</span>
+          <span class="shell-account-trigger__meta">${escapeHtml(accountMeta)}</span>
+        </span>
+        <span class="shell-account-chevron" aria-hidden="true">&rsaquo;</span>
+      </button>
+
+      <div class="shell-account-menu" id="shell-account-menu" role="menu" hidden>
+        <div class="shell-account-menu__profile">
+          <span class="shell-account-avatar shell-account-avatar--large" aria-hidden="true">${escapeHtml(initials)}</span>
+          <span class="shell-account-menu__identity">
+            <span class="shell-account-menu__name">${escapeHtml(accountName)}</span>
+            <span class="shell-account-menu__meta">${escapeHtml(accountMeta)}</span>
+          </span>
+        </div>
+
+        <div class="shell-account-menu__section">
+          <button type="button" class="shell-account-menu__row" id="shell-theme-toggle" role="menuitem">
+            <span class="shell-account-menu__row-copy">
+              <span>${t('account.appearance')}</span>
+              <small>${escapeHtml(themeText)}</small>
+            </span>
+            <span class="shell-account-menu__row-action">${escapeHtml(themeText)}</span>
+          </button>
+        </div>
+
+        <div class="shell-account-menu__section">
+          <div class="shell-account-menu__label">${t('account.language')}</div>
+          <div class="shell-account-lang" data-no-autotranslate="true" translate="no">
+            <button type="button" class="shell-account-lang__btn${lang === 'en' ? ' active' : ''}" data-shell-lang="en" role="menuitem" data-no-autotranslate="true" translate="no">EN</button>
+            <button type="button" class="shell-account-lang__btn${lang === 'zh' ? ' active' : ''}" data-shell-lang="zh" role="menuitem" data-no-autotranslate="true" translate="no">中文</button>
+          </div>
+        </div>
+
+        <div class="shell-account-menu__section shell-account-menu__section--actions">
+          ${isSignedIn ? `
+            <button type="button" class="shell-account-menu__row shell-account-menu__row--danger" id="shell-logout" role="menuitem">
+              <span>${t('auth.logout')}</span>
+              <span class="shell-account-menu__row-action">-&gt;</span>
+            </button>
+          ` : `
+            <a class="shell-account-menu__row" id="shell-login" href="#/login" role="menuitem">
+              <span>${t('auth.login')}</span>
+              <span class="shell-account-menu__row-action">-&gt;</span>
+            </a>
+            <a class="shell-account-menu__row shell-account-menu__row--primary" id="shell-register" href="#/register" role="menuitem">
+              <span>${t('auth.register')}</span>
+              <span class="shell-account-menu__row-action">-&gt;</span>
+            </a>
+          `}
+        </div>
+      </div>
     </div>
-    ${user ? `
-      <div class="topbar-user" id="topbar-user">
-        <div class="topbar-avatar">${(user.name || user.email || 'U')[0].toUpperCase()}</div>
-        <span class="topbar-username">${user.name || user.email || 'User'}</span>
-        <button class="btn btn-ghost btn-sm" id="btn-logout" style="font-size:10px;padding:3px 8px">${t('auth.logout')}</button>
-      </div>
-    ` : `
-      <div class="topbar-auth-links">
-        <a href="#/login" class="topbar-auth-btn">${t('auth.login')}</a>
-        <a href="#/register" class="topbar-auth-btn topbar-auth-btn--primary">${t('auth.register')}</a>
-      </div>
-    `}
   `;
 
-  actions.querySelector('#theme-toggle-btn')?.addEventListener('click', () => {
+  host.querySelector('#shell-account-trigger')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setShellAccountOpen(!shellAccountOpen);
+  });
+
+  host.querySelector('#shell-theme-toggle')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    shellAccountOpen = true;
     setTheme(getTheme() === 'dark' ? 'light' : 'dark');
+    buildShellAccount();
   });
 
-  actions.querySelector('#tb-lang-zh')?.addEventListener('click', () => {
-    setLang('zh');
-    buildTopbarActions();
+  host.querySelectorAll('[data-shell-lang]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      shellAccountOpen = true;
+      const nextLang = button.dataset.shellLang;
+      window.setTimeout(() => setLang(nextLang), 0);
+    });
   });
 
-  actions.querySelector('#tb-lang-en')?.addEventListener('click', () => {
-    setLang('en');
-    buildTopbarActions();
-  });
-
-  actions.querySelector('#btn-logout')?.addEventListener('click', () => {
+  host.querySelector('#shell-logout')?.addEventListener('click', (event) => {
+    event.stopPropagation();
     clearAuth();
+    shellAccountOpen = false;
+    buildShellAccount();
     toast.info(t('auth.logout'));
     window.location.hash = '#/login';
   });
+
+  host.querySelectorAll('#shell-login, #shell-register').forEach((link) => {
+    link.addEventListener('click', () => {
+      shellAccountOpen = false;
+    });
+  });
+
+  setShellAccountOpen(shellAccountOpen);
 }
 
 async function updateBackendHealth(showToast = false) {
@@ -137,13 +269,18 @@ async function init() {
   initTheme();
   initNav();
   initErrorListener();
+  bindShellAccountGlobalEvents();
 
   const root = document.getElementById('app-root');
-  buildTopbarActions();
+  buildShellAccount();
 
   onLangChange(() => {
     clearAllToasts();
-    buildTopbarActions();
+    buildShellAccount();
+  });
+
+  window.addEventListener('route-change', () => {
+    buildShellAccount();
   });
 
   router.init(root);

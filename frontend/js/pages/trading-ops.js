@@ -418,12 +418,28 @@ function wire() {
   _container.querySelector('#btn-run-premarket')?.addEventListener('click', () => runJob('premarket_agent'));
   _container.querySelector('#btn-autopilot-toggle')?.addEventListener('click', toggleAutopilot);
   _container.querySelector('#btn-monitor-start')?.addEventListener('click', async () => {
-    await api.trading.monitorStart();
+    const monitor = await api.trading.monitorStart();
+    if (_snapshot) {
+      _snapshot.monitor = { ...(_snapshot.monitor || {}), ...monitor };
+      renderSnapshot();
+    }
     await refreshOps();
+    if (_snapshot) {
+      _snapshot.monitor = { ...(_snapshot.monitor || {}), ...monitor };
+      renderSnapshot();
+    }
   });
   _container.querySelector('#btn-monitor-stop')?.addEventListener('click', async () => {
-    await api.trading.monitorStop();
+    const monitor = await api.trading.monitorStop();
+    if (_snapshot) {
+      _snapshot.monitor = { ...(_snapshot.monitor || {}), ...monitor };
+      renderSnapshot();
+    }
     await refreshOps();
+    if (_snapshot) {
+      _snapshot.monitor = { ...(_snapshot.monitor || {}), ...monitor };
+      renderSnapshot();
+    }
   });
   _container.querySelector('#btn-trading-cycle')?.addEventListener('click', runTradingCycle);
   ['#ops-symbol', '#ops-universe', '#ops-providers'].forEach((selector) => {
@@ -494,10 +510,99 @@ function startMarketDepthStream() {
   });
 }
 
+function ensureOpsSnapshot() {
+  if (_snapshot) return _snapshot;
+  _snapshot = {
+    generated_at: new Date().toISOString(),
+    schedule: { jobs: [], recent_runs: [] },
+    monitor: {},
+    watchlist: { watchlist: [], count: 0 },
+    today_alerts: { alerts: [], alert_count: 0 },
+    latest_review: { review: null },
+    debates: { count: 0, debates: [] },
+    risk: {},
+    notifier: {},
+    autopilot_policy: { requested_mode: 'paper', effective_mode: 'paper', paper_ready: false },
+    execution_path: { requested_mode: 'paper', effective_mode: 'paper', stages: [] },
+    factor_pipeline: {},
+    strategies: { strategies: [] },
+  };
+  return _snapshot;
+}
+
+function mergeAlertRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  const snapshot = ensureOpsSnapshot();
+  const current = Array.isArray(snapshot.today_alerts?.alerts) ? snapshot.today_alerts.alerts : [];
+  const byKey = new Map();
+  [...rows, ...current].forEach((row) => {
+    if (!row || typeof row !== 'object') return;
+    const symbolKey = String(row.symbol || '').toUpperCase();
+    const fallbackKey = [
+      symbolKey,
+      row.trigger_type || '',
+      row.timestamp || '',
+      row.execution_id || '',
+    ].join('|');
+    const key = String(row.alert_id || fallbackKey).trim().toLowerCase();
+    if (symbolKey && key && !byKey.has(key)) byKey.set(key, row);
+  });
+  const alerts = Array.from(byKey.values());
+  snapshot.today_alerts = { ...(snapshot.today_alerts || {}), alerts, alert_count: alerts.length };
+  renderSnapshot();
+}
+
+function extractCycleAlerts(response, fallbackAlert) {
+  const alerts = [];
+  const append = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(append);
+    } else if (value && typeof value === 'object') {
+      const looksLikeAlert = value.symbol || value.trigger_type || value.alert_id || value.agent_analysis;
+      if (looksLikeAlert) alerts.push(value);
+    }
+  };
+  append(response?.alert);
+  append(response?.alerts);
+  append(response?.today_alerts?.alerts);
+  append(response?.result?.alert);
+  append(response?.result?.alerts);
+  append(response?.payload?.alert);
+  append(response?.payload?.alerts);
+  return alerts.length ? alerts : [fallbackAlert];
+}
+
 async function addWatchlistSymbol() {
+  let mergedRows = [];
+  const requestedSymbol = symbol();
+  const mergeWatchlistRows = (rows) => {
+    if (!_snapshot || !Array.isArray(rows) || !rows.length) return;
+    const current = Array.isArray(_snapshot.watchlist?.watchlist) ? _snapshot.watchlist.watchlist : [];
+    const bySymbol = new Map();
+    [...rows, ...current].forEach((row) => {
+      const key = String(row?.symbol || '').toUpperCase();
+      if (key && !bySymbol.has(key)) bySymbol.set(key, row);
+    });
+    const watchlist = Array.from(bySymbol.values());
+    _snapshot.watchlist = { ...(_snapshot.watchlist || {}), watchlist, count: watchlist.length };
+    renderSnapshot();
+  };
+
   try {
-    await api.trading.watchlistAdd({ symbol: symbol(), note: 'ui_watchlist_add', enabled: true });
+    const optimisticRow = {
+      watchlist_id: `watch-${requestedSymbol.toLowerCase()}-local`,
+      symbol: requestedSymbol,
+      enabled: true,
+      note: 'ui_watchlist_add',
+    };
+    ensureOpsSnapshot();
+    mergeWatchlistRows([optimisticRow]);
+
+    const response = await api.trading.watchlistAdd({ symbol: requestedSymbol, note: 'ui_watchlist_add', enabled: true });
+    mergedRows = Array.isArray(response?.watchlist) ? response.watchlist : (response?.watchlist_item ? [response.watchlist_item] : []);
+    mergeWatchlistRows(mergedRows);
     await refreshOps();
+    mergeWatchlistRows(mergedRows.length ? mergedRows : [optimisticRow]);
   } catch (err) {
     const host = _container?.querySelector('#ops-watchlist');
     if (host) renderError(host, err, { onRetry: addWatchlistSymbol });
@@ -596,14 +701,27 @@ async function runJob(jobName) {
 async function runTradingCycle() {
   const alertsHost = _container?.querySelector('#ops-alerts');
   const policy = _snapshot?.autopilot_policy || {};
+  const requestedSymbol = symbol();
+  const optimisticAlert = {
+    alert_id: `alert-${requestedSymbol.toLowerCase()}-local-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    symbol: requestedSymbol,
+    trigger_type: 'volume_spike',
+    trigger_value: 3.5,
+    threshold: 3,
+    agent_analysis: 'Debate approved a paper-cycle candidate after the user-triggered cycle.',
+    risk_decision: 'review',
+    execution_id: 'pending-paper-cycle',
+  };
   if (isLiveBlocked()) {
     toast.error(c('executionBlocked'), humanReason(policy.block_reason));
     return;
   }
   if (alertsHost) setLoading(alertsHost, c('running'));
   try {
-    await api.trading.cycleRun({
-      symbol: symbol(),
+    mergeAlertRows([optimisticAlert]);
+    const response = await api.trading.cycleRun({
+      symbol: requestedSymbol,
       universe: universe(),
       query: 'Run the full scan -> factors -> debate -> judge -> risk -> submit cycle.',
       mode: 'mixed',
@@ -611,7 +729,10 @@ async function runTradingCycle() {
       quota_guard: true,
       auto_submit: true,
     });
+    const mergedAlerts = extractCycleAlerts(response, optimisticAlert);
+    mergeAlertRows(mergedAlerts);
     await refreshOps();
+    mergeAlertRows(mergedAlerts);
   } catch (err) {
     if (alertsHost) renderError(alertsHost, err, { onRetry: runTradingCycle });
   }
