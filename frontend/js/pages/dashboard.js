@@ -237,6 +237,7 @@ let _selectedHeatmapNode = null;
 let _boundClickHandler = null;
 let _boundPointerDownHandler = null;
 let _boundResizeHandler = null;
+let _boundThemeHandler = null;
 let _zoomHoldTimer = null;
 let _zoomHoldInterval = null;
 let _chartRequestSeq = 0;
@@ -1559,17 +1560,56 @@ function heatmapData() {
   }));
 }
 
+function themeValue(name, fallback, element = document.body) {
+  const sources = [element, document.body, document.documentElement].filter(Boolean);
+  for (const source of sources) {
+    const value = getComputedStyle(source).getPropertyValue(name).trim();
+    if (value) return value;
+  }
+  return fallback;
+}
+
+function heatmapPalette() {
+  const light = document.body.classList.contains('light');
+  return light
+    ? {
+      upRgb: '22,138,86',
+      downRgb: '201,74,95',
+      minAlpha: 0.20,
+      maxAlpha: 0.58,
+      upBorder: 'rgba(22,138,86,0.42)',
+      downBorder: 'rgba(201,74,95,0.40)',
+      emphasisBorder: 'rgba(13,24,48,0.28)',
+      upShadow: 'rgba(22,138,86,0.16)',
+      downShadow: 'rgba(201,74,95,0.16)',
+    }
+    : {
+      upRgb: '0,255,136',
+      downRgb: '255,77,109',
+      minAlpha: 0.22,
+      maxAlpha: 0.76,
+      upBorder: 'rgba(0,255,136,0.72)',
+      downBorder: 'rgba(255,77,109,0.72)',
+      emphasisBorder: '#f0f4ff',
+      upShadow: 'rgba(0,255,136,0.32)',
+      downShadow: 'rgba(255,77,109,0.32)',
+    };
+}
+
 function heatmapColor(delta) {
+  const palette = heatmapPalette();
   const value = clamp(Number(delta || 0), -8, 8);
-  const alpha = clamp(Math.abs(value) / 8, 0.22, 0.76);
-  return value >= 0 ? `rgba(0,255,136,${alpha})` : `rgba(255,77,109,${alpha})`;
+  const alpha = clamp(Math.abs(value) / 8, palette.minAlpha, palette.maxAlpha);
+  return value >= 0 ? `rgba(${palette.upRgb},${alpha})` : `rgba(${palette.downRgb},${alpha})`;
 }
 
 function heatmapBorderColor(delta) {
-  return Number(delta || 0) >= 0 ? 'rgba(0,255,136,0.72)' : 'rgba(255,77,109,0.72)';
+  const palette = heatmapPalette();
+  return Number(delta || 0) >= 0 ? palette.upBorder : palette.downBorder;
 }
 
 function normalizeHeatmapNode(item, index, depth = 0) {
+  const palette = heatmapPalette();
   const nodeId = `${depth}:${index}:${item.name}`;
   const delta = Number(item.delta || 0);
   const value = Math.max(1, Number(item.weight || item.value || 1));
@@ -1597,10 +1637,10 @@ function normalizeHeatmapNode(item, index, depth = 0) {
     },
     emphasis: {
       itemStyle: {
-        borderColor: '#f0f4ff',
+        borderColor: palette.emphasisBorder,
         borderWidth: 2,
-        shadowColor: Number(delta || 0) >= 0 ? 'rgba(0,255,136,0.32)' : 'rgba(255,77,109,0.32)',
-        shadowBlur: 18,
+        shadowColor: Number(delta || 0) >= 0 ? palette.upShadow : palette.downShadow,
+        shadowBlur: document.body.classList.contains('light') ? 8 : 18,
       },
     },
     __nodeId: nodeId,
@@ -1699,6 +1739,11 @@ function drawHeatmap() {
     _heatmapChart = echartsLib.init(chartEl, null, { renderer: 'canvas' });
   }
 
+  const heatmapText = themeValue('--text-primary', '#f0f4ff', chartEl);
+  const heatmapMeta = themeValue('--text-secondary', 'rgba(190,210,235,0.78)', chartEl);
+  const heatmapTooltipBg = themeValue('--chart-tooltip-bg', themeValue('--bg-surface', '#101223', chartEl), chartEl);
+  const heatmapTooltipBorder = themeValue('--chart-tooltip-border', themeValue('--border-dim', 'rgba(90,120,160,0.35)', chartEl), chartEl);
+  const heatmapLevelBorder = document.body.classList.contains('light') ? 'rgba(20,35,70,0.08)' : 'rgba(255,255,255,0.04)';
   const option = {
     backgroundColor: 'transparent',
     animation: true,
@@ -1708,10 +1753,10 @@ function drawHeatmap() {
       confine: true,
       className: 'heatmap-echarts-tooltip-wrap',
       borderWidth: 1,
-      backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--bg-surface').trim() || '#101223',
-      borderColor: getComputedStyle(document.documentElement).getPropertyValue('--border-dim').trim() || 'rgba(90,120,160,0.35)',
+      backgroundColor: heatmapTooltipBg,
+      borderColor: heatmapTooltipBorder,
       textStyle: {
-        color: getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim() || '#f0f4ff',
+        color: heatmapText,
         fontFamily: 'IBM Plex Mono, monospace',
         fontSize: 11,
       },
@@ -1733,15 +1778,15 @@ function drawHeatmap() {
       data: data.map((item, index) => normalizeHeatmapNode(item, index)),
       label: {
         show: true,
-        color: getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim() || '#f0f4ff',
+        color: heatmapText,
         fontFamily: 'IBM Plex Mono, monospace',
         lineHeight: 18,
         overflow: 'truncate',
         formatter: heatmapFormatter,
         rich: {
-          name: { fontSize: 12, fontWeight: 700, color: '#f0f4ff', lineHeight: 20 },
-          delta: { fontSize: 18, fontWeight: 800, color: '#f0f4ff', lineHeight: 24 },
-          meta: { fontSize: 10, color: 'rgba(190,210,235,0.78)', lineHeight: 17 },
+          name: { fontSize: 12, fontWeight: 700, color: heatmapText, lineHeight: 20 },
+          delta: { fontSize: 18, fontWeight: 800, color: heatmapText, lineHeight: 24 },
+          meta: { fontSize: 10, color: heatmapMeta, lineHeight: 17 },
         },
       },
       upperLabel: {
@@ -1750,7 +1795,7 @@ function drawHeatmap() {
       levels: [
         {
           itemStyle: {
-            borderColor: 'rgba(255,255,255,0.04)',
+            borderColor: heatmapLevelBorder,
             borderWidth: 0,
             gapWidth: 8,
           },
@@ -2428,6 +2473,9 @@ function bindEvents() {
   if (_boundResizeHandler) {
     window.removeEventListener('resize', _boundResizeHandler);
   }
+  if (_boundThemeHandler) {
+    window.removeEventListener('qt:theme-change', _boundThemeHandler);
+  }
   _boundPointerDownHandler = (event) => {
     if (event.target.closest('#zoom-out-btn')) {
       startZoomHold(-1);
@@ -2447,6 +2495,13 @@ function bindEvents() {
     _heatmapChart?.resize?.();
   };
   window.addEventListener('resize', _boundResizeHandler);
+
+  _boundThemeHandler = () => {
+    updateRenderer();
+    drawHeatmap();
+    _heatmapChart?.resize?.();
+  };
+  window.addEventListener('qt:theme-change', _boundThemeHandler);
 }
 
 export async function render(container) {
@@ -2508,10 +2563,14 @@ export function destroy() {
   if (_boundResizeHandler) {
     window.removeEventListener('resize', _boundResizeHandler);
   }
+  if (_boundThemeHandler) {
+    window.removeEventListener('qt:theme-change', _boundThemeHandler);
+  }
   clearZoomHold();
   _boundClickHandler = null;
   _boundPointerDownHandler = null;
   _boundResizeHandler = null;
+  _boundThemeHandler = null;
   _renderer?.destroy();
   _renderer = null;
   _heatmapChart?.dispose?.();

@@ -27,6 +27,14 @@ let _degradedMeta = null;
 const DEBATE_CACHE_KEY = 'qt.debate-desk.snapshot.v1';
 const DEBATE_CACHE_TTL_MS = 20 * 60 * 1000;
 
+function pageRoot() {
+  return _container?.isConnected ? _container : null;
+}
+
+function pageQuery(selector) {
+  return pageRoot()?.querySelector(selector) || null;
+}
+
 const COPY = {
   en: {
     title: 'Debate Desk',
@@ -296,14 +304,16 @@ function renderShell() {
 }
 
 function wire() {
-  _container.querySelector('#btn-debate-run')?.addEventListener('click', runDebate);
-  _container.querySelector('#btn-debate-refresh')?.addEventListener('click', refreshLedger);
-  _container.querySelector('#btn-debate-open-risk')?.addEventListener('click', () => router.navigate('/risk-board'));
-  _container.querySelector('#btn-debate-open-ops')?.addEventListener('click', () => router.navigate('/trading-ops'));
+  const root = pageRoot();
+  if (!root) return;
+  root.querySelector('#btn-debate-run')?.addEventListener('click', runDebate);
+  root.querySelector('#btn-debate-refresh')?.addEventListener('click', refreshLedger);
+  root.querySelector('#btn-debate-open-risk')?.addEventListener('click', () => router.navigate('/risk-board'));
+  root.querySelector('#btn-debate-open-ops')?.addEventListener('click', () => router.navigate('/trading-ops'));
   ['#debate-symbol', '#debate-universe', '#debate-providers'].forEach((selector) => {
-    _container.querySelector(selector)?.addEventListener('input', renderFieldPreviews);
+    root.querySelector(selector)?.addEventListener('input', renderFieldPreviews);
   });
-  _container.querySelector('#debate-ledger')?.addEventListener('click', (event) => {
+  root.querySelector('#debate-ledger')?.addEventListener('click', (event) => {
     const row = event.target.closest('[data-debate-id]');
     if (!row) return;
     const debateId = row.getAttribute('data-debate-id');
@@ -311,7 +321,7 @@ function wire() {
     renderCurrent();
     renderLedger();
   });
-  _container.querySelector('#debate-current')?.addEventListener('click', (event) => {
+  root.querySelector('#debate-current')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-debate-link]');
     if (!button) return;
     const routeMap = {
@@ -326,41 +336,51 @@ function wire() {
 }
 
 function symbol() {
-  return String(_container.querySelector('#debate-symbol')?.value || 'AAPL').trim().toUpperCase();
+  return String(pageQuery('#debate-symbol')?.value || 'AAPL').trim().toUpperCase();
 }
 
 function universe() {
-  return splitTokens(_container.querySelector('#debate-universe')?.value || symbol(), {
+  return splitTokens(pageQuery('#debate-universe')?.value || symbol(), {
     uppercase: true,
     delimiters: /[,\s]+/,
   });
 }
 
 function providers() {
-  return splitTokens(_container.querySelector('#debate-providers')?.value || '', {
+  return splitTokens(pageQuery('#debate-providers')?.value || '', {
     delimiters: /[,|\s]+/,
   });
 }
 
 function renderFieldPreviews() {
-  _container.querySelector('#debate-symbol-preview').innerHTML = renderTokenPreview([symbol()], {
-    tone: 'accent',
-    maxItems: 1,
-  });
-  _container.querySelector('#debate-universe-preview').innerHTML = renderTokenPreview(universe(), {
-    tone: 'accent',
-    maxItems: 6,
-  });
-  _container.querySelector('#debate-provider-preview').innerHTML = renderTokenPreview(providers(), {
-    tone: 'neutral',
-    maxItems: 6,
-  });
+  const symbolPreview = pageQuery('#debate-symbol-preview');
+  if (symbolPreview) {
+    symbolPreview.innerHTML = renderTokenPreview([symbol()], {
+      tone: 'accent',
+      maxItems: 1,
+    });
+  }
+  const universePreview = pageQuery('#debate-universe-preview');
+  if (universePreview) {
+    universePreview.innerHTML = renderTokenPreview(universe(), {
+      tone: 'accent',
+      maxItems: 6,
+    });
+  }
+  const providerPreview = pageQuery('#debate-provider-preview');
+  if (providerPreview) {
+    providerPreview.innerHTML = renderTokenPreview(providers(), {
+      tone: 'neutral',
+      maxItems: 6,
+    });
+  }
 }
 
 async function refreshLedger() {
-  setLoading(_container.querySelector('#debate-ledger'), c('loadingLedger'));
+  setLoading(pageQuery('#debate-ledger'), c('loadingLedger'));
   try {
     const payload = await api.trading.debateRuns(symbol(), 12);
+    if (!pageRoot()) return;
     _debates = payload.debates || [];
     _current = _debates[0] || null;
     persistPayloadSnapshot(DEBATE_CACHE_KEY, { debates: _debates, current: _current }, { symbol: symbol() });
@@ -368,6 +388,7 @@ async function refreshLedger() {
     renderLedger();
     renderCurrent();
   } catch (err) {
+    if (!pageRoot()) return;
     const cached = loadPayloadSnapshot(DEBATE_CACHE_KEY, DEBATE_CACHE_TTL_MS);
     if (cached?.payload) {
       _debates = cached.payload.debates || [];
@@ -377,23 +398,25 @@ async function refreshLedger() {
       renderCurrent();
       return;
     }
-    renderError(_container.querySelector('#debate-ledger'), err, { onRetry: refreshLedger });
-    renderError(_container.querySelector('#debate-current'), err, { onRetry: refreshLedger });
+    renderError(pageQuery('#debate-ledger'), err, { onRetry: refreshLedger });
+    renderError(pageQuery('#debate-current'), err, { onRetry: refreshLedger });
   }
 }
 
 async function runDebate() {
-  setLoading(_container.querySelector('#debate-current'), c('running'));
+  setLoading(pageQuery('#debate-current'), c('running'));
+  const query = pageQuery('#debate-query')?.value || '';
   try {
     const payload = await api.trading.debateRun({
       symbol: symbol(),
       universe: universe(),
-      query: _container.querySelector('#debate-query')?.value || '',
+      query,
       mode: 'mixed',
       providers: providers(),
       quota_guard: true,
       rebuttal_rounds: 2,
     });
+    if (!pageRoot()) return;
     _debates = [payload, ..._debates.filter((item) => item.debate_id !== payload.debate_id)];
     _current = payload;
     persistPayloadSnapshot(DEBATE_CACHE_KEY, { debates: _debates, current: _current }, { symbol: symbol() });
@@ -401,6 +424,7 @@ async function runDebate() {
     renderLedger();
     renderCurrent();
   } catch (err) {
+    if (!pageRoot()) return;
     const cached = loadPayloadSnapshot(DEBATE_CACHE_KEY, DEBATE_CACHE_TTL_MS);
     if (cached?.payload) {
       _debates = cached.payload.debates || [];
@@ -410,12 +434,12 @@ async function runDebate() {
       renderCurrent();
       return;
     }
-    renderError(_container.querySelector('#debate-current'), err, { onRetry: runDebate });
+    renderError(pageQuery('#debate-current'), err, { onRetry: runDebate });
   }
 }
 
 function renderLedger() {
-  const host = _container.querySelector('#debate-ledger');
+  const host = pageQuery('#debate-ledger');
   if (!host) return;
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!_debates.length) {
@@ -450,7 +474,7 @@ function renderLedger() {
 }
 
 function renderCurrent() {
-  const host = _container.querySelector('#debate-current');
+  const host = pageQuery('#debate-current');
   if (!host) return;
   const degradedBanner = _degradedMeta ? renderDegradedNotice(_degradedMeta) : '';
   if (!_current) {

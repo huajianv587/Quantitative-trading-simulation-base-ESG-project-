@@ -343,9 +343,46 @@ body.light .skeleton {
 }
 
 body.light .toast {
-  background: #FFFFFF;
-  border-color: rgba(0,0,0,0.1);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+  background: rgba(255,255,255,0.97);
+  border-color: rgba(20,35,70,0.12);
+  color: var(--text-primary);
+  box-shadow: 0 16px 42px rgba(25,35,55,0.18), inset 0 1px 0 rgba(255,255,255,0.86);
+}
+
+body.light .toast-success {
+  border-left-color: var(--chart-up);
+}
+
+body.light .toast-error {
+  border-left-color: var(--chart-down);
+}
+
+body.light .toast-warning {
+  border-left-color: var(--amber);
+}
+
+body.light .toast-info {
+  border-left-color: #2F6FAD;
+}
+
+body.light .toast-success .toast-icon {
+  background: rgba(22,138,86,0.12);
+  color: var(--chart-up);
+}
+
+body.light .toast-error .toast-icon {
+  background: rgba(201,74,95,0.12);
+  color: var(--chart-down);
+}
+
+body.light .toast-warning .toast-icon {
+  background: rgba(184,124,22,0.12);
+  color: #9A6611;
+}
+
+body.light .toast-info .toast-icon {
+  background: rgba(47,111,173,0.12);
+  color: #2F6FAD;
 }
 
 body.light .error-icon {

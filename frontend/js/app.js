@@ -16,10 +16,14 @@ let shellAccountGlobalEventsBound = false;
 
 function setTheme(mode) {
   const next = mode === 'light' ? 'light' : 'dark';
+  const previous = document.body.classList.contains('light') ? 'light' : 'dark';
   localStorage.setItem('qt-theme', next);
   document.body.classList.toggle('light', next === 'light');
   const button = document.getElementById('theme-toggle-btn');
   if (button) button.textContent = next === 'light' ? t('account.light') : t('account.dark');
+  if (previous !== next) {
+    window.dispatchEvent(new CustomEvent('qt:theme-change', { detail: { theme: next, previous } }));
+  }
 }
 
 function initTheme() {

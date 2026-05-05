@@ -53,8 +53,34 @@ function stepZoomLabel(label, direction) {
   return formatZoomLabel(next);
 }
 
-function cssVar(name, fallback) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+function cssVar(name, fallback, element = document.body) {
+  const sources = [element, document.body, document.documentElement].filter(Boolean);
+  for (const source of sources) {
+    const value = getComputedStyle(source).getPropertyValue(name).trim();
+    if (value) return value;
+  }
+  return fallback;
+}
+
+function chartTheme(element) {
+  return {
+    bg: cssVar('--chart-bg', cssVar('--bg-base', '#07070F', element), element),
+    grid: cssVar('--chart-grid', 'rgba(255,255,255,0.05)', element),
+    axis: cssVar('--chart-axis', 'rgba(143,164,200,0.50)', element),
+    text: cssVar('--text-primary', '#F0F4FF', element),
+    muted: cssVar('--text-secondary', 'rgba(200,210,255,0.55)', element),
+    dim: cssVar('--text-dim', 'rgba(140,160,220,0.45)', element),
+    up: cssVar('--chart-up', '#00FF88', element),
+    down: cssVar('--chart-down', '#FF4D6D', element),
+    upSoft: cssVar('--chart-up-soft', 'rgba(0,255,136,0.42)', element),
+    downSoft: cssVar('--chart-down-soft', 'rgba(255,77,109,0.40)', element),
+    tooltipBg: cssVar('--chart-tooltip-bg', 'rgba(8,14,28,0.92)', element),
+    tooltipBorder: cssVar('--chart-tooltip-border', 'rgba(0,255,136,0.22)', element),
+    tooltipText: cssVar('--chart-tooltip-text', 'rgba(235,245,255,0.92)', element),
+    amber: cssVar('--amber', '#FFB300', element),
+    cyan: cssVar('--cyan', '#00E5FF', element),
+    purple: cssVar('--purple', '#B44EFF', element),
+  };
 }
 
 function detectMobile() {
@@ -98,11 +124,11 @@ function distanceToPolyline(point, polyline) {
   return best;
 }
 
-function buildScenarioBadge(key) {
+function buildScenarioBadge(key, theme = chartTheme()) {
   const map = {
-    upper: { label: 'Bull Case', color: '#6ef2c1' },
-    center: { label: 'Base Case', color: '#00ff88' },
-    lower: { label: 'Risk Floor', color: '#ffb347' },
+    upper: { label: 'Bull Case', color: theme.up },
+    center: { label: 'Base Case', color: theme.up },
+    lower: { label: 'Risk Floor', color: theme.amber },
   };
   return map[key] || map.center;
 }
@@ -184,15 +210,16 @@ export function createDashboardKlineRenderer(options) {
 
   const updateLegend = () => {
     if (!state.legendEl) return;
+    const theme = chartTheme(state.canvas);
     if (!state.predictionEnabled) {
       state.legendEl.innerHTML = '';
       return;
     }
 
     if (state.selectedScenario) {
-      const badge = buildScenarioBadge(state.selectedScenario);
+      const badge = buildScenarioBadge(state.selectedScenario, theme);
       state.legendEl.innerHTML = `
-        <div style="display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid rgba(110,242,193,0.28);background:rgba(4,18,18,0.88);color:${badge.color};font:600 11px 'IBM Plex Mono', monospace">
+        <div style="display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid ${theme.tooltipBorder};background:${theme.tooltipBg};color:${badge.color};font:600 11px 'IBM Plex Mono', monospace">
           <span style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${badge.color}"></span>
           <span>${badge.label}</span>
         </div>
@@ -201,7 +228,7 @@ export function createDashboardKlineRenderer(options) {
     }
 
     const items = ['upper', 'center', 'lower'].map((key) => {
-      const badge = buildScenarioBadge(key);
+      const badge = buildScenarioBadge(key, theme);
       return `
         <div style="display:flex;align-items:center;gap:8px">
           <span style="display:inline-block;width:18px;height:0;border-top:2px dashed ${badge.color}"></span>
@@ -211,7 +238,7 @@ export function createDashboardKlineRenderer(options) {
     }).join('');
 
     state.legendEl.innerHTML = `
-      <div style="display:grid;gap:6px;padding:10px 12px;border-radius:14px;border:1px solid rgba(0,255,136,0.16);background:rgba(4,10,20,0.88);color:rgba(235,245,255,0.78);font:500 10px 'IBM Plex Mono', monospace">
+      <div style="display:grid;gap:6px;padding:10px 12px;border-radius:14px;border:1px solid ${theme.tooltipBorder};background:${theme.tooltipBg};color:${theme.muted};font:500 10px 'IBM Plex Mono', monospace">
         ${items}
       </div>
     `;
@@ -219,19 +246,20 @@ export function createDashboardKlineRenderer(options) {
 
   const updateStatus = () => {
     if (!state.statusEl) return;
+    const theme = chartTheme(state.canvas);
     if (state.predictionEnabled) {
-      state.statusEl.innerHTML = `<span style="color:#00ff88">Real model projection</span> · ${state.source} candles`;
+      state.statusEl.innerHTML = `<span style="color:${theme.up}">Real model projection</span> · ${state.source} candles`;
       return;
     }
     if (state.source === 'synthetic') {
-      state.statusEl.innerHTML = `<span style="color:#ffb347">Real candles only</span> · degraded feed disables projection`;
+      state.statusEl.innerHTML = `<span style="color:${theme.amber}">Real candles only</span> · degraded feed disables projection`;
       return;
     }
     if (state.source === 'unavailable') {
-      state.statusEl.innerHTML = `<span style="color:#ffb347">Chart unavailable</span> · waiting for a real provider response`;
+      state.statusEl.innerHTML = `<span style="color:${theme.amber}">Chart unavailable</span> · waiting for a real provider response`;
       return;
     }
-    state.statusEl.innerHTML = `<span style="color:#9fb3d1">Real candles only</span> · model coverage unavailable`;
+    state.statusEl.innerHTML = `<span style="color:${theme.axis}">Real candles only</span> · model coverage unavailable`;
   };
 
   const updateOverlay = (viewport) => {
@@ -263,21 +291,22 @@ export function createDashboardKlineRenderer(options) {
     }
     if (top + boxHeight > viewport.height - 12) top = viewport.height - boxHeight - 12;
 
+    const theme = chartTheme(state.canvas);
     const drivers = (state.analysis.drivers || []).slice(0, 3).map((item) => `<div>${item}</div>`).join('');
     state.overlayEl.style.display = 'block';
     state.overlayEl.style.left = `${left}px`;
     state.overlayEl.style.top = `${top}px`;
     state.overlayEl.style.width = `${boxWidth}px`;
     state.overlayEl.innerHTML = `
-      <div style="display:grid;gap:6px;padding:12px 14px;border-radius:16px;border:1px solid rgba(0,255,136,0.32);background:rgba(6,14,26,0.92);box-shadow:0 18px 48px rgba(0,0,0,0.34);color:rgba(235,245,255,0.92);font:500 11px/1.45 'IBM Plex Mono', monospace">
+      <div style="display:grid;gap:6px;padding:12px 14px;border-radius:16px;border:1px solid ${theme.tooltipBorder};background:${theme.tooltipBg};box-shadow:0 18px 48px rgba(25,35,55,0.20);color:${theme.tooltipText};font:500 11px/1.45 'IBM Plex Mono', monospace">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
           <strong style="font:700 12px Orbitron, 'IBM Plex Sans', sans-serif">${state.analysis.title}</strong>
-          <span style="color:#00ff88">${state.analysis.expectedReturnText}</span>
+          <span style="color:${theme.up}">${state.analysis.expectedReturnText}</span>
         </div>
-        <div style="color:rgba(192,208,232,0.82)">${state.analysis.directionText} · ${state.analysis.confidenceText}</div>
-        <div style="color:rgba(154,190,224,0.76)">Source: ${state.analysis.sourceText}</div>
-        <div style="display:grid;gap:4px;color:rgba(223,235,255,0.84)">${drivers}</div>
-        <div style="color:rgba(255,205,143,0.92)">Why not opposite: ${state.analysis.oppositeReason}</div>
+        <div style="color:${theme.muted}">${state.analysis.directionText} · ${state.analysis.confidenceText}</div>
+        <div style="color:${theme.axis}">Source: ${state.analysis.sourceText}</div>
+        <div style="display:grid;gap:4px;color:${theme.tooltipText}">${drivers}</div>
+        <div style="color:${theme.amber}">Why not opposite: ${state.analysis.oppositeReason}</div>
       </div>
     `;
   };
@@ -288,6 +317,7 @@ export function createDashboardKlineRenderer(options) {
     const preset = interpolateZoomPreset(state.zoomLabel);
     const width = state.canvas.parentElement?.clientWidth || 960;
     const height = detectMobile() ? STAGE_HEIGHT.mobile : STAGE_HEIGHT.desktop;
+    const theme = chartTheme(state.canvas);
     state.canvas.width = Math.round(width * dpr);
     state.canvas.height = Math.round(height * dpr);
     state.canvas.style.width = `${width}px`;
@@ -295,7 +325,7 @@ export function createDashboardKlineRenderer(options) {
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = cssVar('--bg-base', '#07070F');
+    ctx.fillStyle = theme.bg;
     ctx.fillRect(0, 0, width, height);
 
     const pad = { left: 60, right: 108, top: 24, bottom: 40 };
@@ -323,7 +353,7 @@ export function createDashboardKlineRenderer(options) {
     const projectionEndX = pad.left + candleAreaWidth + projectionWidth;
 
     if (!candles.length) {
-      ctx.fillStyle = 'rgba(155,176,210,0.82)';
+      ctx.fillStyle = theme.axis;
       ctx.font = "600 14px Orbitron, 'IBM Plex Sans', sans-serif";
       ctx.fillText(state.source === 'loading' ? 'Loading market candles...' : 'Market data unavailable', pad.left, height / 2);
       updateStatus();
@@ -348,14 +378,14 @@ export function createDashboardKlineRenderer(options) {
 
     for (let lineIndex = 0; lineIndex <= 5; lineIndex += 1) {
       const y = pad.top + (mainHeight / 5) * lineIndex;
-      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.strokeStyle = theme.grid;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(pad.left, y);
       ctx.lineTo(width - pad.right, y);
       ctx.stroke();
       const price = paddedMax - ((paddedMax - paddedMin) / 5) * lineIndex;
-      ctx.fillStyle = 'rgba(143,164,200,0.5)';
+      ctx.fillStyle = theme.axis;
       ctx.font = '10px IBM Plex Mono, monospace';
       ctx.textAlign = 'right';
       ctx.fillText(`$${price.toFixed(2)}`, pad.left - 8, y + 4);
@@ -365,7 +395,7 @@ export function createDashboardKlineRenderer(options) {
     candles.forEach((candle, index) => {
       const x = scaleX(index);
       const bull = candle.close >= candle.open;
-      const color = bull ? '#00FF88' : '#FF4D6D';
+      const color = bull ? theme.up : theme.down;
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.1;
       ctx.beginPath();
@@ -382,7 +412,7 @@ export function createDashboardKlineRenderer(options) {
       }
 
       if (index % labelInterval === 0) {
-        ctx.fillStyle = 'rgba(143,164,200,0.42)';
+        ctx.fillStyle = theme.axis;
         ctx.font = '10px IBM Plex Mono, monospace';
         ctx.textAlign = 'center';
         const label = new Date(candle.date || Date.now()).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -391,7 +421,7 @@ export function createDashboardKlineRenderer(options) {
     });
 
     if (state.indicators.has('MA20') && candles.length >= 20) {
-      ctx.strokeStyle = '#FFB347';
+      ctx.strokeStyle = theme.amber;
       ctx.lineWidth = 1.3;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
@@ -408,7 +438,7 @@ export function createDashboardKlineRenderer(options) {
     }
 
     if (state.indicators.has('MA60') && candles.length >= 60) {
-      ctx.strokeStyle = '#00E5FF';
+      ctx.strokeStyle = theme.cyan;
       ctx.lineWidth = 1.3;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
@@ -435,7 +465,7 @@ export function createDashboardKlineRenderer(options) {
         upper.push({ x: scaleX(index), y: scaleY(mean + std * 2) });
         lower.push({ x: scaleX(index), y: scaleY(mean - std * 2) });
       }
-      ctx.fillStyle = 'rgba(180, 78, 255, 0.06)';
+      ctx.fillStyle = cssVar('--violet-lo', 'rgba(180, 78, 255, 0.06)', state.canvas);
       ctx.beginPath();
       upper.forEach((point, index) => {
         if (!index) ctx.moveTo(point.x, point.y);
@@ -444,7 +474,7 @@ export function createDashboardKlineRenderer(options) {
       lower.slice().reverse().forEach((point) => ctx.lineTo(point.x, point.y));
       ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = 'rgba(180, 78, 255, 0.48)';
+      ctx.strokeStyle = theme.purple;
       ctx.setLineDash([3, 5]);
       [upper, lower].forEach((points) => {
         ctx.beginPath();
@@ -462,7 +492,7 @@ export function createDashboardKlineRenderer(options) {
       candles.forEach((candle, index) => {
         const x = scaleX(index);
         const volumeHeightScaled = clamp((candle.volume / maxVolume) * volumeHeight, 4, volumeHeight);
-        ctx.fillStyle = candle.close >= candle.open ? 'rgba(0,255,136,0.42)' : 'rgba(255,77,109,0.4)';
+        ctx.fillStyle = candle.close >= candle.open ? theme.upSoft : theme.downSoft;
         ctx.fillRect(x - candleWidth / 2, volumeTop + volumeHeight - volumeHeightScaled, candleWidth, volumeHeightScaled);
       });
     }
@@ -474,12 +504,12 @@ export function createDashboardKlineRenderer(options) {
       const fillBottom = [];
       const steps = 14;
       const scenarioColors = {
-        upper: 'rgba(110,242,193,0.82)',
-        center: 'rgba(0,255,136,0.95)',
-        lower: 'rgba(255,179,71,0.82)',
+        upper: theme.up,
+        center: theme.up,
+        lower: theme.amber,
       };
 
-      ctx.strokeStyle = 'rgba(0,255,136,0.28)';
+      ctx.strokeStyle = theme.tooltipBorder;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(projectionStartX, pad.top);
@@ -513,7 +543,7 @@ export function createDashboardKlineRenderer(options) {
         ctx.setLineDash([]);
       });
 
-      ctx.fillStyle = 'rgba(0,255,136,0.07)';
+      ctx.fillStyle = theme.upSoft;
       ctx.beginPath();
       fillTop.forEach((point, index) => {
         if (!index) ctx.moveTo(point.x, point.y);
@@ -531,11 +561,11 @@ export function createDashboardKlineRenderer(options) {
           const x = projectionStartX + projectionWidth * progress;
           const scaled = baseProjectedVolume * (1 + Math.abs(Number(predictionScenarios.center.expected_return || 0)) * 2.5 * progress);
           const barHeight = clamp((scaled / maxVolume) * volumeHeight, 8, volumeHeight);
-          ctx.fillStyle = 'rgba(0,255,136,0.16)';
+          ctx.fillStyle = theme.upSoft;
           ctx.fillRect(x - Math.max(5, candleWidth * 0.7), volumeTop + volumeHeight - barHeight, Math.max(10, candleWidth * 1.25), barHeight);
         }
 
-        ctx.strokeStyle = 'rgba(0,255,136,0.24)';
+        ctx.strokeStyle = theme.tooltipBorder;
         ctx.setLineDash([4, 6]);
         ctx.beginPath();
         ctx.moveTo(projectionStartX, volumeTop + volumeHeight * 0.62);
@@ -551,7 +581,7 @@ export function createDashboardKlineRenderer(options) {
       const candle = candles[candleIndex];
       const pointX = scaleX(candleIndex);
       const pointY = scaleY(candle.close);
-      ctx.strokeStyle = 'rgba(0,255,136,0.22)';
+      ctx.strokeStyle = theme.tooltipBorder;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(pointX, pad.top);
@@ -572,15 +602,15 @@ export function createDashboardKlineRenderer(options) {
       const tooltipHeight = 74;
       const tooltipX = clamp(pointX + 14, 10, projectionStartX - tooltipWidth - 12);
       const tooltipY = clamp(pointY - tooltipHeight - 10, 12, volumeTop - tooltipHeight - 8);
-      ctx.fillStyle = 'rgba(8,14,28,0.92)';
-      ctx.strokeStyle = 'rgba(0,255,136,0.22)';
+      ctx.fillStyle = theme.tooltipBg;
+      ctx.strokeStyle = theme.tooltipBorder;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.roundRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight, 12);
       ctx.fill();
       ctx.stroke();
       tooltipLines.forEach((line, index) => {
-        ctx.fillStyle = index === 0 ? 'rgba(206,224,248,0.86)' : 'rgba(235,245,255,0.92)';
+        ctx.fillStyle = index === 0 ? theme.axis : theme.tooltipText;
         ctx.font = `${index === 0 ? 10 : 11}px IBM Plex Mono, monospace`;
         ctx.fillText(line, tooltipX + 12, tooltipY + 18 + index * 18);
       });
@@ -588,14 +618,14 @@ export function createDashboardKlineRenderer(options) {
 
     const lastClose = candles[candles.length - 1].close;
     const labelY = scaleY(lastClose);
-    ctx.fillStyle = 'rgba(0,255,136,0.18)';
-    ctx.strokeStyle = 'rgba(0,255,136,0.46)';
+    ctx.fillStyle = theme.upSoft;
+    ctx.strokeStyle = theme.up;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(width - pad.right + 4, labelY - 12, 66, 24, 10);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#00ff88';
+    ctx.fillStyle = theme.up;
     ctx.textAlign = 'center';
     ctx.font = '700 11px IBM Plex Mono, monospace';
     ctx.fillText(lastClose.toFixed(2), width - pad.right + 37, labelY + 4);
